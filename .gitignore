@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.env
+dist/
+build/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.obsidian/
+*.log
+
+# 数据与密钥（别提交）
+data/raw_secrets/
+*.pem
+*.key
+*.env.local
+
+# 体积大的临时文件
+*.tmp

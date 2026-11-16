@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import trace
-from app.graph.build import build_graph, run
+from app.graph.build import build_graph, result_event, run
 from app.graph.llm import BASE_URL, MODEL, PROVIDER
 from app.graph.persistence import new_thread_id
 
@@ -300,9 +300,10 @@ def _sse(msg: str, sid: str | None):
             "total_ms": round((time.perf_counter() - t0) * 1000),
         }
         yield _frame(done)
-        t.write("result", steps=done["steps"], intent=done["intent"],
-                blocked=done["blocked"], tools=done["tools"],
-                final_head=done["final"][:300])
+        # 与 run() 共用 result_event：Web 跑的轨迹也必须能离线复算。
+        # 之前这里只写 final_head，同一次运行走 Web 就没有结论全文，
+        # 事后想复算「这条为什么被拦」只能重跑——而重跑的结果不一定一样。
+        t.write("result", thread_id=thread_id, **result_event(state))
     except Exception as exc:  # 生成器里的异常必须变成一帧，否则前端只看到连接断
         err = f"{type(exc).__name__}: {exc}"
         t.write("stream_error", error=err)

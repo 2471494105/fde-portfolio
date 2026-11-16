@@ -67,6 +67,37 @@ def build_graph(use_checkpoint: bool = True):
     return g.compile()
 
 
+def result_event(state):
+    """result 事件的字段定义，只此一份。
+
+    两个出口都调它：run()（CLI / 评测）和 server._sse（Web 流式）。
+    分头写过一次，结果是 _sse 只写 final_head、不写 final 全文，
+    于是 Web 跑出来的轨迹**没法离线复算「这条结论为什么被/没被拦」**——
+    而同一次运行走 CLI 却可以。同一次运行、两条路径、两份可审计性，
+    这种差异不会有任何报错，只会在"想回溯某个线上问题"时才发现证据不全。
+
+    final 必须存全文：blocked 的判定依赖结论全文，只存前 300 字符，
+    事后重算拿到的是另一个题目的答案。
+    """
+    final = state.get("final") or ""
+    return {
+        "turn": state.get("turn", 1),
+        "intent": state.get("intent", ""),
+        "steps": state.get("steps", 0),
+        "tools": state.get("tool_names", []),
+        "blocked": state.get("blocked", []),
+        "misquoted": state.get("misquoted", []),
+        "device_ids": state.get("device_ids", []),
+        "slots": state.get("slots", {}),
+        "final": final,
+        "final_head": final[:300],
+        # 结论的可读版本：claims 渲染成人话，ref 为空的数字后面带 [无出处]。
+        # 前端显示这个，不显示原始 JSON。
+        "final_text": state.get("final_text", ""),
+        "cite": state.get("cite_stats", {}),
+    }
+
+
 def run(user_msg: str, thread_id: str | None = None, trace_run: bool = True,
         use_checkpoint: bool = True) -> dict:
     """跑一轮。
@@ -93,25 +124,7 @@ def run(user_msg: str, thread_id: str | None = None, trace_run: bool = True,
 
     with trace.Tracer(user_msg, model=MODEL, provider=PROVIDER, base_url=BASE_URL) as t:
         state = app.invoke(init, config)
-        trace.emit(
-            "result",
-            thread_id=thread_id,
-            turn=state.get("turn", 1),
-            intent=state.get("intent", ""),
-            steps=state.get("steps", 0),
-            tools=state.get("tool_names", []),
-            blocked=state.get("blocked", []),
-            misquoted=state.get("misquoted", []),
-            device_ids=state.get("device_ids", []),
-            slots=state.get("slots", {}),
-            # final 存全文，不只 head：判定（blocked）依赖结论全文，
-            # 只存前 300 字符会导致事后无法离线复算"这条为什么被/没被拦"
-            final=state.get("final", ""),
-            final_head=state.get("final", "")[:300],
-            # 结论的可读版本：claims 渲染成人话，ref 为空的数字后面带[无出处]。
-            # 前端显示这个，不显示原始 JSON。
-            final_text=state.get("final_text", ""),
-        )
+        trace.emit("result", thread_id=thread_id, **result_event(state))
         # 把 trace_id 带出去，Web 端据此回查这次运行的完整轨迹
         state["trace_id"] = t.run_id
         state["thread_id"] = thread_id

@@ -249,17 +249,19 @@ class DerivedDayGapTest(unittest.TestCase):
         self.assertGreaterEqual(res["cite_stats"]["derived"], 1)
 
     def test_gap_with_only_one_date_is_blocked(self):
+        # 只有一个日期却算出间隔天数：写的 [1] 指得到，但那条里凑不出这个差，
+        # 属于"给了错的出处"，判失败。
         res = self._verify("两次标定间隔 39 天[1]。",
                            '{"records": [{"ts": "2026-11-07 08:30:00"}]}')
-        self.assertIn("39天[1]", res["blocked"])
+        self.assertIn("39天[1]", res["misquoted"])
 
     def test_wrong_gap_value_is_blocked(self):
         res = self._verify("两次标定间隔 45 天[1]。", self.RECS)
-        self.assertIn("45天[1]", res["blocked"])
+        self.assertIn("45天[1]", res["misquoted"])
 
     def test_span_across_records_is_not_a_gap(self):
         res = self._verify("首末两次相隔 87 天[1]。", self.RECS)
-        self.assertIn("87天[1]", res["blocked"])
+        self.assertIn("87天[1]", res["misquoted"])
 
 
 class ExprChannelTest(unittest.TestCase):
@@ -286,10 +288,12 @@ class ExprChannelTest(unittest.TestCase):
                            '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
         self.assertEqual(res["blocked"], [])
 
-    def test_multiplier_without_expression_is_blocked(self):
+    def test_multiplier_without_expression_is_grey_not_fatal(self):
+        # 没写算式只是"没交代怎么算的"，不是编造。标灰放行（进 blocked），不判死。
         res = self._verify("实测漂移是限值的 1.4 倍。",
                            '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
         self.assertIn("1.4倍", res["blocked"])
+        self.assertEqual(res["misquoted"], [])
 
     def test_expression_across_two_evidence_is_allowed(self):
         res = self._verify("漂移 0.42mm 是限值的 1.4 倍（=0.42/0.3）[1][2]。",
@@ -297,9 +301,10 @@ class ExprChannelTest(unittest.TestCase):
         self.assertEqual(res["blocked"], [])
 
     def test_wrong_expression_is_blocked(self):
+        # 算式写了但算错：读者照着算会发现对不上，比没写算式严重，判失败。
         res = self._verify("实测漂移是限值的 1.4 倍（=0.42/0.9）。",
                            '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
-        self.assertIn("1.4倍", res["blocked"])
+        self.assertTrue(any("1.4倍" in m for m in res["misquoted"]))
 
 
 class CountChannelTest(unittest.TestCase):
@@ -329,11 +334,11 @@ class CountChannelTest(unittest.TestCase):
 
     def test_wrong_count_is_blocked(self):
         res = self._verify("最近 6 次标定全部通过[1]。", self.RECS5)
-        self.assertIn("6次[1]", res["blocked"])
+        self.assertIn("6次[1]", res["misquoted"])
 
     def test_count_channel_not_applied_to_length_units(self):
         res = self._verify("标定漂移 5mm[1]。", self.RECS5)
-        self.assertIn("5mm[1]", res["blocked"])
+        self.assertIn("5mm[1]", res["misquoted"])
 
     def test_nested_array_length_is_found(self):
         res = self._verify("最近 5 次标定全部通过[1]。",

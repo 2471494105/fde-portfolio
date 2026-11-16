@@ -689,6 +689,25 @@ def _recomputable(v, nums, tol=1.0):
     return False
 
 
+def _ratio_recomputable(v, nums, tol=0.05):
+    """结论里的"多少倍"能不能由同一份证据里的两个数相除算出来（a/b ≈ v）。
+
+    和 _recomputable 同源，只换判定式：那边是百分比（a/b*100），这边是倍率（a/b）。
+    单独开一个函数而不是加参数，是因为两者的容差语义不同：
+    "9.62 报成 9.6"是四舍五入，该按相对误差判，不该用百分比的绝对值容差。
+
+    代价是证据里有 N 个数时能凑出 O(N^2) 个倍率，随机编造也可能撞上。
+    所以命中只放行标灰，**不计入引用率**——和 recomputed 同类。
+    """
+    vals = [n for n in nums if n > 0]
+    eps = max(tol, abs(v) * 0.02)
+    for a in vals:
+        for b in vals:
+            if b and abs(a / b - v) <= eps:
+                return True
+    return False
+
+
 def _dates_of(text):
     """抽出文本里所有完整日期（YYYY-MM-DD），去重后按时间排序。"""
     out = []
@@ -934,9 +953,14 @@ def verify(state):
     all_nums += _nums_of(state.get("user_msg", ""))
 
     blocked = []
+    # 未溯源 ≠ 编造。blocked 里的值分两种：
+    #   没写出处（uncited）—— 可能是数出来/算出来的，程序认不出，标灰放行
+    #   写出处但写错（cited_bad）—— 声称出自第 k 条，第 k 条里却没有，这是伪引用
+    # 前者不判死，后者判死。混在一个列表里等于判同一个刑。
+    misquoted = []
     stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
              "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0,
-             "counted": 0,
+             "counted": 0, "expr_bad": 0, "inferred": 0,
              # 路径锚点的观测指标。原先全塞进一个 path_bad，看不出模型错在哪：
              # miss=字段/下标写错，arr=指向整组记录（语法还没支持），
              # span=字段都在但这个数不是它们的值（多为同句多数字只标一个锚点）。
@@ -1007,10 +1031,22 @@ def verify(state):
                     continue
                 # 没标角标但写了完整算式：照样放行。算式比"数字恰好出现在某条证据里"
                 # 更硬——模型主动交代了怎么算的，读者可以自己复核。
-                if _expr_ok(exprs.get((unit, v)), v, unit, all_nums):
+                ex = exprs.get((unit, v))
+                if _expr_ok(ex, v, unit, all_nums):
+                    continue
+                # 算式写了但算不对，比"没写算式"更严重：读者照着一算就对不上。
+                # 这不算"没出处"，算"给了错的出处"，和角标指错同类。
+                if ex:
+                    stats["expr_bad"] += 1
+                    misquoted.append(f"{num}{unit}(算式算错)")
                     continue
                 if unit == "%" and _recomputable(v, all_nums):
                     stats["recomputed"] += 1
+                    continue
+                # 倍率复算：两个数相除 ≈ 这个倍数。放行标灰，不计引用。
+                if unit == "倍" and _ratio_recomputable(v, all_nums):
+                    stats["inferred"] += 1
+                    blocked.append(f"{num}{unit}")
                     continue
                 blocked.append(f"{num}{unit}")
                 continue
@@ -1058,13 +1094,24 @@ def verify(state):
                 stats["counted"] += 1
                 continue
 
+            # 倍率复算：模型常把"两个值相除"的结论挂在被引证据上，
+            # 而证据里只有原始两个值、没有商。能复算出来就放行标灰——
+            # 它和"角标指到一条压根没这个数的证据"是两件事。
+            if unit == "倍" and any(_ratio_recomputable(v, s) for s in scopes):
+                stats["inferred"] += 1
+                blocked.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
+                continue
+
             stats["cited_bad"] += 1
             blocked.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
+            misquoted.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
 
     stats["cited"] = stats["cited_ok"]
     stats["ev"] = len(ev)
-    trace.emit("verify", blocked=blocked, final_len=len(final), **stats)
-    return {"final": final, "blocked": blocked, "cite_stats": stats}
+    trace.emit("verify", blocked=blocked, misquoted=misquoted,
+               final_len=len(final), **stats)
+    return {"final": final, "blocked": blocked, "misquoted": misquoted,
+            "cite_stats": stats}
 
 
 def _pct(v, digits=2):

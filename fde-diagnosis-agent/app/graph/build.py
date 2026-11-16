@@ -101,6 +101,7 @@ def run(user_msg: str, thread_id: str | None = None, trace_run: bool = True,
             steps=state.get("steps", 0),
             tools=state.get("tool_names", []),
             blocked=state.get("blocked", []),
+            misquoted=state.get("misquoted", []),
             device_ids=state.get("device_ids", []),
             slots=state.get("slots", {}),
             # final 存全文，不只 head：判定（blocked）依赖结论全文，

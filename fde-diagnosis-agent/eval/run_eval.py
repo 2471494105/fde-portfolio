@@ -60,6 +60,12 @@ def judge(traj, state):
     final = state.get("final", "") or ""
     steps = state.get("steps", 0)
     blocked = state.get("blocked", [])
+    # 伪引用单独判死：写了 [k] 但第 k 条证据里没有这个数。
+    # blocked 里的其余值（没写出处、数出来程序认不出）标灰放行——
+    # 它们区分不了"我算的"和"我编的"，判死等于把合法的派生分析一起杀掉。
+    misquoted = state.get("misquoted", [])
+    # 溯源质量独立成指标：语义正确率考"能不能干活"，溯源达标率考"干得干不干净"。
+    trace_ok = not blocked
     # 校验层的判定明细一并入报告。之前只记 blocked 的字符串，
     # 想知道"路径锚点写对了几次"就得拿 evidence 离线重算一遍，
     # 等于每次复盘都要临时写脚本——这一层留档就断了。
@@ -119,7 +125,7 @@ def judge(traj, state):
         and kw_rate >= 0.5
         and not forbid_hit
         and steps_ok
-        and not blocked
+        and not misquoted
         and not fc_fail
         and deduped_ok
         and intent_ok
@@ -145,8 +151,8 @@ def judge(traj, state):
         reasons.append(f"越界调用({','.join(forbid_hit)})")
     if not steps_ok:
         reasons.append(f"步数越界({steps}不在{lo}-{hi})")
-    if blocked:
-        reasons.append(f"未溯源数字({','.join(blocked)})")
+    if misquoted:
+        reasons.append(f"引用写错({','.join(misquoted)})")
     if fc_fail:
         reasons.append("工具调用格式错")
     if not deduped_ok:
@@ -166,6 +172,8 @@ def judge(traj, state):
         "req_miss": req_miss,
         "steps_ok": steps_ok,
         "blocked": blocked,
+        "misquoted": misquoted,
+        "trace_ok": trace_ok,
         "fc_fail": fc_fail,
         "semantic_ok": semantic_ok,
         "reasons": reasons,
@@ -224,7 +232,8 @@ def main():
                 "id": traj["id"], "type": traj["type"], "semantic_ok": False,
                 "reasons": [f"运行异常:{type(exc).__name__}: {exc}"],
                 "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
-                "kw_rate": 0, "steps_ok": False, "blocked": [], "fc_fail": True,
+                "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
+                "trace_ok": False, "fc_fail": True,
                 "cite_stats": {},
                 "final_head": "",
             }
@@ -290,10 +299,19 @@ def main():
     ok = sum(1 for r in results if r["semantic_ok"])
     fc = sum(1 for r in results if r["fc_fail"])
     blocked_n = sum(1 for r in results if r["blocked"])
+    misquote_n = sum(1 for r in results if r.get("misquoted"))
+    trace_ok_n = sum(1 for r in results if r.get("trace_ok"))
+    # blocked 为空不等于溯源干净：没标角标、但"全证据池里恰好有这个数"也算放行，
+    # 这类值占了大多数。真正该看的是明确出处率 = cited_ok / qty。
+    cite_hit = sum((r.get("cite_stats") or {}).get("cited_ok", 0) for r in results)
+    cite_qty = sum((r.get("cite_stats") or {}).get("qty", 0) for r in results)
+    cite_rate = (cite_hit / cite_qty) if cite_qty else 0.0
     steps_bad = sum(1 for r in results if not r["steps_ok"])
 
     print("\n" + "=" * 60)
-    print(f"语义正确率    {ok}/{n} = {ok / n:.1%}")
+    print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
+    print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带角标/字段锚点的比例）")
+    print(f"溯源达标率    {trace_ok_n}/{n} = {trace_ok_n / n:.1%}   （blocked 为空，宽松口径）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
     print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")
@@ -301,7 +319,8 @@ def main():
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
     print(f"fc 失败       {fc}/{n}")
-    print(f"未溯源数字    {blocked_n}/{n}")
+    print(f"有未溯源数字  {blocked_n}/{n}   （标灰放行，不计失败）")
+    print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
@@ -319,6 +338,12 @@ def main():
         "intent_bad": intent_bad,
         "fc_fail": fc,
         "blocked_n": blocked_n,
+        "trace_ok_n": trace_ok_n,
+        "trace_rate": round(trace_ok_n / n, 4) if n else 0.0,
+        "cite_hit": cite_hit,
+        "cite_qty": cite_qty,
+        "cite_rate": round(cite_rate, 4),
+        "misquote_n": misquote_n,
         "elapsed_s": round(elapsed, 1),
     }
     report = {"meta": meta, "summary": summary, "results": results}

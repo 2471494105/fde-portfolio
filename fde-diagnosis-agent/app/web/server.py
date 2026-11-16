@@ -138,6 +138,7 @@ def diagnose(req: DiagnoseIn):
     return {
         "final": state.get("final", ""),
         "blocked": state.get("blocked", []),
+        "misquoted": state.get("misquoted", []),
         "steps": state.get("steps", 0),
         "tools": state.get("tool_names", []),
         "evidence": _brief(state.get("evidence", [])),
@@ -197,7 +198,11 @@ def _node_detail(name: str, delta) -> str:
         return ("、".join(names) + " 已返回") if names else "无工具返回"
     if name == "verify":
         blocked = d.get("blocked") or []
+        quoted = d.get("misquoted") or []
         s = d.get("cite_stats") or {}
+        # 伪引用和"没标出处"要分开显示：前者是错，后者只是没写。
+        if quoted:
+            return "引用写错 " + "、".join(quoted)
         if blocked:
             return "未溯源 " + "、".join(blocked)
         if s.get("qty"):
@@ -284,6 +289,7 @@ def _sse(msg: str, sid: str | None):
             "type": "done",
             "final": state.get("final", ""),
             "blocked": state.get("blocked", []),
+            "misquoted": state.get("misquoted", []),
             "cite": state.get("cite_stats", {}),
             "steps": state.get("steps", 0),
             "tools": state.get("tool_names", []),
@@ -338,6 +344,7 @@ def runs():
             "note": head.get("note", ""),
             "steps": res.get("steps", 0),
             "blocked": res.get("blocked", []),
+            "misquoted": res.get("misquoted", []),
         })
     return {"runs": items}
 

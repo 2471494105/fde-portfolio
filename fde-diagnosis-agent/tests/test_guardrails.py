@@ -382,5 +382,96 @@ class PayloadBudgetTest(unittest.TestCase):
         self.assertTrue(any("34 条" in m for m in res["misquoted"]))
 
 
+class ContextEvidenceAlignmentTest(unittest.TestCase):
+    """k 索引的隐式耦合：模型数的第 k 条工具返回，必须正好是 ev[k-1]。
+
+    模型怎么得到 k：数它这一轮 messages 里排第几的 tool 消息。
+    校验层怎么取：按 turn 过滤后的 evidence 列表下标。
+    两边保留的轮数必须相等，否则 k 整体错位——表现是「引用率突然归零」
+    或「大面积 cite_oob」，看不出是配置问题，第一反应会去怀疑模型。
+
+    这个洞之前是空的：scripts/check_ctx.py 只测了裁剪和 tool 配对，
+    没有任何断言把「模型看到的」和「参与校验的」绑在一起。
+    """
+
+    EV_PER_TURN = 2
+
+    def _state(self, turns):
+        msgs = [{"role": "user", "content": "第一句原始诉求"}]
+        evidence = []
+        for t in range(1, turns + 1):
+            msgs.append({"role": "assistant", "content": "", "tool_calls": [{
+                "id": f"c{t}", "type": "function",
+                "function": {"name": "query_device_profile", "arguments": "{}"}}]})
+            for j in range(self.EV_PER_TURN):
+                msgs.append({"role": "tool", "tool_call_id": f"c{t}",
+                             "content": f'{{"turn": {t}, "i": {j}}}'})
+                evidence.append({"result": f'{{"turn": {t}, "i": {j}}}', "turn": t})
+            msgs.append({"role": "assistant", "content": f"第{t}轮结论"})
+            if t < turns:
+                msgs.append({"role": "user", "content": f"第{t+1}轮提问"})
+        return {"messages": msgs, "evidence": evidence, "turn": turns}
+
+    def test_visible_tool_messages_equal_evidence_used(self):
+        # 核心不变式：模型看到的 tool 消息条数 == 参与校验的证据条数。
+        # 任何一边改了保留轮数，这条立刻红。
+        for turns in (1, 2, 3, 5, 9):
+            with self.subTest(turns=turns):
+                st = self._state(turns)
+                visible = [m for m in nodes._context_messages(st) if m.get("role") == "tool"]
+
+                lo, hi = nodes._ctx_window(turns)
+                used = [e for e in st["evidence"] if int(e["turn"]) >= lo]
+
+                self.assertEqual(len(visible), len(used),
+                                 f"{turns} 轮时模型能看到 {len(visible)} 条工具返回，"
+                                 f"校验只用 {len(used)} 条，k 会错位")
+
+    def test_window_is_contiguous_and_ends_at_current_turn(self):
+        # 区间必须是连续的一串，且末端就是当前轮；否则 ev 会漏掉中间一轮，
+        # 模型的 k 在第几轮之后就整体偏移。
+        for turns in (1, 2, 3, 7):
+            lo, hi = nodes._ctx_window(turns)
+            self.assertEqual(hi, turns)
+            self.assertEqual(hi - lo + 1, min(turns, nodes.CTX_VISIBLE_TURNS))
+
+    def test_first_turn_request_kept_without_its_evidence(self):
+        # 窗口外保留了首句原始诉求（只留 user 文本，不留那一轮的工具返回）。
+        # 这是有意的：丢掉起点模型就不知道用户最初问什么，
+        # 但那一轮的工具返回不该参与溯源，否则等于给旧证据开后门。
+        st = self._state(6)
+        out = nodes._context_messages(st)
+        self.assertEqual(out[0].get("content"), "第一句原始诉求")
+        self.assertFalse(any(m.get("content") == '{"turn": 1, "i": 0}' for m in out))
+
+    def test_verify_counts_exactly_the_window(self):
+        # verify 的 cite_stats["ev"] 就是它实际拿来校验的证据条数。
+        # 断言它等于 _ctx_window 算出的条数。
+        # 这条比上一条更硬：上一条在 CTX_VISIBLE_TURNS=2 时，
+        # 「verify 里写死 cur_turn-1」和「从 _ctx_window 派生」数值相同，测不出差异；
+        # 这一条在常量变成 1 或 3 时立刻暴露写死的那份。
+        for turns in (1, 2, 4, 7):
+            with self.subTest(turns=turns):
+                st = self._state(turns)
+                lo, _ = nodes._ctx_window(turns)
+                expected = sum(1 for e in st["evidence"] if e["turn"] >= lo)
+                st["final"] = json.dumps(
+                    {"conclusion": "x", "claims": [], "advice": []}, ensure_ascii=False)
+                st["user_msg"] = ""
+                st["tool_names"] = []
+                st["steps"] = 0
+
+                old = trace.RUNS_DIR
+                trace.RUNS_DIR = Path(tempfile.mkdtemp())
+                try:
+                    with trace.Tracer("win", model="m", provider="p", base_url="b"):
+                        res = nodes.verify(st)
+                finally:
+                    trace.RUNS_DIR = old
+                self.assertEqual(res["cite_stats"]["ev"], expected,
+                                 f"{turns} 轮：verify 用了 {res['cite_stats']['ev']} 条证据，"
+                                 f"窗口应是 {expected} 条")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

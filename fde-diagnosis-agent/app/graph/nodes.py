@@ -338,7 +338,20 @@ def ask_user(state):
     return {"final": final, "last_question": final}
 
 
-MAX_CTX_TURNS = 2
+# 模型本轮能看到几轮。这一个数同时决定两件必须严格相等的事：
+#   1. _context_messages 送几轮 messages   —— 模型据此数它看到的第 k 条工具返回
+#   2. verify 允许哪几轮的 evidence 参与溯源 —— 校验层据此取 ev[k-1]
+# 两处一旦不一致，k 就整体错位：模型数的第 3 条，校验层按第 5 条查。
+# 表现是「引用率突然归零」或「大面积 cite_oob」，看不出是配置问题，
+# 第一反应会去怀疑模型——所以只能有一个常量，两处都从 _ctx_window 派生。
+CTX_VISIBLE_TURNS = 2
+MAX_CTX_TURNS = CTX_VISIBLE_TURNS      # 兼容旧名：scripts/check_ctx.py 和文档在用
+
+
+def _ctx_window(cur_turn):
+    """本轮可见的轮号闭区间 (最早, 最晚)。上下文裁剪与证据过滤的唯一真相源。"""
+    lo = max(1, int(cur_turn) - CTX_VISIBLE_TURNS + 1)
+    return lo, int(cur_turn)
 
 
 def _context_messages(state):
@@ -349,12 +362,14 @@ def _context_messages(state):
 
     裁剪单位是「轮」不是「条」：从 user 消息处切，保证 assistant.tool_calls 和紧随其后的
     tool 消息不被切散——切散了 OpenAI 直接报错（tool 消息找不到对应的 tool_call_id）。
+
+    保留轮数必须等于 CTX_VISIBLE_TURNS，和 verify 的证据过滤是同一个数。
     """
     msgs = list(state.get("messages") or [])
     starts = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
-    if len(starts) <= MAX_CTX_TURNS:
+    if len(starts) <= CTX_VISIBLE_TURNS:
         return msgs
-    cut = starts[-MAX_CTX_TURNS]
+    cut = starts[-CTX_VISIBLE_TURNS]
     head = msgs[:1] if cut > 0 else []      # 第一句原始诉求留着，别丢掉上下文起点
     return head + msgs[cut:]
 
@@ -871,10 +886,14 @@ def verify(state):
         no_final = True
 
     # 溯源只用本轮和上一轮的工具返回：更早的证据已经被挤出上下文窗口，
-    # 模型本轮根本没读到，拿它兜底等于给未溯源数字开后门
+    # 模型本轮根本没读到，拿它兜底等于给未溯源数字开后门。
+    # 下界必须来自 _ctx_window，和 _context_messages 保留的轮数同源——
+    # 这里原本写死 cur_turn - 1，与 CTX_VISIBLE_TURNS=2 数值巧合相等，
+    # 改任一处就会让模型的 k 与 ev 的下标整体错位。
     cur_turn = int(state.get("turn") or 1)
+    lo, _ = _ctx_window(cur_turn)
     ev = [e for e in (state.get("evidence") or [])
-          if int(e.get("turn") or 1) >= cur_turn - 1]
+          if int(e.get("turn") or 1) >= lo]
 
     blocked = []
     # 未溯源 ≠ 伪引用。两个列表装的是两类东西：

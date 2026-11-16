@@ -9,6 +9,7 @@
 语义正确 = 工具命中、维度命中、终局命中、未越禁用工具、步数在区间、无未溯源数字、无 fc 失败。
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -21,7 +22,72 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.graph.build import run  # noqa: E402
+from app.graph.llm import BASE_URL, MODEL, PROVIDER  # noqa: E402
 from eval.trajectories import TRAJECTORIES  # noqa: E402
+
+# 决定模型行为的文件：改其中任何一个都可能让历史结论失效
+_BEHAVIOR_FILES = (
+    "app/graph/nodes.py",
+    "app/graph/llm.py",
+    "app/tools/schemas.py",
+    "app/tools/workorder.py",
+)
+
+
+def _git_commit():
+    """读 .git 取当前 commit，不依赖 PATH 里的 git。
+
+    git 装了但这台机器上 `git` 命令不可用（不在 PATH），所以不能 shell 出去调。
+    .git 在上一级目录 06_GitHub作品仓库，向上最多找 6 层。
+    """
+    try:
+        d = ROOT
+        for _ in range(6):
+            g = d / ".git"
+            if g.is_dir():
+                head = (g / "HEAD").read_text(encoding="utf-8").strip()
+                if not head.startswith("ref:"):
+                    return head[:7]
+                ref = head.split(":", 1)[1].strip()
+                f = g / ref
+                if f.is_file():
+                    return f.read_text(encoding="utf-8").strip()[:7]
+                packed = g / "packed-refs"
+                if packed.is_file():
+                    for line in packed.read_text(encoding="utf-8").splitlines():
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] == ref:
+                            return parts[0][:7]
+                return ""
+            d = d.parent
+    except Exception:
+        return ""
+    return ""
+
+
+def _code_hash():
+    """决定模型行为的文件指纹。
+
+    刻意不单抽 prompt 常量：正则会因为改个变量名就失效，而漏掉的部分
+    （schemas 的 enum、workorder 的枚举白名单）本来也是模型可见行为——
+    今天刚踩过，枚举写错会改幂等键。整文件 hash 覆盖更全，代价是改注释也会变。
+    """
+    h = hashlib.sha256()
+    for rel in _BEHAVIOR_FILES:
+        try:
+            h.update((ROOT / rel).read_bytes())
+        except Exception:
+            h.update(rel.encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
+def _cases_hash():
+    """用例集指纹：改了期望值，旧报告的分数就不再可比。"""
+    try:
+        blob = json.dumps(TRAJECTORIES, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return ""
 
 
 def _used_group_by(state):
@@ -169,6 +235,26 @@ def main():
     targets = [t for t in TRAJECTORIES if not only or t["id"] in only]
     print(f"待评测 {len(targets)} 条，并发 {workers}\n")
 
+    # 这一份 meta 是"这份报告是在什么条件下产生的"的唯一凭证。
+    # 没有它，8 份历史报告之间无法比较：不知道换过模型、改过用例、还是改过 prompt。
+    meta = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "commit": _git_commit(),
+        "provider": PROVIDER,
+        "model": MODEL,
+        "base_url": BASE_URL,
+        "cases_hash": _cases_hash(),
+        "code_hash": _code_hash(),
+        "cases_total": len(TRAJECTORIES),
+        "evaluated": len(targets),
+        "workers": workers,
+        "use_checkpoint": workers == 1,
+    }
+    print(
+        f"基线 commit={meta['commit'] or '(无)'}  model={MODEL}  "
+        f"code_hash={meta['code_hash']}  cases_hash={meta['cases_hash']}\n"
+    )
+
     # 建单类共享 mock QMS 的外部状态：W2 考的是"再建一次应返回已存在"，
     # 与 W1 并发会交叉，幂等结果不可信。强制串行，且排在并发批之后。
     serial = [t for t in targets if t["type"] == "建单"]
@@ -202,6 +288,8 @@ def main():
                     return
                 rec = {
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "commit": meta["commit"],
+                    "model": meta["model"],
                     "id": traj["id"],
                     "semantic_ok": r["semantic_ok"],
                     "kw_rate": r["kw_rate"],
@@ -255,9 +343,34 @@ def main():
     print(f"未溯源数字    {blocked_n}/{n}")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
-    out = ROOT / "eval" / "report_eval.json"
-    out.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\n明细已写入 {out}")
+    # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
+    # summary 放聚合数，results 保留逐条明细。旧报告仍是裸数组，不要倒退着改它们。
+    commit = meta["commit"] or "nogit"
+    stamp = time.strftime("%Y%m%d_%H%M")
+    summary = {
+        "n": n,
+        "semantic_ok": ok,
+        "semantic_rate": round(ok / n, 4) if n else 0.0,
+        "tool_rate": round(sum(r["tool_rate"] for r in results) / n, 4) if n else 0.0,
+        "gb_rate": round(sum(r["gb_rate"] for r in results) / n, 4) if n else 0.0,
+        "kw_rate": round(sum(r["kw_rate"] for r in results) / n, 4) if n else 0.0,
+        "steps_bad": steps_bad,
+        "intent_bad": intent_bad,
+        "fc_fail": fc,
+        "blocked_n": blocked_n,
+        "elapsed_s": round(elapsed, 1),
+    }
+    report = {"meta": meta, "summary": summary, "results": results}
+    text = json.dumps(report, ensure_ascii=False, indent=1)
+
+    # 带 commit 的归档件：这一份只对应这一个代码版本，以后能和别的报告比
+    out_full = ROOT / "eval" / f"report_{stamp}_{commit}.json"
+    out_full.write_text(text, encoding="utf-8")
+    # 同名副本保持老引用可用（README 与几篇 docs 都指向 report_eval.json）
+    (ROOT / "eval" / "report_eval.json").write_text(text, encoding="utf-8")
+
+    print(f"\n明细已写入 {out_full.name}（report_eval.json 同步为最新副本）")
+    print("这一份要登记进 eval/报告状态.md，否则下次仍判断不了它能不能和别的报告比")
 
 
 if __name__ == "__main__":

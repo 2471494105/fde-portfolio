@@ -1,48 +1,51 @@
-[
- {
-  "id": "T1",
-  "type": "陷阱",
-  "intent": "knowledge",
-  "intent_ok": true,
-  "tools": [
-   "search_manual",
-   "check_doc_conflict"
-  ],
-  "steps": 2,
-  "tool_rate": 1.0,
-  "gb_rate": 1.0,
-  "kw_rate": 0.667,
-  "kw_hit": [
-   "冲突",
-   "不一致"
-  ],
-  "req_miss": [],
-  "steps_ok": true,
-  "blocked": [],
-  "fc_fail": false,
-  "semantic_ok": true,
-  "reasons": [],
-  "final_head": "## 结论：手册里没有给“换完光源后的标准亮度值”，因此给不出准数  **无法给出唯一数值的原因**：现有资料对同一参数「光源亮度设定」的取值本身就互相矛盾，而且没有任何一条规定“更换光源后应设为多少”。  ### 冲突的来源（不代表推荐值）  | 取值 | 出处 | |---|---| | 80 | CV-X系列视觉"
+{
+ "meta": {
+  "ts": "2026-11-16 21:09:29",
+  "commit": "421ae63",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "b125ea215ed5",
+  "code_hash": "23c764816282",
+  "cases_total": 25,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
  },
- {
-  "id": "I5",
-  "type": "意图",
-  "intent": "knowledge",
-  "intent_ok": true,
-  "tools": [
-   "search_manual"
-  ],
-  "steps": 1,
+ "summary": {
+  "n": 1,
+  "semantic_ok": 1,
+  "semantic_rate": 1.0,
   "tool_rate": 1.0,
   "gb_rate": 1.0,
-  "kw_rate": 1.0,
-  "kw_hit": [],
-  "req_miss": [],
-  "steps_ok": true,
-  "blocked": [],
-  "fc_fail": false,
-  "semantic_ok": true,
-  "reasons": [],
-  "final_head": "## E-101：相机未连接或通讯中断  **含义与等级** - E-101 的含义是「相机未连接或通讯中断」，等级为 critical [1]。 - 按编码规则，E 开头的告警属于设备自身异常，第一位数字 1 表示图像采集与通讯子系统；因此 E-101 是图像采集类第 1 号告警 [2]。 - critical 等级"
- }
-]
+  "kw_rate": 0.5,
+  "steps_bad": 0,
+  "intent_bad": 0,
+  "fc_fail": 0,
+  "blocked_n": 0,
+  "elapsed_s": 3.6
+ },
+ "results": [
+  {
+   "id": "I1",
+   "type": "信息不全",
+   "intent": "clarify",
+   "intent_ok": true,
+   "tools": [],
+   "steps": 0,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 0.5,
+   "kw_hit": [
+    "设备编号"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [],
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "final_head": "需要两个信息才能开始：  1. 设备编号（当前库里有 CX-101 ~ CX-105） 2. 你想做什么——排查异常、看数据，还是查手册里的规则条款"
+  }
+ ]
+}

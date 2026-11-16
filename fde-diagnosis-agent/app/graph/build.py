@@ -103,6 +103,9 @@ def run(user_msg: str, thread_id: str | None = None, trace_run: bool = True,
             blocked=state.get("blocked", []),
             device_ids=state.get("device_ids", []),
             slots=state.get("slots", {}),
+            # final 存全文，不只 head：判定（blocked）依赖结论全文，
+            # 只存前 300 字符会导致事后无法离线复算"这条为什么被/没被拦"
+            final=state.get("final", ""),
             final_head=state.get("final", "")[:300],
         )
         # 把 trace_id 带出去，Web 端据此回查这次运行的完整轨迹

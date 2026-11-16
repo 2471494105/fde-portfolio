@@ -163,6 +163,25 @@ $env:PGPASSWORD='postgres'
 轨迹按 run 落盘在 `runs\<时间戳>_<id>.jsonl`，一行一个事件，
 记录到单次 LLM 调用（prompt/completion token）和单次工具调用（耗时、参数、返回摘要）。
 
+## 怎么验证
+
+改完按改动面选最小验证，别动不动就跑全量 25 条（约 142 秒一条、2 万 token）。
+
+| 命令 | 耗时 | 什么时候跑 | 判据 |
+|---|---|---|---|
+| `venv\Scripts\python.exe tests\test_guardrails.py` | 5 秒 | 动了 `app/graph/nodes.py`、`app/tools/*.py` | 14 条全绿；不连库、不发 HTTP |
+| `venv\Scripts\python.exe scripts\smoke_tools.py` | 10 秒 | 动了工具层 | 8 个工具都返回数据；建单那步幂等命中同号 |
+| `venv\Scripts\python.exe scripts\smoke_qms.py` | 10 秒 | 动了建单链路 | 6 项分两组全过；**会在真库建一张单** |
+| `venv\Scripts\python.exe eval\run_eval.py --only=I1` | 5 秒 | 动了 prompt、节点、schema | 新报告 `meta.code_hash` 与上一份不同 = 行为可能变了 |
+
+三个容易搞错的地方：
+
+1. **`smoke_qms.py` 会真建单**，不是只读脚本。当天首次新建，再跑就命中幂等返回同号。
+2. **只改 `docs/`、`README`、注释时，上面四条都不用跑**，但 `meta.code_hash` 会变——
+   注释也在整文件指纹里。这是刻意的：宁可误报，也不要因为正则抽取失效而漏掉 `schemas.py` 的 enum。
+3. 报告文件名带 commit（`report_YYYYMMDD_HHMM_<commit7>.json`），`report_eval.json` 只是最新副本。
+   两份报告要可比，必须 `model` / `commit` / `code_hash` / `cases_hash` 四个全同。
+
 ## 目录
 
 ```

@@ -1,0 +1,7 @@
+{"t": 1, "event": "run_start", "user_msg": "E-101 这个告警是什么意思", "model": "deepseek-chat", "note": ""}
+{"t": 2, "event": "intake", "device_id": "", "matched": false, "msg_len": 15}
+{"t": 825, "event": "understand", "intent": "knowledge", "device_ids": [], "phenomenon": "", "missing": [], "reason": "用户在询问告警代码的含义，属于不依赖具体设备的规则/含义类问题。"}
+{"t": 2102, "event": "knowledge", "status": "ok", "chunks": 5, "answer_len": 112}
+{"t": 2102, "event": "verify", "blocked": [], "final_len": 112, "pct_count": 0}
+{"t": 2104, "event": "result", "intent": "knowledge", "steps": 1, "tools": ["search_manual"], "blocked": [], "device_id": "", "final_head": "手册片段中没有关于“E-101”告警的任何说明，因此无法回答该告警的含义。手册中未收录。\n\n（片段 [1]–[5] 涉及的是 CX-101 误判率、光源亮度调整、标定周期和判定置信度阈值等内容，均未提及 E-101 告警。）"}
+{"t": 2104, "event": "run_end", "error": null, "tokens_total": 1152, "elapsed_ms": 2104}

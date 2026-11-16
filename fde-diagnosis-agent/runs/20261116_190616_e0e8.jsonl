@@ -1,0 +1,19 @@
+{"t": 0, "event": "run_start", "user_msg": "我们线体误判率突然飙升了，帮我看看什么原因", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 6, "event": "node_start", "node": "understand"}
+{"t": 3699, "event": "node_end", "node": "understand", "ms": 3692, "detail": "意图：diagnose"}
+{"t": 3700, "event": "node_start", "node": "plan"}
+{"t": 8902, "event": "node_end", "node": "plan", "ms": 5202, "detail": "决定调用 query_defect_log、query_defect_log、query_defect_log、query_defect_log"}
+{"t": 8908, "event": "node_start", "node": "act"}
+{"t": 9198, "event": "node_end", "node": "act", "ms": 289, "detail": "query_defect_log、query_defect_log、query_defect_log、query_defect_log 已返回"}
+{"t": 9198, "event": "node_start", "node": "plan"}
+{"t": 17415, "event": "node_end", "node": "plan", "ms": 8217, "detail": "决定调用 query_defect_log、query_defect_log、query_defect_log、query_defect_log"}
+{"t": 17416, "event": "node_start", "node": "act"}
+{"t": 17646, "event": "node_end", "node": "act", "ms": 229, "detail": "query_defect_log、query_defect_log、query_defect_log、query_defect_log 已返回"}
+{"t": 17646, "event": "node_start", "node": "plan"}
+{"t": 32958, "event": "node_end", "node": "plan", "ms": 15311, "detail": "准备收尾"}
+{"t": 32958, "event": "node_start", "node": "verify"}
+{"t": 32962, "event": "node_end", "node": "verify", "ms": 3, "detail": "数字全部可溯源"}
+{"t": 32962, "event": "node_start", "node": "finalize"}
+{"t": 32967, "event": "node_end", "node": "finalize", "ms": 5, "detail": "结论 1698 字"}
+{"t": 32971, "event": "result", "steps": 8, "intent": "diagnose", "blocked": [], "tools": ["query_defect_log", "query_defect_log", "query_defect_log", "query_defect_log", "query_defect_log", "query_defect_log", "query_defect_log", "query_defect_log"], "final_head": "## 结论：并非\"线体整体飙升\"，5 台设备各有不同病根，属于三种不同类型\n\n先说一个和你说法不一致的地方：**按天看，没有出现全厂同一天一起跳变**。CX-101/102/103/105 近 7 天都是高位波动、无明确拐点；只有 CX-104 有明确时间拐点（11-07 标定告警 → 11-08 起升高）。所以这是\"多点同时出问题\"，不是一次线体级事件。\n\n**近 7 天（11-07 ~ 11-14）实测数据**\n\n| 设备 | 判读总数 | 过杀数 | 过杀率 | 集中维度 | 故障方向 |\n|---|---|---|---|---|---|\n| CX-104 | 107 | 56 | *"}
+{"t": 32971, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 32971}

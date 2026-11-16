@@ -1,0 +1,15 @@
+{"t": 0, "event": "run_start", "user_msg": "E-101 这个告警什么意思", "model": "deepseek-v4.1-flash-1017", "note": "", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 12, "event": "intake", "device_id": "", "matched": false, "msg_len": 14, "turn": 1}
+{"t": 13, "event": "node_start", "node": "understand"}
+{"t": 2935, "event": "understand", "intent": "knowledge", "device_ids": [], "phenomenon": "", "missing": [], "reason": "用户在问告警码的含义解释，不涉及具体设备数据，也不涉及异常排查，属于通用知识类问题。"}
+{"t": 2938, "event": "node_end", "node": "understand", "ms": 2924, "detail": "意图：knowledge"}
+{"t": 2939, "event": "node_start", "node": "knowledge"}
+{"t": 128067, "event": "knowledge", "status": "ok", "chunks": 5, "answer_len": 420}
+{"t": 128068, "event": "node_end", "node": "knowledge", "ms": 125129, "detail": "引用 1 条数据"}
+{"t": 128069, "event": "node_start", "node": "verify"}
+{"t": 128069, "event": "verify", "blocked": [], "final_len": 420, "pct_count": 0}
+{"t": 128070, "event": "node_end", "node": "verify", "ms": 1, "detail": "数字全部可溯源"}
+{"t": 128071, "event": "node_start", "node": "finalize"}
+{"t": 128085, "event": "node_end", "node": "finalize", "ms": 15, "detail": "结论 420 字"}
+{"t": 128087, "event": "result", "steps": 1, "intent": "knowledge", "blocked": [], "tools": ["search_manual"], "final_head": "**E-101：相机未连接或通讯中断**\n\n- **含义**：相机未连接或通讯中断，严重等级为 **critical**（需立即停机处理）。[1][2]\n- **编码归属**：按「字母-三位数字」规则，E 开头表示设备自身异常，第一位数字 1 对应图像采集与通讯子系统，因此 E-101 是图像采集类第 1 号告警。[2]\n- **常见原因**：网线松脱、相机掉电。[1]\n- **处置步骤**：检查相机供电与网线连接，确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。[1]\n- **影响范围**：该告警期间设备无法成像，所有判定结果均不可信。[1]\n\n补充提示：片段[1]中"}
+{"t": 128087, "event": "run_end", "error": null, "tokens_total": 1913, "elapsed_ms": 128087}

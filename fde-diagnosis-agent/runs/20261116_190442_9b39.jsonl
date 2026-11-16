@@ -1,0 +1,7 @@
+{"t": 0, "event": "run_start", "user_msg": "cx108", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 5, "event": "node_start", "node": "understand"}
+{"t": 3935, "event": "node_end", "node": "understand", "ms": 3930, "detail": "意图：clarify"}
+{"t": 3936, "event": "node_start", "node": "ask_user"}
+{"t": 3940, "event": "node_end", "node": "ask_user", "ms": 4, "detail": "引用 0 条数据"}
+{"t": 3943, "event": "result", "steps": 0, "intent": "clarify", "blocked": [], "tools": [], "final_head": "CX-108 你想先看哪一方面？\n\n- 想排查异常：说一句现象，比如哪类缺陷误判多、从什么时候开始、哪个班次更重\n- 只想看数据：回一句「看数据」，我直接把最近的档案和误判统计给你"}
+{"t": 3943, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 3943}

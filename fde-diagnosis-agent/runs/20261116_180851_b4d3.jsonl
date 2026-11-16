@@ -1,0 +1,23 @@
+{"t": 1, "event": "run_start", "user_msg": "CX-104 从 11月8号开始误判突然变多，之前一直好好的", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 16, "event": "node_start", "node": "understand"}
+{"t": 3631, "event": "node_end", "node": "understand", "ms": 3623, "detail": "意图：diagnose"}
+{"t": 3632, "event": "node_start", "node": "plan"}
+{"t": 8279, "event": "node_end", "node": "plan", "ms": 4647, "detail": "决定调用 query_device_profile、query_defect_log、query_calibration"}
+{"t": 8280, "event": "node_start", "node": "act"}
+{"t": 8477, "event": "node_end", "node": "act", "ms": 197, "detail": "query_device_profile、query_defect_log、query_calibration 已返回"}
+{"t": 8478, "event": "node_start", "node": "plan"}
+{"t": 13316, "event": "node_end", "node": "plan", "ms": 4838, "detail": "决定调用 query_defect_log、search_manual、check_doc_conflict"}
+{"t": 13317, "event": "node_start", "node": "act"}
+{"t": 13768, "event": "node_end", "node": "act", "ms": 450, "detail": "query_defect_log、search_manual、check_doc_conflict 已返回"}
+{"t": 13768, "event": "node_start", "node": "plan"}
+{"t": 16008, "event": "node_end", "node": "plan", "ms": 2239, "detail": "决定调用 check_doc_conflict"}
+{"t": 16008, "event": "node_start", "node": "act"}
+{"t": 16071, "event": "node_end", "node": "act", "ms": 62, "detail": "check_doc_conflict 已返回"}
+{"t": 16071, "event": "node_start", "node": "plan"}
+{"t": 24788, "event": "node_end", "node": "plan", "ms": 8716, "detail": "准备收尾"}
+{"t": 24789, "event": "node_start", "node": "verify"}
+{"t": 24790, "event": "node_end", "node": "verify", "ms": 2, "detail": "数字全部可溯源"}
+{"t": 24790, "event": "node_start", "node": "finalize"}
+{"t": 24862, "event": "node_end", "node": "finalize", "ms": 72, "detail": "结论 1383 字"}
+{"t": 24865, "event": "result", "steps": 7, "intent": "diagnose", "blocked": [], "tools": ["query_device_profile", "query_defect_log", "query_calibration", "query_defect_log", "search_manual", "check_doc_conflict", "check_doc_conflict"], "final_head": "## 结论：11月8日的误判突增，与11月7日那次标定告警在时间上对应；从现象看是标定漂移，但漂移量是否超过阈值，两份文档的判定标准不一致，需要你确认。\n\n**证据链**\n\n1. **误判率出现突然上升，并非缓慢上升**（按天聚合，CX-104）：\n   - 11-07：13 次记录、2 次过杀，误判率 **15.4%**\n   - 11-08：19 次记录、12 次过杀，误判率 **63.2%**\n   - 11-09～11-14：46.7% / 28.6% / 61.5% / 53.3% / 58.3% / 52.6%\n   - 11-08 起共 107 次记录、56 次误判，区间误判率 "}
+{"t": 24865, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 24865}

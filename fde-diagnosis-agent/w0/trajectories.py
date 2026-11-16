@@ -1,0 +1,65 @@
+"""W0 五条轨迹：覆盖硬件侧、算法侧、追问、默认补全四类行为。"""
+
+TRAJECTORIES = [
+    {
+        "id": "H1",
+        "group": "硬件侧",
+        "input": "CX-101 最近误判挺多的，夜班尤其严重，帮我看看咋回事",
+        "allowed_paths": [
+            ["query_defect_log", "query_light_usage"],
+            ["query_device_profile", "query_defect_log", "query_light_usage"],
+        ],
+        "expect_group_by": "station",
+        "final_keywords": ["光源", "亮度", "更换"],
+        "forbid_keywords": [],
+        "note": "关键：必须按工位聚合才能看出集中在 1 号工位",
+    },
+    {
+        "id": "A1",
+        "group": "算法侧",
+        "input": "CX-102 上周换了新供应商的料，之后就老误判，是不是料的问题",
+        "allowed_paths": [
+            ["query_defect_log"],
+            ["query_device_profile", "query_defect_log"],
+            ["query_defect_log", "query_light_usage"],
+        ],
+        "expect_group_by": "batch",
+        "final_keywords": ["批次", "物料", "供应商", "样本", "阈值"],
+        "forbid_keywords": [],
+        "note": "关键：要按批次聚合，验证是不是集中在 B20261105",
+    },
+    {
+        "id": "A5",
+        "group": "算法侧",
+        "input": "CX-103 只有划痕这种缺陷老是被判错，别的都还行",
+        "allowed_paths": [
+            ["query_defect_log"],
+            ["query_device_profile", "query_defect_log"],
+            ["query_defect_log", "query_light_usage"],
+        ],
+        "expect_group_by": "defect_type",
+        "final_keywords": ["划痕", "阈值", "模型", "偏置"],
+        "forbid_keywords": [],
+        "note": "关键：要按缺陷类型聚合",
+    },
+    {
+        "id": "I1",
+        "group": "信息不全",
+        "input": "我们这边误判率很高，你帮我看看",
+        "allowed_paths": None,
+        "expect_group_by": None,
+        "final_keywords": ["哪个设备", "设备编号", "哪一台", "请提供", "具体是哪"],
+        "forbid_keywords": [],
+        "note": "应追问设备编号，不能编一个设备去查",
+    },
+    {
+        "id": "I2",
+        "group": "默认补全",
+        "input": "CX-102 误判有点多",
+        "allowed_paths": [["query_defect_log"]],
+        "expect_group_by": None,
+        "final_keywords": [],
+        "forbid_keywords": ["时间段", "什么时候", "哪段", "哪个时间"],
+        "note": "应直接查日志，不应追问时间（过度追问）",
+    },
+]

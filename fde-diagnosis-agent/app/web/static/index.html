@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视觉检测设备故障诊断 Agent</title>
+<style>
+  :root{
+    --bg:#eef1f5; --panel:#fff; --ink:#1b2430; --muted:#67707d;
+    --line:#dde3ea; --accent:#1f4e79; --warn:#b45309; --ok:#166534; --err:#9f1239;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.65 -apple-system,"Microsoft YaHei",system-ui,sans-serif}
+  header{background:var(--accent);color:#fff;padding:18px 26px}
+  header h1{margin:0;font-size:19px;font-weight:600;letter-spacing:.3px}
+  header p{margin:4px 0 0;font-size:12.5px;opacity:.82}
+  main{max-width:1080px;margin:22px auto;padding:0 18px 60px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+         padding:18px 20px;margin-bottom:16px}
+  .panel h2{font-size:14px;margin:0 0 12px;color:var(--muted);
+            font-weight:600;letter-spacing:.5px;text-transform:none}
+  textarea{width:100%;min-height:86px;resize:vertical;padding:11px 12px;
+           border:1px solid var(--line);border-radius:6px;font:inherit;
+           background:#fbfcfd;color:var(--ink)}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .ex{font-size:12.5px;color:var(--accent);background:#eaf1f8;border:1px solid #d3e2f0;
+      border-radius:14px;padding:4px 11px;cursor:pointer}
+  .ex:hover{background:#dfeaf5}
+  .spacer{flex:1}
+  button{background:var(--accent);color:#fff;border:0;border-radius:6px;
+         padding:9px 22px;font:inherit;cursor:pointer}
+  button:disabled{opacity:.55;cursor:default}
+  .ghost{background:#fff;color:var(--muted);border:1px solid var(--line);padding:8px 14px;font-size:13px}
+  .ghost:hover{background:#f7f9fc;color:var(--ink)}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
+        border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:14px}
+  .meta b{color:var(--ink);font-weight:600}
+  .bad{color:var(--err)}
+  .warnbox{background:#fef6e7;border:1px solid #f3d9a4;color:var(--warn);
+           border-radius:6px;padding:10px 12px;margin:12px 0;font-size:13.5px}
+  #conclusion h3{font-size:15px;margin:16px 0 8px;color:var(--accent)}
+  #conclusion table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+  #conclusion td,#conclusion th{border:1px solid var(--line);padding:6px 9px;vertical-align:top}
+  #conclusion th{background:#f2f5f9;font-weight:600}
+  #conclusion li{margin:3px 0}
+  /* 检索引用编号：模型会把 [1] [2] 原样写进结论，之前是裸方括号 */
+  #conclusion sup.cite{font-size:10.5px;color:var(--accent);background:#eef3fb;
+        border-radius:3px;padding:0 3px;margin-left:1px;line-height:0;vertical-align:super}
+  .tl{font-size:13.5px}
+  .tl-row{display:grid;grid-template-columns:86px 132px 1fr;gap:10px;
+          padding:7px 0;border-bottom:1px solid #f0f3f6}
+  .tl-t{color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+  .tl-k{font-weight:600}
+  .tl-k.tool{color:var(--accent)} .tl-k.plan{color:#6b46a0}
+  .tl-k.verify{color:var(--ok)} .tl-k.err{color:var(--err)}
+  .tl-v{font-size:13px;color:#414c5a;word-break:break-word;line-height:1.75}
+  .val{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:#1f2933}
+  .arg-k{color:#8a96a3;font-size:12.5px}
+  details.raw{margin-top:5px}
+  details.raw summary{cursor:pointer;color:var(--muted);font-size:12px;user-select:none}
+  details.raw pre{margin:5px 0 0;padding:8px 10px;background:#f7f9fb;border:1px solid #eef1f5;
+                  border-radius:4px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;
+                  max-height:200px;overflow:auto;color:#4a5563}
+  .badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:3px;
+         background:#eef1f5;color:#8a96a3;font-size:11px;font-weight:400;vertical-align:middle}
+  .tl-row.stale{opacity:.55}
+  .run-row{display:grid;grid-template-columns:170px 66px 1fr;gap:10px;padding:7px 0;
+           border-bottom:1px solid #f0f3f6;font-size:13px;cursor:pointer}
+  .run-row:hover{background:#f7f9fc}
+  .run-row span:first-child{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted)}
+  .hidden{display:none}
+  .hint{color:var(--muted);font-size:12.5px}
+  .live-now{display:flex;align-items:center;gap:9px;background:#f4f8fc;
+            border:1px solid #d8e5f1;border-radius:6px;padding:10px 13px;
+            margin-bottom:10px;font-size:13.5px;color:var(--accent)}
+  .live-now.done{background:#f1f8f2;border-color:#cfe6d4;color:var(--ok)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);
+       animation:pulse 1.15s ease-in-out infinite;flex:none}
+  .live-now.done .dot{animation:none;background:var(--ok)}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
+  .live-sec{font-variant-numeric:tabular-nums;font-weight:600}
+  .tl-row.live{animation:fadein .25s ease-out}
+  @keyframes fadein{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>视觉检测设备故障诊断 Agent</h1>
+  <p>DeepSeek 主链路 · 8 个工具 · 程序级校验层 · 流式执行 · 每条运行留完整轨迹</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>输入现场问题</h2>
+    <textarea id="q" placeholder="例如：3号线 CX-101 夜班误判率飙升，白班还好一点，帮我查下原因"></textarea>
+    <div class="row">
+      <span class="ex" data-q="3号线 CX-101 夜班误判率飙升，白班还好一点，帮我查下原因">H1 光源衰减</span>
+      <span class="ex" data-q="CX-105 最近一个月误判越来越多，但标定记录都是正常的，什么原因">H2 镜头污染</span>
+      <span class="ex" data-q="CX-104 从 11月8号开始误判突然变多，之前一直好好的">H3 标定漂移</span>
+      <span class="ex" data-q="CX-102 昨天开始误判一下子变多，产线换了新物料">A1 批次漂移</span>
+      <span class="ex" data-q="CX-101 换完光源，亮度到底该设多少？给我个准数">T1 文档冲突</span>
+      <span class="ex" data-q="我们线体误判率突然飙升了，帮我看看什么原因">I1 信息不全</span>
+      <span class="spacer"></span>
+      <span class="hint" id="sessionHint"></span>
+      <button id="newChat" class="ghost">新会话</button>
+      <button id="go">诊断</button>
+    </div>
+  </section>
+
+  <section id="livePanel" class="panel hidden">
+    <h2>实时执行 <span class="hint" id="liveHint">每一步都看得见，不是转圈等</span></h2>
+    <div id="liveNow" class="live-now hidden">
+      <span class="dot"></span>
+      <span><b id="livePrefix">正在</b> <b id="liveLabel">…</b></span>
+      <span class="live-sec" id="liveSec">0.0</span>
+      <span class="hint">秒</span>
+    </div>
+    <div class="tl" id="liveBody"></div>
+  </section>
+
+  <section id="resultPanel" class="panel hidden">
+    <h2>诊断结论</h2>
+    <div class="meta" id="meta"></div>
+    <div id="warnBox"></div>
+    <div id="conclusion"></div>
+  </section>
+
+  <section id="tracePanel" class="panel hidden">
+    <h2>工具调用轨迹</h2>
+    <div class="tl" id="traceBody"></div>
+  </section>
+
+  <section class="panel">
+    <h2>历史运行 <span class="hint" id="runsHint"></span></h2>
+    <div id="runs"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let busy = false;
+
+/* 会话 id 存在 localStorage：刷新页面不丢，换会话只换一个 uuid。
+   后端把它原样当 thread_id，图里就能从 checkpoint 恢复上一轮的追问和槽位。 */
+const SID_KEY = 'fde_diag_session';
+function makeSid(){ return 'web-' + Math.random().toString(36).slice(2,8) + Date.now().toString(36).slice(-4); }
+function loadSid(){
+  let v = localStorage.getItem(SID_KEY);
+  if (!v){ v = makeSid(); localStorage.setItem(SID_KEY, v); }
+  return v;
+}
+let sid = loadSid();
+function paintSid(){
+  const el = $('sessionHint');
+  if (el) el.textContent = '会话 ' + sid.slice(-6);
+}
+function newSession(){
+  sid = makeSid();
+  localStorage.setItem(SID_KEY, sid);
+  paintSid();
+  $('resultPanel').classList.add('hidden');
+  $('tracePanel').classList.add('hidden');
+  $('q').value = '';
+  $('q').focus();
+}
+
+/* 极简 markdown：标题、加粗、列表、表格。够渲染诊断结论，不引外部库。 */
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function inline(s){
+  let t = esc(s);
+  // 先把行内代码抽走占位：否则下面的 [1] 会把代码里的方括号也当成引用编号
+  const codes = [];
+  t = t.replace(/`(.+?)`/g, (m, c) => { codes.push(c); return '\u0001' + (codes.length - 1) + '\u0002'; });
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // 引用编号 [1]~[99] 渲染成角标。只认 1-2 位纯数字，避免把 [2026-11-08] 这类日期改坏
+  t = t.replace(/\[(\d{1,2})\]/g, '<sup class="cite">$1</sup>');
+  t = t.replace(/\u0001(\d+)\u0002/g, (m, k) =>
+    '<span style="font-family:ui-monospace,Consolas,monospace;background:#f2f5f9;padding:1px 4px;border-radius:3px">'
+    + codes[k] + '</span>');
+  return t;
+}
+
+function md(src){
+  const lines = src.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    // 表格块
+    if (/^\s*\|/.test(ln) && i+1 < lines.length && /^\s*\|[\s:\-|]+\|\s*$/.test(lines[i+1])) {
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(lines[i]); i++; }
+      const cells = r => r.trim().replace(/^\||\|$/g,'').split('|').map(c => inline(c.trim()));
+      let html = '<table><thead><tr>' + cells(rows[0]).map(c=>`<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+      for (let k = 2; k < rows.length; k++) {
+        html += '<tr>' + cells(rows[k]).map(c=>`<td>${c}</td>`).join('') + '</tr>';
+      }
+      out.push(html + '</tbody></table>');
+      continue;
+    }
+    if (/^###\s/.test(ln)) { out.push('<h3>' + inline(ln.replace(/^###\s/,'')) + '</h3>'); }
+    else if (/^##\s/.test(ln)) { out.push('<h3>' + inline(ln.replace(/^##\s/,'')) + '</h3>'); }
+    else if (/^\s*[-*]\s+/.test(ln)) {
+      out.push('<ul>');
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        out.push('<li>' + inline(lines[i].replace(/^\s*[-*]\s+/,'')) + '</li>'); i++;
+      }
+      out.push('</ul>');
+      continue;
+    }
+    else if (/^\s*$/.test(ln)) { out.push(''); }
+    else if (/^\s*\d+\.\s+/.test(ln)) { out.push('<p>' + inline(ln.replace(/^\s*\d+\.\s+/,'')) + '</p>'); }
+    else { out.push('<p>' + inline(ln) + '</p>'); }
+    i++;
+  }
+  return out.join('\n');
+}
+
+/* ---------- 实时执行面板 ----------
+   后端只在节点开始/结束时各发一帧；中间那十几秒（模型在生成）没有任何事件。
+   所以计时器必须在本地跑：否则数字永远停在 0.0，"正在判断下一步查什么"看上去就像卡死。 */
+let tickTimer = null, nodeT0 = 0, seenDone = false;
+
+function resetLive(){
+  clearInterval(tickTimer); tickTimer = null;
+  $('liveBody').innerHTML = '';
+  $('liveNow').classList.add('hidden');
+  $('liveNow').classList.remove('done');
+  $('liveHint').textContent = '每一步都看得见，不是转圈等';
+  $('livePanel').classList.remove('hidden');
+}
+
+function startTick(label){
+  nodeT0 = performance.now();
+  $('liveNow').classList.remove('hidden');
+  $('liveNow').classList.remove('done');
+  $('livePrefix').textContent = '正在';
+  $('liveLabel').textContent = label;
+  $('liveSec').textContent = '0.0';
+  clearInterval(tickTimer);
+  tickTimer = setInterval(() => {
+    $('liveSec').textContent = ((performance.now() - nodeT0) / 1000).toFixed(1);
+  }, 100);
+}
+
+function stopTick(){
+  clearInterval(tickTimer); tickTimer = null;
+}
+
+function pushLive(tMs, label, ms, detail){
+  const div = document.createElement('div');
+  div.className = 'tl-row live';
+  div.innerHTML =
+    `<div class="tl-t">${(tMs / 1000).toFixed(1)}s</div>` +
+    `<div class="tl-k verify">${esc(label)}</div>` +
+    `<div class="tl-v">耗时 ${(ms / 1000).toFixed(1)}s${detail ? '　' + esc(detail) : ''}</div>`;
+  $('liveBody').appendChild(div);
+}
+
+function renderDone(d){
+  seenDone = true;
+  stopTick();
+  $('liveNow').classList.remove('hidden');
+  $('liveNow').classList.add('done');
+  $('livePrefix').textContent = '';   // 完成态不能还挂着「正在」
+  $('liveLabel').textContent = '总耗时';
+  $('liveSec').textContent = (d.total_ms / 1000).toFixed(1);
+  $('liveHint').textContent = `共 ${d.steps} 次工具调用，总耗时 ${(d.total_ms / 1000).toFixed(1)} 秒`;
+
+  $('resultPanel').classList.remove('hidden');
+  $('tracePanel').classList.remove('hidden');
+
+  // 多轮会话里证据是累积的：本轮可能只补查 1 次，结论却引用上轮 10 条。
+  // 不分开显示，用户会把上轮的数字当成刚查出来的。
+  const curN = (d.evidence || []).filter(e => e.current).length;
+  const hisN = (d.evidence || []).length - curN;
+  // 只显示"未溯源 0"会把"根本没检查"也说成一切正常：
+  // classify 里 qty 是真正被校验到的数量，未标角是模型漏了引用编号。
+  const cs = d.cite || {};
+  const citeLine = cs.qty
+    ? `<span>引用 <b class="${d.blocked.length ? 'bad' : ''}">${cs.cited || 0}/${cs.qty}</b></span>` +
+      (cs.uncited ? `<span>未标角 <b>${cs.uncited}</b></span>` : '') +
+      // 凑算 = 靠两个数相除凑出来，放行了但不算引用；不给它单独一格，
+      // "引用 c/qty" 的缺口就解释不清楚。
+      (cs.recomputed ? `<span>凑算 <b>${cs.recomputed}</b></span>` : '') +
+      (d.blocked.length ? `<span>未溯源 <b class="bad">${d.blocked.length}</b></span>` : '')
+    : `<span>无需溯源的数量</span>`;
+  $('meta').innerHTML =
+    `<span>第 <b>${d.turn}</b> 轮 · ${d.intent || '-'}</span>` +
+    `<span>本轮新查 <b>${d.steps}</b> 次</span>` +
+    (hisN > 0 ? `<span>沿用上轮证据 <b>${hisN}</b> 条</span>` : '') +
+    `<span>涉及工具 <b>${new Set(d.tools).size}</b> 个</span>` +
+    citeLine +
+    `<span>轨迹 <b style="font-family:monospace;font-size:12px">${d.trace_id}</b></span>`;
+
+  $('warnBox').innerHTML = d.blocked.length
+    ? `<div class="warnbox">校验拦截：结论中的 ${d.blocked.map(x => `<strong>${x}</strong>`).join('、')} 无法在工具返回中找到，已标记为不可溯源。</div>`
+    : '';
+
+  $('conclusion').innerHTML = md(d.final || '（无结论）');
+  renderTrace(d.evidence);
+  loadRuns();
+}
+
+function showError(msg){
+  stopTick();
+  $('liveNow').classList.add('hidden');
+  $('resultPanel').classList.remove('hidden');
+  $('conclusion').innerHTML = `<p style="color:var(--err)">请求失败：${esc(String(msg))}</p>`;
+}
+
+function handleFrame(f){
+  if (f.type === 'node_start') startTick(f.label || f.node);
+  else if (f.type === 'node_end') { stopTick(); pushLive(f.t || 0, f.label || f.node, f.ms || 0, f.detail); }
+  else if (f.type === 'error') showError(f.message || '未知错误');
+  else if (f.type === 'done') renderDone(f);
+  /* open 帧只表示连接建立，不需要渲染——node_start 紧接着就到 */
+}
+
+async function diagnose(){
+  const msg = $('q').value.trim();
+  if (!msg || busy) return;
+  busy = true; $('go').disabled = true; $('go').textContent = '诊断中…';
+  seenDone = false;
+  $('resultPanel').classList.add('hidden');
+  $('tracePanel').classList.add('hidden');
+  resetLive();
+
+  try {
+    const resp = await fetch('/api/diagnose/stream', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ msg, session_id: sid })
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    if (!resp.body) throw new Error('当前浏览器不支持流式响应');
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      // SSE 帧以空行分隔。只处理已经完整的帧，剩下的半帧留在 buf 等下一个 chunk——
+      // 直接把每次 chunk 当整帧解析，长结论（1300+ 字）必然被截断。
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const blk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        for (const ln of blk.split('\n')) {
+          if (!ln.startsWith('data: ')) continue;
+          try { handleFrame(JSON.parse(ln.slice(6))); }
+          catch (err) { console.warn('无法解析的帧', ln.slice(0, 80)); }
+        }
+      }
+    }
+    if (!seenDone) showError('连接提前结束，没有收到结论');
+  } catch (e) {
+    showError(e.message || e);
+  } finally {
+    stopTick();
+    busy = false; $('go').disabled = false; $('go').textContent = '诊断';
+  }
+}
+
+/* ---------- 工具轨迹：把 JSON 翻译成人话 ----------
+   后端给的 head 是 json.dumps(result)[:600]，是给人看的转义串，不是数据结构。
+   现场人员看 {\"device_id\": \"CX-104\"} 等于没看，所以这里做一层翻译：
+   参数 → device_id=CX-104　返回 → 按天 19 条。原始串收进 <details> 备查。 */
+
+function shortVal(v, n){
+  n = n || 26;
+  if (v === null) return 'null';
+  if (v === undefined) return '—';
+  if (typeof v === 'string') return v.length > n ? v.slice(0, n) + '…' : v;
+  if (Array.isArray(v)) return '[' + v.length + ' 项]';
+  if (typeof v === 'object') return '{…}';
+  return String(v);
+}
+
+function fmtArgs(args){
+  if (!args || typeof args !== 'object') return '<span class="hint">无参数</span>';
+  const ks = Object.keys(args);
+  if (!ks.length) return '<span class="hint">无参数</span>';
+  return ks.map(k =>
+    `<span class="arg-k">${esc(k)}</span>=<span class="val">${esc(shortVal(args[k], 30))}</span>`
+  ).join('　');
+}
+
+function fmtHead(head){
+  // head 可能因为 600 字截断而不再是合法 JSON，parse 必须兜底
+  let obj;
+  try { obj = JSON.parse(head); } catch (e) { return null; }
+  if (Array.isArray(obj)) return obj.length + ' 条记录';
+  if (obj && typeof obj === 'object') {
+    const arrs = Object.entries(obj).filter(([, v]) => Array.isArray(v));
+    if (arrs.length) {
+      // 取最长的那个数组，它通常是主体数据
+      arrs.sort((a, b) => b[1].length - a[1].length);
+      const [k, v] = arrs[0];
+      return `${k}：${v.length} 条`;
+    }
+    const ks = Object.keys(obj);
+    if (!ks.length) return '空对象';
+    return ks.slice(0, 6)
+      .map(k => `<span class="arg-k">${esc(k)}</span>: ${esc(shortVal(obj[k], 22))}`)
+      .join('　');
+  }
+  return shortVal(obj, 80);
+}
+
+function renderTrace(evidence){
+  if (!evidence.length){
+    $('traceBody').innerHTML = '<div class="hint">本次没有工具调用（例如信息不全，程序直接追问）。</div>';
+    return;
+  }
+  let html = '';
+  evidence.forEach((e, idx) => {
+    const cls = e.ok ? 'tool' : 'err';
+    const summary = e.ok ? (e.summary || fmtHead(e.head)) : null;
+    const ret = e.ok
+      ? esc(summary || '（无摘要）')
+      : `<span style="color:var(--err)">${esc(e.error || '调用失败')}</span>`;
+    // current===false 表示这条是上一轮留下的，不是本次查的
+    const old = e.current === false;
+    const badge = old ? ' <span class="badge">上轮</span>' : '';
+    html += `<div class="tl-row${old ? ' stale' : ''}">
+      <div class="tl-t">#${idx + 1}</div>
+      <div class="tl-k ${cls}">${esc(e.tool)}${badge}</div>
+      <div class="tl-v">${fmtArgs(e.args)}</div>
+    </div>
+    <div class="tl-row${old ? ' stale' : ''}">
+      <div></div><div class="arg-k">返回</div>
+      <div class="tl-v">${ret}
+        <details class="raw"><summary>原始返回</summary><pre>${esc(e.head)}</pre></details>
+      </div>
+    </div>`;
+  });
+  $('traceBody').innerHTML = html;
+}
+
+function renderEvents(events){
+  let html = '';
+  for (const e of events){
+    const t = e.t < 1000 ? e.t + 'ms' : (e.t/1000).toFixed(1) + 's';
+    if (e.event === 'plan'){
+      html += `<div class="tl-row"><div class="tl-t">${t}</div><div class="tl-k plan">推理</div>
+        <div class="tl-v">token ${e.prompt_tokens}+${e.completion_tokens}，${(e.ms/1000).toFixed(1)}s →
+        ${esc((e.calls||[]).join('、') || '准备收尾')}</div></div>`;
+    } else if (e.event === 'tool'){
+      html += `<div class="tl-row"><div class="tl-t">${t}</div>
+        <div class="tl-k ${e.ok?'tool':'err'}">${e.name}</div>
+        <div class="tl-v">${e.ms}ms　${esc(String(e.result_head||'').slice(0,140))}</div></div>`;
+    } else if (e.event === 'verify'){
+      const bad = e.blocked && e.blocked.length;
+      const txt = bad ? '未溯源 ' + esc(e.blocked.join('、'))
+        : `数量 ${e.qty || 0} 个 · 带引用 ${e.cited || 0} · 未标角 ${e.uncited || 0}`;
+      html += `<div class="tl-row"><div class="tl-t">${t}</div><div class="tl-k verify">校验</div>
+        <div class="tl-v">${txt}</div></div>`;
+    } else if (e.event === 'run_end'){
+      html += `<div class="tl-row"><div class="tl-t">${t}</div><div class="tl-k verify">结束</div>
+        <div class="tl-v">总耗时 ${(e.elapsed_ms/1000).toFixed(1)}s，token 合计 ${e.tokens_total}</div></div>`;
+    }
+  }
+  $('tracePanel').classList.remove('hidden');
+  $('traceBody').innerHTML = html || '<div class="hint">无事件</div>';
+}
+
+async function loadRuns(){
+  const r = await fetch('/api/runs');
+  const d = await r.json();
+  $('runsHint').textContent = d.runs.length ? `共 ${d.runs.length} 条，点击查看轨迹` : '';
+  if (!d.runs.length){ $('runs').innerHTML = '<div class="hint">还没有运行记录</div>'; return; }
+  $('runs').innerHTML = d.runs.map(x => {
+    // 流式运行的 token 恒为 0（拿不到 usage），不能当成"没花钱"展示
+    const tok = x.tokens ? `${x.tokens} token`
+      : ((x.note || '').includes('stream') ? '流式·未记 token' : '0 token');
+    return `
+    <div class="run-row" data-id="${x.id}">
+      <span>${x.id}</span>
+      <span>${(x.elapsed_ms/1000).toFixed(1)}s</span>
+      <span>${esc(x.msg).slice(0,70)}　<span class="hint">${x.steps} 次工具 / ${tok}</span></span>
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.run-row').forEach(el => {
+    el.onclick = async () => {
+      const id = el.dataset.id;
+      const rr = await fetch('/api/runs/' + id);
+      const dd = await rr.json();
+      $('resultPanel').classList.add('hidden');
+      renderEvents(dd.events);
+      window.scrollTo({top: $('tracePanel').offsetTop - 20, behavior:'smooth'});
+    };
+  });
+}
+
+document.querySelectorAll('.ex').forEach(el => {
+  el.onclick = () => { $('q').value = el.dataset.q; diagnose(); };
+});
+$('go').onclick = diagnose;
+$('newChat').onclick = newSession;
+paintSid();
+$('q').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) diagnose();
+});
+
+// 支持 http://127.0.0.1:8020/#q=问题文本 直接打开就跑，便于复现与分享
+const preset = new URLSearchParams(location.hash.slice(1)).get('q');
+if (preset) { $('q').value = preset; diagnose(); }
+
+loadRuns();
+</script>
+</body>
+</html>

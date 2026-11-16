@@ -1,0 +1,48 @@
+[
+ {
+  "id": "T1",
+  "type": "陷阱",
+  "intent": "knowledge",
+  "intent_ok": true,
+  "tools": [
+   "search_manual",
+   "check_doc_conflict"
+  ],
+  "steps": 2,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.667,
+  "kw_hit": [
+   "冲突",
+   "不一致"
+  ],
+  "req_miss": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论：手册里没有给“换完光源后的标准亮度值”，因此给不出准数  **无法给出唯一数值的原因**：现有资料对同一参数「光源亮度设定」的取值本身就互相矛盾，而且没有任何一条规定“更换光源后应设为多少”。  ### 冲突的来源（不代表推荐值）  | 取值 | 出处 | |---|---| | 80 | CV-X系列视觉"
+ },
+ {
+  "id": "I5",
+  "type": "意图",
+  "intent": "knowledge",
+  "intent_ok": true,
+  "tools": [
+   "search_manual"
+  ],
+  "steps": 1,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [],
+  "req_miss": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## E-101：相机未连接或通讯中断  **含义与等级** - E-101 的含义是「相机未连接或通讯中断」，等级为 critical [1]。 - 按编码规则，E 开头的告警属于设备自身异常，第一位数字 1 表示图像采集与通讯子系统；因此 E-101 是图像采集类第 1 号告警 [2]。 - critical 等级"
+ }
+]

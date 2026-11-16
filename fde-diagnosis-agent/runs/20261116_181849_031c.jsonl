@@ -1,0 +1,27 @@
+{"t": 3, "event": "run_start", "user_msg": "CX-104 从 11月8号开始误判突然变多，之前一直好好的", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 20, "event": "node_start", "node": "understand"}
+{"t": 3347, "event": "node_end", "node": "understand", "ms": 3333, "detail": "意图：diagnose"}
+{"t": 3348, "event": "node_start", "node": "plan"}
+{"t": 10716, "event": "node_end", "node": "plan", "ms": 7368, "detail": "决定调用 query_device_profile、query_defect_log、query_defect_log"}
+{"t": 10727, "event": "node_start", "node": "act"}
+{"t": 10912, "event": "node_end", "node": "act", "ms": 185, "detail": "query_device_profile、query_defect_log、query_defect_log 已返回"}
+{"t": 10913, "event": "node_start", "node": "plan"}
+{"t": 13688, "event": "node_end", "node": "plan", "ms": 2775, "detail": "决定调用 query_calibration、query_light_usage"}
+{"t": 13688, "event": "node_start", "node": "act"}
+{"t": 13809, "event": "node_end", "node": "act", "ms": 120, "detail": "query_calibration、query_light_usage 已返回"}
+{"t": 13810, "event": "node_start", "node": "plan"}
+{"t": 17450, "event": "node_end", "node": "plan", "ms": 3640, "detail": "决定调用 search_manual、check_doc_conflict"}
+{"t": 17450, "event": "node_start", "node": "act"}
+{"t": 17718, "event": "node_end", "node": "act", "ms": 267, "detail": "search_manual、check_doc_conflict 已返回"}
+{"t": 17718, "event": "node_start", "node": "plan"}
+{"t": 22098, "event": "node_end", "node": "plan", "ms": 4380, "detail": "决定调用 check_doc_conflict、check_doc_conflict"}
+{"t": 22099, "event": "node_start", "node": "act"}
+{"t": 22224, "event": "node_end", "node": "act", "ms": 124, "detail": "check_doc_conflict、check_doc_conflict 已返回"}
+{"t": 22224, "event": "node_start", "node": "plan"}
+{"t": 33320, "event": "node_end", "node": "plan", "ms": 11096, "detail": "准备收尾"}
+{"t": 33321, "event": "node_start", "node": "verify"}
+{"t": 33322, "event": "node_end", "node": "verify", "ms": 2, "detail": "数字全部可溯源"}
+{"t": 33323, "event": "node_start", "node": "finalize"}
+{"t": 33336, "event": "node_end", "node": "finalize", "ms": 14, "detail": "结论 1485 字"}
+{"t": 33338, "event": "result", "steps": 9, "intent": "diagnose", "blocked": [], "tools": ["query_device_profile", "query_defect_log", "query_defect_log", "query_calibration", "query_light_usage", "search_manual", "check_doc_conflict", "check_doc_conflict", "check_doc_conflict"], "final_head": "## 结论：根因是**标定漂移**（11-07 早上的标定出现告警，恰好在误判陡增前一天）\n\n**证据链（全部来自工具返回）**\n\n1. **时间点吻合——骤变而非缓慢漂移**\n   按天聚合（分组区间 2026-11-05～11-14）：11-07 误判率为 **15.4%**（13 件检出、2 件误判），11-08 直接跳到 **63.2%**（19 件检出、12 件误判），之后 11-09～11-14 持续在 **46.7%～61.5%** 之间。呈现出阶跃，不是日常波动。\n   ⚠️ 你说的是“11月8号”，工具里数据实际落在 **2026-11-08**，年份请对一下。\n\n2. **"}
+{"t": 33338, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 33338}

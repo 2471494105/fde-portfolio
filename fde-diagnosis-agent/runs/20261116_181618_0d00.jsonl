@@ -1,0 +1,11 @@
+{"t": 2, "event": "run_start", "user_msg": "E-101 这个告警什么意思", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
+{"t": 10, "event": "node_start", "node": "understand"}
+{"t": 4730, "event": "node_end", "node": "understand", "ms": 4720, "detail": "意图：knowledge"}
+{"t": 4731, "event": "node_start", "node": "knowledge"}
+{"t": 11396, "event": "node_end", "node": "knowledge", "ms": 6664, "detail": "引用 1 条数据"}
+{"t": 11397, "event": "node_start", "node": "verify"}
+{"t": 11398, "event": "node_end", "node": "verify", "ms": 2, "detail": "数字全部可溯源"}
+{"t": 11399, "event": "node_start", "node": "finalize"}
+{"t": 11403, "event": "node_end", "node": "finalize", "ms": 4, "detail": "结论 512 字"}
+{"t": 11405, "event": "result", "steps": 1, "intent": "knowledge", "blocked": [], "tools": ["search_manual"], "final_head": "**E-101 相机未连接或通讯中断** [1]\n\n**告警含义**\n\n告警码 E-101，等级为 critical，含义是相机未连接或通讯中断 [1]。\n\n从编码规则看，E 开头表示设备自身异常，三位数字的第一位「1」表示图像采集与通讯子系统，因此 E-101 属于图像采集类第 1 号告警 [2]。严重等级中，critical 表示需要立即停机处理 [2]。\n\n**常见原因**\n\n- 网线松脱\n- 相机掉电 [1]\n\n**处置方法**\n\n1. 检查相机供电与网线连接，确认交换机端口状态 [1]\n2. 恢复连接后重新触发一次采集，确认图像正常后再恢复生产 [1]\n\n**影响范围**\n\n该告警期"}
+{"t": 11405, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 11405}

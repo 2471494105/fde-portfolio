@@ -1,0 +1,7 @@
+{"t": 0, "event": "run_start", "user_msg": "看数据", "model": "deepseek-chat", "note": ""}
+{"t": 4, "event": "intake", "device_id": "", "matched": false, "msg_len": 3, "turn": 3}
+{"t": 966, "event": "understand", "intent": "lookup", "device_ids": ["CX-101"], "phenomenon": "", "missing": [], "reason": "用户回答「看数据」，明确表示只想查看最近的档案和误判统计，没有描述异常或询问原因。"}
+{"t": 1096, "event": "lookup", "device_ids": ["CX-101"], "blocks": 1, "steps": 2}
+{"t": 1097, "event": "verify", "blocked": [], "final_len": 471, "pct_count": 4}
+{"t": 1105, "event": "result", "thread_id": "smoke-a-64debde4", "turn": 3, "intent": "lookup", "steps": 2, "tools": ["query_device_profile", "query_defect_log"], "blocked": [], "device_ids": ["CX-101"], "slots": {"device_id": "CX-101", "phenomenon": ""}, "final_head": "### CX-101（3号线 / 1-3号工位）\n\n| 项 | 值 |\n|---|---|\n| 相机 | In-Sight 2801 |\n| 镜头 | 16mm |\n| 光源 | CA-DC21E |\n| 安装日期 | 2025-03-12 00:00:00 |\n| 保养周期 | 90 天 |\n| 日志条数 | 200（最新 2026-11-14 17:19:52） |\n\n最近 7 天（2026-11-07 17:19:52 ~ 2026-11-14 17:19:52）：共判定 113 条，过杀 27 条，整体误判率 23.89%\n\n| 工位 | 判定 | 过杀 | 误判率 |\n|---|--"}
+{"t": 1105, "event": "run_end", "error": null, "tokens_total": 688, "elapsed_ms": 1105}

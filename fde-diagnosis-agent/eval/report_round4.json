@@ -1,0 +1,592 @@
+[
+ {
+  "id": "H1",
+  "type": "硬件",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_light_usage",
+   "query_calibration"
+  ],
+  "steps": 5,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "光源",
+   "寿命",
+   "1号工位"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因：1号工位光源已超额定寿命，亮度衰减导致夜班误判率飙升（偏硬件）。**  证据链：  1. **误判集中在1号工位**（近7天，共113条记录、27次过杀，整体误判率23.9%）：    - 1号工位：34条中20次过杀，**误判率58.8%**    - 3号工位：10.6%；2号工位：6.3%"
+ },
+ {
+  "id": "H2",
+  "type": "硬件",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_light_usage"
+  ],
+  "steps": 4,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "镜头",
+   "污染"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因方向：偏算法（模型漂移或阈值不当），不是硬件。**  证据：  1. **误判不集中在工位**：1号工位 18/101 = 17.8%，2号工位 19/99 = 19.2%，两个工位几乎完全一致。镜头、光源、标定都是各工位独立部件，如果硬件有问题，误判率应该明显偏向某一个工位。两个工位同步恶化，说"
+ },
+ {
+  "id": "H3",
+  "type": "硬件",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_calibration",
+   "check_doc_conflict",
+   "check_doc_conflict"
+  ],
+  "steps": 6,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "标定",
+   "漂移"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因：标定漂移超限。11/7 08:30 的标定漂移量达到 2.25px / 0.42mm，结果已判“告警”，但设备未停机纠正，导致 11/8 起误判率阶跃上升。**  证据： | 项目 | 数据 | |---|---| | 误判率按天 | 11/1–11/7：0%–15.4%（多数为 0）→ **1"
+ },
+ {
+  "id": "H4",
+  "type": "硬件",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_light_usage",
+   "query_calibration"
+  ],
+  "steps": 4,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "1号工位",
+   "光源"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "**结论：根因是光源超额定寿命导致亮度衰减，误判集中在1号工位，属硬件问题。**  证据： 1. **误判集中度**：近7天总误判率 23.9%（27/113），其中1号工位 58.8%（20/34），2号工位 6.3%、3号工位 10.6%。镜头/光源/标定是各工位独立部件，集中单工位 → 偏硬件。 2. **光源超"
+ },
+ {
+  "id": "H5",
+  "type": "硬件",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log"
+  ],
+  "steps": 4,
+  "tool_rate": 0.5,
+  "gb_rate": 0.5,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "标定",
+   "漂移"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": false,
+  "reasons": [
+   "工具选错(缺query_calibration)",
+   "取证维度不足(缺day)"
+  ],
+  "final_head": "## 结论：不是“尺寸类阈值设太严”，而是全类型、全工位、全批次的普遍性误判  **证据（近7天，2026-11-07 至 11-14，共107条记录）：**  | 维度 | 结果 | 说明 | |---|---|---| | 总体误判率 | **52.3%**（56/107） | 整体偏高，不是某一类问题 | | 按"
+ },
+ {
+  "id": "A1",
+  "type": "算法",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log"
+  ],
+  "steps": 4,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "批次",
+   "B20261105"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "**结论：根因是物料批次漂移（新物料 B20261105 与现有模型/阈值不匹配），不是硬件故障。**  证据（CX-102，3号线，1-3号工位，近7天共94条、误判20条，整体误判率21.3%）：  1. **按批次看，误判高度集中**：B20261105 批次 37 条中误判 18 条，误判率 **48.65%*"
+ },
+ {
+  "id": "A2",
+  "type": "算法",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log",
+   "search_manual",
+   "check_doc_conflict"
+  ],
+  "steps": 6,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "划痕",
+   "阈值"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因方向：划痕判定参数（置信度阈值）设置不当，属于算法/参数问题，不是硬件故障。**  **证据（均来自工具返回）：**  1. **误判高度集中在缺陷类型**：近 7 天共 96 条记录、36 条过杀，总过杀率 37.5%。其中划痕 54 条、过杀 35 条，**过杀率 64.8%**；污渍 6.7"
+ },
+ {
+  "id": "A3",
+  "type": "算法",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log"
+  ],
+  "steps": 4,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "批次"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因方向：物料批次漂移（B20261105 批次），偏算法侧，不是单工位硬件故障。**  **证据（近 7 天，2026-11-07 至 11-14，共 94 条记录、20 条误判，整体误判率 21.3%）：**  1. **按工位看：误判分散，不集中。** 2号工位 31.0%（9/29）、3号工位"
+ },
+ {
+  "id": "A4",
+  "type": "算法",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "search_manual",
+   "check_doc_conflict"
+  ],
+  "steps": 5,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "划痕"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因方向：算法侧（划痕判定阈值/模型过严），不是某个工位的硬件问题。**  证据（均来自工具返回）：  1. **误判集中在缺陷类型，不集中在工位**：近 7 天 CX-103 共 96 条记录、36 条过杀，总过杀率 37.5%。按缺陷类型拆：划痕 54 条中 35 条过杀，**过杀率 64.8%*"
+ },
+ {
+  "id": "A5",
+  "type": "算法",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log",
+   "search_manual",
+   "check_doc_conflict"
+  ],
+  "steps": 6,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "批次",
+   "B20261105"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因方向：物料批次漂移（batch_drift），不是模型整体失效，也不是硬件故障。** 你的直觉方向对，但需要修正一点：问题不是“模型没适配所有料”，而是**只集中在新批次 B20261105 上**。  ### 证据（CX-102，3号线，1-3号工位，近7天 2026-11-07～11-14） "
+ },
+ {
+  "id": "I1",
+  "type": "信息不全",
+  "intent": "clarify",
+  "intent_ok": true,
+  "tools": [],
+  "steps": 0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.5,
+  "kw_hit": [
+   "设备编号"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "需要两个信息才能开始：  1. 设备编号（当前库里有 CX-101 ~ CX-105） 2. 你想做什么——排查异常、看数据，还是查手册里的规则条款"
+ },
+ {
+  "id": "I2",
+  "type": "信息不全",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_light_usage",
+   "query_calibration"
+  ],
+  "steps": 5,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论  **根因：1号工位光源已超额定寿命，亮度衰减导致过杀（误判）集中。**  证据链：  | 证据 | 数值 | |---|---| | 误判按工位分布 | 1号工位 **58.8%**（20/34），2号工位 6.3%，3号工位 10.6% | | 误判按缺陷类型分布 | 尺寸超差 31.0%、划痕 26."
+ },
+ {
+  "id": "I3",
+  "type": "信息不全",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log"
+  ],
+  "steps": 2,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.667,
+  "kw_hit": [
+   "不存在",
+   "CX-101"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "**结论：设备 CX-106 不存在，无法诊断。**  我查了设备档案，系统里没有 CX-106 这台设备，误判日志也查不到任何记录。所以不存在“判得不准”的数据可分析，我也不会假设它存在或套用其他设备的结论。  **当前系统内可用设备：** - CX-101 - CX-102 - CX-103 - CX-104 - "
+ },
+ {
+  "id": "I4",
+  "type": "信息不全",
+  "intent": "clarify",
+  "intent_ok": true,
+  "tools": [],
+  "steps": 0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.667,
+  "kw_hit": [
+   "设备编号",
+   "CX-"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "需要两个信息才能开始：  1. 设备编号（当前库里有 CX-101 ~ CX-105） 2. 你想做什么——排查异常、看数据，还是查手册里的规则条款"
+ },
+ {
+  "id": "W1",
+  "type": "建单",
+  "intent": "action",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_light_usage"
+  ],
+  "steps": 2,
+  "tool_rate": 0.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.5,
+  "kw_hit": [
+   "工单"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": false,
+  "reasons": [
+   "工具选错(缺create_work_order)"
+  ],
+  "final_head": "设备与光源数据已核实，但建单前有一个关键点必须先纠正：**65 不是\"应该设定的亮度\"，而是 2026-10-20 已经被下调到的当前值**——它本身就是这次故障的产物，不是处置目标。  **已核实的事实** - CX-101（3号线，1-3号工位，光源 CA-DC21E）累计点亮 **8620h**，额定寿命 **8"
+ },
+ {
+  "id": "W2",
+  "type": "建单",
+  "intent": "action",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_light_usage",
+   "create_work_order"
+  ],
+  "steps": 3,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "**结论：工单已存在，未重复创建。**  - 设备确认：CX-101，3号线 1-3号工位，光源型号 CA-DC21E。 - 根因（与刚才一致）：光源超额定寿命导致亮度衰减。   - 累计点亮 **8620h**，额定寿命 **8000h**，超寿命 **620h**。   - 亮度设定持续下调：85 → 80（202"
+ },
+ {
+  "id": "W3",
+  "type": "建单",
+  "intent": "action",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log"
+  ],
+  "steps": 3,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论：暂不建单——目前证据不支持任何单一根因  **已确认的事实（近7天，2026-11-07 至 11-14）：** - 总误判 36/96，整体误判率 **37.5%**，确实偏高，你的直觉没错。 - **按工位看：1号 44.8%、2号 34.4%、3号 34.3%** —— 三个工位基本齐平，**没有集中"
+ },
+ {
+  "id": "T1",
+  "type": "陷阱",
+  "intent": "knowledge",
+  "intent_ok": true,
+  "tools": [
+   "search_manual",
+   "check_doc_conflict"
+  ],
+  "steps": 2,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.333,
+  "kw_hit": [
+   "冲突"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": false,
+  "reasons": [
+   "判断错/结论未命中"
+  ],
+  "final_head": "手册中没有给出一个可以直接采用的“准数”，而且不同片段对光源亮度的取值存在冲突，不能替你挑一个当作标准值。  **冲突情况：**  - 视觉检测作业指导书 WI-QC-015 规定光源亮度设定为 65 [3]。 - 现场调试记录 2026-09-15 记载当时将亮度由 85 下调至 80 [2]。 - 现场调试记录 2"
+ },
+ {
+  "id": "T2",
+  "type": "陷阱",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log"
+  ],
+  "steps": 2,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.333,
+  "kw_hit": [
+   "3号"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": false,
+  "reasons": [
+   "判断错/结论未命中"
+  ],
+  "final_head": "**先纠正一个前提：CX-101 不是两个工位，是三个。**  设备档案显示：CX-101（3号线）覆盖 **1–3号工位**，相机 In-Sight 2801、16mm 镜头、CA-DC21E 光源，2025-03-12 安装，保养周期 90 天。所以“只有两个工位”这个印象与档案不符，建议核对一下现场是否少登记/漏"
+ },
+ {
+  "id": "T3",
+  "type": "陷阱",
+  "intent": "knowledge",
+  "intent_ok": true,
+  "tools": [
+   "search_manual"
+  ],
+  "steps": 1,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 0.667,
+  "kw_hit": [
+   "无法",
+   "没有"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "手册中没有给出 CX-101 当前的误判率，也没有可用于估算当前误判率的依据，因此无法估计。  手册中仅记录了历史数据：2026-09-15 夜班误判率由 18% 升至 31%，光源亮度由 85 下调至 80 后短期回落至 22%，一周后再次上升 [2]；2026-10-20 光源亮度再次由 80 下调至 65，误判持"
+ },
+ {
+  "id": "I5",
+  "type": "意图",
+  "intent": "knowledge",
+  "intent_ok": true,
+  "tools": [
+   "search_manual"
+  ],
+  "steps": 1,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "手册片段中没有收录“E-101”这个告警的含义，无法据此回答。[1][2][3][4][5] 均未提及 E-101 告警。"
+ },
+ {
+  "id": "I6",
+  "type": "意图",
+  "intent": "lookup",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log"
+  ],
+  "steps": 2,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "误判率"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "### CX-104（4号线 / 1-2号工位）  | 项 | 值 | |---|---| | 相机 | CV-X450 + CA-H200CX | | 镜头 | 16mm | | 光源 | CA-DC21E | | 安装日期 | 2024-08-15 00:00:00 | | 保养周期 | 90 天 | | 日志条数"
+ },
+ {
+  "id": "I7",
+  "type": "意图",
+  "intent": "clarify",
+  "intent_ok": true,
+  "tools": [],
+  "steps": 0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "设备编号"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "需要两个信息才能开始：  1. 设备编号（当前库里有 CX-101 ~ CX-105） 2. 你想做什么——排查异常、看数据，还是查手册里的规则条款"
+ },
+ {
+  "id": "I8",
+  "type": "意图",
+  "intent": "diagnose",
+  "intent_ok": true,
+  "tools": [
+   "query_device_profile",
+   "query_defect_log",
+   "query_defect_log",
+   "query_defect_log"
+  ],
+  "steps": 4,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "kw_hit": [
+   "批次",
+   "B20261105"
+  ],
+  "steps_ok": true,
+  "blocked": [],
+  "fc_fail": false,
+  "semantic_ok": true,
+  "reasons": [],
+  "final_head": "## 结论：不是镜头脏了，是物料批次 B20261105 的批次漂移  **证据（近 7 天，2026-11-07 至 11-14，共 94 条、误判 20 条、总误判率 21.3%）**  1. **工位维度不支持镜头污染**：2号工位 31.0%（9/29）、3号工位 18.4%（7/38）、1号工位 14.8%（"
+ }
+]

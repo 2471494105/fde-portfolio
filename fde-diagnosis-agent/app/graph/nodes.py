@@ -26,6 +26,56 @@ PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 # 引用角标：[1] [2]。只认 1–2 位数字，[2026-11-08] 这类日期不会被当成引用。
 CITE_RE = re.compile(r"\[(\d{1,2})\]")
 
+# 路径锚点：[3#maintenance_cycle_days]、[4#groups[0].count]。
+# 引用粒度从"第几条证据"降到"哪个字段下一句话里的 90 天出自哪。
+# 现在模型想表达"这个 90 天是档案里的维护周期"，只有 [1] 或 [9] 两种写法；
+# 一句话里三个数字来自三条证据时，句末只能标一个角标——
+# 90天[9] 就是这么引错的，不是模型疏忽，是引用语法本身不够用。
+#
+# 为什么不用正则：[4#groups[0].count] 的路径自带方括号，
+# 任何 [^\]]+ 都会在 groups[0 处提前截断（实测就是这个 bug）；
+# 而且 [0] 会被 CITE_RE 顺手当成角标 0。所以改成手写扫描 + 把锚点从句子里剥掉。
+_PATH_CH = set("_.-")
+
+
+def _split_anchor(text):
+    """把路径锚点从句子里剥掉，返回 (纯文本, [(k, path)])。
+
+    剥掉是因为路径里的 [0] 会被当成引用角标、里面的数字会被当成数量。
+    """
+    out, kept, i, n = [], [], 0, len(text)
+    while i < n:
+        lb = text.find("[", i)
+        if lb < 0:
+            break
+        j, s = lb + 1, lb + 1
+        while j < n and text[j].isdigit() and j - s < 2:
+            j += 1
+        if j > s and j < n and text[j] == "#":
+            k = int(text[s:j])
+            j += 1
+            depth, pstart = 0, j
+            while j < n:
+                ch = text[j]
+                if ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif not (ch.isalnum() or ch in _PATH_CH):
+                    break
+                j += 1
+            if j > pstart and j < n and text[j] == "]":
+                kept.append(text[i:lb])
+                out.append((k, text[pstart:j]))
+                i = j + 1
+                continue
+        kept.append(text[i:lb + 1])
+        i = lb + 1
+    kept.append(text[i:])
+    return "".join(kept), out
+
 # 需要溯源的量：百分比 + 带单位的数值。
 # 设备号 CX-104、告警码 E-101、日期 2024-08-15 都是标识符而非论据，刻意排除——
 # 之前只校验 %，一条 420 字的告警解释结论 pct_count=0，等于一个数都没看，
@@ -75,14 +125,17 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
    你是助手，不是审批人。
 9. 不要在正文里写行动计划。要调用工具就直接发起 tool_calls；不打算再查了就写结论。
    "接下来我调用 query_calibration"这种句子不会被执行，只会让这一轮白白空转。
-10. 结论里每个数字后面要标引用编号 [k]。k 表示这个数出自第 k 条工具返回，
-   按你实际看到的顺序从 1 开始数。写法：
-   - 单个数字：标定周期 90 天[1]
-   - 一句话里多个数字同源：标定周期 90 天、允许漂移 0.3mm[1]
-   - 你自己算出来的比值必须写出算式：74%（=20/27）[1]，分子分母都要在引用的那条证据里。
+10. 结论里每个数字后面要标引用编号 [k]，能定位到具体字段就写成 [k#字段路径]。
+   k 表示这个数出自第 k 条工具返回，按你实际看到的顺序从 1 开始数。
+   字段路径照工具返回的 JSON 原样写：顶层 [1#maintenance_cycle_days]、
+   数组下标 [4#groups[0].count]、嵌套 [4#groups[0].rate]。写法：
+   - 单个字段：标定周期 90 天[1#maintenance_cycle_days]
+   - 一句话里多个数字来自不同字段：整体误判率 15.4%[3#false_positive_rate]、
+     1 号工位判定 62 条[3#groups[0].count]
+   - 你自己的算出来的比值必须写出算式：74%（=20/27）[1]，分子分母都要在引用的那条证据里。
      校验层会复算，凑不出算式的数字按编造处理。
-   没有出处的数字宁可不写，也不要随手标一个对不上的编号——
-   校验层会逐条比对，标错编号比不标更糟。
+   工具返回里没有对应字段的数（自己加总出来的、自己定的验收目标），照原样标 [k] 就行，
+   不要硬编一个不存在的路径——标错路径比不标更糟。
 
 回答用中文，先说结论（根因 + 证据），再说处置建议。
 """
@@ -763,6 +816,72 @@ def _ev_text(e):
     return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, default=str)
 
 
+# 路径解析用的哨兵：路径走不通时返回它，调用方据此区分"没有这个字段"和"值是 None"。
+_MISS = object()
+_PATH_ATOM = re.compile(r"\.?([^.\[\]]+)|\[(\d+)\]")
+
+
+def _load_obj(e):
+    """证据对象的原始结构。tool 事件里 result 是 JSON 字符串，也可能已经是 dict。"""
+    r = e.get("result")
+    if isinstance(r, (dict, list)):
+        return r
+    if not isinstance(r, str):
+        return _MISS
+    try:
+        return json.loads(r)
+    except (ValueError, TypeError):
+        return _MISS
+
+
+def _get_path(obj, path):
+    """按 a.b[0].c 取值。任一段不存在就返回 _MISS，不抛异常。"""
+    cur = obj
+    for m in _PATH_ATOM.finditer(path):
+        name, idx = m.group(1), m.group(2)
+        if idx is not None:
+            if not isinstance(cur, list):
+                return _MISS
+            i = int(idx)
+            if i >= len(cur):
+                return _MISS
+            cur = cur[i]
+        else:
+            if not isinstance(cur, dict) or name not in cur:
+                return _MISS
+            cur = cur[name]
+    return cur
+
+
+def _path_hit(v, k, path, unit, ev):
+    """路径锚点是否真指向 v。
+
+    返回 True（指向且值相等）/ False（指向了但值不等）/ None（本次判不了，
+    例如证据取不到、result 不是 JSON）。None 一律不判死——第一步是观测，
+    解析能力不足时宁可退回原有五条通道，也不能因为 parser 弱就拦人。
+    """
+    if not (1 <= k <= len(ev)):
+        return None
+    obj = _load_obj(ev[k - 1])
+    if obj is _MISS:
+        return None
+    got = _get_path(obj, path)
+    if got is _MISS:
+        return False
+    if isinstance(got, bool) or not isinstance(got, (int, float, str)):
+        return False
+    try:
+        gv = float(got)
+    except (TypeError, ValueError):
+        return False
+    # 率类字段存的是小数（false_positive_rate=0.154），模型写的是 15.4%。
+    # 不换算的话百分比会全军覆没，path_bad 统计就失去意义。
+    cands = [gv]
+    if unit == "%" and 0 < gv <= 1:
+        cands.append(gv * 100)
+    return any(abs(c - v) <= max(abs(v) * 0.001, 1e-9) for c in cands)
+
+
 def _sentences(text):
     """按句切。引用角标是句级的：模型不会把 [1] 贴在每个数字后面，
     而是写在句末（"标定周期 90 天。[1]"），所以数字按所在句子认领角标。"""
@@ -809,19 +928,26 @@ def verify(state):
     blocked = []
     stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
              "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0,
-             "counted": 0}
+             "counted": 0,
+             # 路径锚点的观测指标。第一步只看模型愿不愿意写、写对了多少，
+             # 这三个数就是"协议能不能落地"的唯一证据。
+             "path_total": 0, "path_ok": 0, "path_bad": 0}
 
     for sent in _sentences(final):
-        pairs = QTY_RE.findall(sent)
+        # 先剥锚点再抽数字：路径里的 [0] 和字段名里的数字都不该参与判定。
+        sent_body, path_ks = _split_anchor(sent)
+        stats["path_total"] += len(path_ks)
+        pairs = QTY_RE.findall(sent_body)
         if not pairs:
             continue
-        ks = [int(k) for k in CITE_RE.findall(sent)]
+        ks = [int(k) for k in CITE_RE.findall(sent_body)]
+        # 同一句可能有多个数字多个锚点，所以逐个数字去试。
         # 同一句里写了的显式算式，按 (单位, 结果值) 索引。
         # 带上单位是因为 "%" 和 "倍" 的算式形态不同（a/b*100 与 a/b），不能混用。
         exprs = {}
-        for m in EXPR_RE.finditer(sent):
+        for m in EXPR_RE.finditer(sent_body):
             exprs[("%", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
-        for m in EXPR_MULT_RE.finditer(sent):
+        for m in EXPR_MULT_RE.finditer(sent_body):
             exprs[("倍", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
 
         for num, unit in pairs:
@@ -829,6 +955,18 @@ def verify(state):
             stats["qty"] += 1
             if unit == "%":
                 stats["pct"] += 1
+
+            # 路径锚点优先：模型直接交代了这个数出自哪个字段，比"第几条证据"硬得多。
+            # 判不出来（None，例如解析失败）不往下拦，交给原有五条通道——
+            # 这一步的目标是量遵从率，不是顺手收紧。
+            if path_ks:
+                verdicts = [_path_hit(v, pk, p, unit, ev) for pk, p in path_ks]
+                if any(r is True for r in verdicts):
+                    stats["path_ok"] += 1
+                    stats["cited_ok"] += 1
+                    continue
+                if any(r is False for r in verdicts):
+                    stats["path_bad"] += 1
 
             if not ks:
                 stats["uncited"] += 1

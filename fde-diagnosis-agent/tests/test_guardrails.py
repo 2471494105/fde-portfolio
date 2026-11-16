@@ -341,5 +341,60 @@ class CountChannelTest(unittest.TestCase):
         self.assertEqual(res["blocked"], [])
 
 
+class PathAnchorTest(unittest.TestCase):
+    """字段级锚点 [k#path]：引用粒度从"第几条证据"降到"哪个字段"。
+
+    这一步的目标是量遵从率，所以断言分两类：
+      - 能锚上的必须放行（path_ok 计数 + blocked 为空）
+      - 锚不上的只记 path_bad，不额外拦（解析失败绝不能造成误拦）
+    最后一条专门防"parser 弱就拦人"——路径不存在时 90 天仍应放行，
+    因为它确实在证据里，只是模型把路径写错了。
+    """
+
+    PAYLOAD = ('{"device_id": "CX-104", "maintenance_cycle_days": 90, '
+               '"total": 200, "false_positive_rate": 0.154, '
+               '"groups": [{"key": "1号工位", "count": 62, "rate": 0.632}]}')
+
+    def _verify(self, final, payload=None):
+        state = {"final": final,
+                 "evidence": [{"result": payload or self.PAYLOAD, "turn": 1}],
+                 "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("path", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_top_level_path_resolves(self):
+        res = self._verify("标定周期 90 天[1#maintenance_cycle_days]。")
+        self.assertEqual(res["blocked"], [])
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_nested_path_resolves(self):
+        res = self._verify("1 号工位判定 62 条[1#groups[0].count]。")
+        self.assertEqual(res["blocked"], [])
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_percent_is_scaled_from_decimal_field(self):
+        # false_positive_rate 存的是 0.154，模型写 15.4%。不做换算的话百分比会全灭。
+        res = self._verify("整体误判率 15.4%[1#false_positive_rate]。")
+        self.assertEqual(res["blocked"], [])
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_path_value_mismatch_is_counted_bad(self):
+        # 路径指向 maintenance_cycle_days（90），结论写 45 天——路径本身是真的，值对不上。
+        res = self._verify("标定周期 45 天[1#maintenance_cycle_days]。")
+        self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertIn("45天", res["blocked"])
+
+    def test_unknown_path_is_bad_not_blocked(self):
+        # 路径不存在只记 bad；90 天确实在证据里，不能因为模型路径写错就判它编造。
+        res = self._verify("标定周期 90 天[1#no_such_field]。")
+        self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertEqual(res["blocked"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

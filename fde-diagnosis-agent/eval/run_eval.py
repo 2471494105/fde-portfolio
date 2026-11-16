@@ -311,6 +311,9 @@ def main():
     cite_hit = sum((r.get("cite_stats") or {}).get("cited_ok", 0) for r in results)
     cite_qty = sum((r.get("cite_stats") or {}).get("qty", 0) for r in results)
     cite_rate = (cite_hit / cite_qty) if cite_qty else 0.0
+    # 证据超长被压缩、字段没送进去：这类引用无法核验，但不是模型写错。
+    # 单独计数，否则它会躲在"引用写错"里，把证据问题报成模型问题。
+    cite_cut = sum((r.get("cite_stats") or {}).get("cite_cut", 0) for r in results)
     steps_bad = sum(1 for r in results if not r["steps_ok"])
 
     print("\n" + "=" * 60)
@@ -325,6 +328,7 @@ def main():
     print(f"fc 失败       {fc}/{n}")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
+    print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
@@ -347,6 +351,7 @@ def main():
         "cite_hit": cite_hit,
         "cite_qty": cite_qty,
         "cite_rate": round(cite_rate, 4),
+        "cite_cut": cite_cut,
         "misquote_n": misquote_n,
         "elapsed_s": round(elapsed, 1),
     }

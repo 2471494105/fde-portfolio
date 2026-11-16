@@ -227,9 +227,9 @@ class ClaimContractTest(unittest.TestCase):
     GROUPS = ('{"false_positive_rate": 0.1541, "groups": ['
               '{"key": "1号工位", "count": 34, "rate": 0.5882}]}')
 
-    def _verify(self, doc, *payloads):
+    def _verify(self, doc, *payloads, truncated=False):
         final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
-        ev = [{"result": p, "turn": 1} for p in payloads]
+        ev = [{"result": p, "turn": 1, "truncated": truncated} for p in payloads]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
         old = trace.RUNS_DIR
@@ -291,6 +291,95 @@ class ClaimContractTest(unittest.TestCase):
                            '{"maintenance_cycle_days": 90}')
         self.assertGreaterEqual(res["cite_stats"]["json_bad"], 1)
         self.assertTrue(any("契约" in m for m in res["misquoted"]))
+
+
+class PayloadBudgetTest(unittest.TestCase):
+    """证据体积：任何返回都必须压成**合法 JSON**，且不超上限。
+
+    为什么这是硬约束而不是"尽量"：verify 要靠 _load_obj 解析证据取字段。
+    一旦不是 JSON，所有引用都判 ref_bad——报出来是"模型引用写错"，
+    实际是证据坏了。实测：给 defect_log 加一个聚合维度就到 1606 字，
+    改造前那一段直接切字符串，两条完全正确的引用全被判失败。
+
+    下面的测试就是那条链的回归。旧实现（text[:limit] + "…（已截断）"）
+    会在 test_oversized_payload_is_valid_json 上直接抛 ValueError。
+    """
+
+    LIMIT = 1600
+
+    def _defect_log(self, extra_dims):
+        res = {
+            "device_id": "CX-104",
+            "total": 560,
+            "groups": [{"ts": f"2026-11-1{i}T00:00:00", "n": 100 + i,
+                        "rate": round(6 + i * 0.14, 2)} for i in range(10)],
+            "note": "rate 是误判率百分比；按小时聚合，空档未记 0",
+        }
+        if extra_dims:
+            res["by_shift"] = [
+                {"shift": "夜班 23:00-07:00", "n": 180, "rate": 12.4, "top_line": "4号线 1-2号工位"},
+                {"shift": "白班 07:00-15:00", "n": 210, "rate": 5.1, "top_line": "2号线 3号工位"},
+            ]
+            res["by_line"] = [
+                {"line": "1号线", "n": 120, "rate": 4.2, "top_station": "1-1号工位", "top_type": "划痕"},
+                {"line": "4号线", "n": 200, "rate": 14.1, "top_station": "4-2号工位", "top_type": "漏检"},
+            ]
+            res["by_defect_type"] = [
+                {"type": "划痕", "n": 160, "rate": 6.1},
+                {"type": "漏检", "n": 130, "rate": 9.2},
+            ]
+            res["by_batch"] = [
+                {"batch": "B2026-11-16-A", "n": 58, "rate": 13.1, "note": "已超额定寿命，未更换"},
+            ]
+            res["caveat"] = "工位归属以缺陷日志的 station 字段为准，历史数据存在少量缺失"
+        return res
+
+    def test_oversized_payload_is_valid_json(self):
+        # 结构压不下来（400 个独立短字段）→ 走降级包装，仍必须是 JSON
+        flat = {f"k{i:03d}": f"值{i}" for i in range(400)}
+        text, cut = nodes._payload(flat)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(text), self.LIMIT)
+        obj = json.loads(text)           # 旧实现到这里抛 ValueError
+        self.assertTrue(obj["_payload_overflow"])
+
+    def test_structure_shrink_beats_char_cut(self):
+        # 多个聚合维度：应该靠逐档收紧结构救回来，而不是切字符串
+        text, cut = nodes._payload(self._defect_log(extra_dims=True))
+        obj = json.loads(text)
+        self.assertFalse(cut, "能靠结构压下来时不该走降级")
+        self.assertEqual(obj["by_shift"][0]["rate"], 12.4, "关键字段必须还在")
+        self.assertLessEqual(len(text), self.LIMIT)
+
+    def test_cut_evidence_is_grey_not_misquoted(self):
+        # 证据被压到装不下 → 字段不在里面。模型写的路径也许是对的，
+        # 判"引用写错"是误判，应当放行标灰。
+        ev_text, cut = nodes._payload({f"k{i:03d}": f"值{i}" for i in range(400)})
+        self.assertTrue(cut)
+        doc = {"conclusion": "x", "claims": [
+            {"text": "判定 34 条", "value": 34, "unit": "条", "ref": "1#groups[0].count"}]}
+        final = json.dumps(doc, ensure_ascii=False)
+        state = {"final": final, "evidence": [{"result": ev_text, "turn": 1, "truncated": True}],
+                 "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("cut", model="m", provider="p", base_url="b"):
+                res = nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+        self.assertEqual(res["misquoted"], [], "证据被压缩不能算模型引用写错")
+        self.assertGreaterEqual(res["cite_stats"]["cite_cut"], 1)
+        self.assertEqual(len(res["blocked"]), 1)
+
+    def test_uncut_missing_field_still_fails(self):
+        # 反向断言：证据没被截断时，字段不存在仍然判失败。
+        # 少了这条，把 cite_cut 写成"无条件放行"也能让上一条测试通过。
+        res = ClaimContractTest._verify(self, {"conclusion": "x", "claims": [
+            {"text": "判定 34 条", "value": 34, "unit": "条",
+             "ref": "1#groups[0].cnt"}]}, ClaimContractTest.GROUPS, truncated=False)
+        self.assertGreaterEqual(res["cite_stats"]["path_miss"], 1)
+        self.assertTrue(any("34 条" in m for m in res["misquoted"]))
 
 
 if __name__ == "__main__":

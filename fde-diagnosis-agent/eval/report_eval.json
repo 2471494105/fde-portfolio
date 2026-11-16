@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 00:23:15",
-  "commit": "5af3b39",
+  "ts": "2026-11-17 00:43:11",
+  "commit": "988cdd7",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "7f0b17d25503",
+  "code_hash": "620e8c1867bf",
   "cases_total": 25,
   "evaluated": 1,
   "workers": 1,
@@ -23,13 +23,14 @@
   "intent_bad": 0,
   "fc_fail": 0,
   "blocked_n": 1,
-  "trace_ok_n": 0,
-  "trace_rate": 0.0,
-  "cite_hit": 16,
-  "cite_qty": 17,
-  "cite_rate": 0.9412,
+  "trace_ok_n": 1,
+  "trace_rate": 1.0,
+  "cite_hit": 18,
+  "cite_qty": 19,
+  "cite_rate": 0.9474,
+  "cite_cut": 0,
   "misquote_n": 0,
-  "elapsed_s": 34.2
+  "elapsed_s": 34.6
  },
  "results": [
   {
@@ -41,8 +42,8 @@
     "query_device_profile",
     "query_defect_log",
     "query_defect_log",
-    "query_calibration",
     "query_light_usage",
+    "query_calibration",
     "query_defect_log",
     "query_defect_log",
     "search_manual",
@@ -60,29 +61,30 @@
    "req_miss": [],
    "steps_ok": true,
    "blocked": [
-    "74%（=20/27）的误判集中在1号工位"
+    "1号工位与2号工位误判率相差约9.4倍（=58.82/6.25）"
    ],
    "misquoted": [],
-   "trace_ok": false,
+   "trace_ok": true,
    "fc_fail": false,
    "semantic_ok": true,
    "reasons": [],
    "cite_stats": {
-    "qty": 17,
-    "pct": 7,
-    "cited_ok": 16,
-    "cited_path": 16,
+    "qty": 19,
+    "pct": 6,
+    "cited_ok": 18,
+    "cited_path": 18,
     "cite_oob": 0,
-    "path_ok": 16,
+    "path_ok": 18,
     "path_bad": 0,
     "path_miss": 0,
     "json_bad": 0,
     "unsourced": 1,
     "ref_bad": 0,
-    "cited": 16,
+    "cite_cut": 0,
+    "cited": 18,
     "ev": 9
    },
-   "final_head": "1号工位光源已超额定寿命、亮度被两次下调，导致该工位过杀集中；夜班环境光更弱，进一步放大了亮度不足的影响，标定与批次均无异常 - 近7天整体误判率 23.89% - 1号工位误判率 58.82% - 3号工位误判率 10.64% - 2号工位误判率 6.25% - 74%（=20/27）的误判集中在1号工位[无出处] "
+   "final_head": "误判集中在1号工位，而该工位光源累计点亮已超额定寿命、亮度被两次下调至65，属光源衰减型硬件问题；标定平稳可排除标定漂移，批次和缺陷类型分散也排除算法侧主因。另外：小时维度数据未显示您说的夜班集中，误判是跨时段的（含白班时段）；亮度设定存在文档冲突需人工确认口径。 - 近7天整体误判率 23.89% - 1号工位误判率"
   }
  ]
 }

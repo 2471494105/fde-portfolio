@@ -476,35 +476,73 @@ def route_after_plan(state):
     return "verify"
 
 
-def _slim_result(obj, depth=0):
+# 压缩档位：(数组保留项数, 字符串截断长度)。由宽到紧依次尝试。
+# 为什么是"多档"而不是一个数：工具返回的体积随业务数据涨，写死一个上限
+# 迟早会被撞破。撞破时正确做法是丢内容，而不是切字符——切字符会让 JSON
+# 不再是 JSON，下游 _load_obj 直接解析失败。
+_SLIM_LEVELS = ((8, 300), (4, 150), (2, 80))
+
+
+def _slim_result(obj, depth=0, arr=8, strlen=300):
     """压缩送进模型的工具返回。
 
     为什么不直接 [:4000] 硬截：json 被截断会切掉括号，模型读到的是一段坏 JSON，
     比读少一点更糟；而且 defect_log 的 groups 数组里，前面几条往往是正常工位，
     关键异常在后面，按位置截会正好把要的证据扔掉。
 
-    这里按结构压：数组留前 8 项并注明总条数，长字符串截 300，标量原样保留。
+    这里按结构压：数组留前 arr 项并注明总条数，长字符串截 strlen，标量原样保留。
+    参数化是为了让 _payload 在超限时逐档收紧，始终保持结构合法。
     """
     if depth > 3:
-        return str(obj)[:80]
+        return str(obj)[:strlen]
     if isinstance(obj, dict):
-        return {k: _slim_result(v, depth + 1) for k, v in obj.items()}
+        return {k: _slim_result(v, depth + 1, arr, strlen) for k, v in obj.items()}
     if isinstance(obj, list):
-        items = [_slim_result(v, depth + 1) for v in obj[:8]]
-        if len(obj) > 8:
-            items.append(f"...共 {len(obj)} 项，仅送前 8 项")
+        items = [_slim_result(v, depth + 1, arr, strlen) for v in obj[:arr]]
+        if len(obj) > arr:
+            items.append(f"...共 {len(obj)} 项，仅送前 {arr} 项")
         return items
     if isinstance(obj, str):
-        return obj[:300]
+        return obj[:strlen]
     return obj
 
 
 def _payload(res, limit=1600):
-    """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。"""
-    text = json.dumps(_slim_result(res), ensure_ascii=False, default=str)
-    if len(text) > limit:
-        text = text[:limit] + "…（已截断）"
-    return text
+    """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。
+
+    返回 (text, truncated)。text 永远是**合法 JSON**——这是硬约束，因为
+    verify 要用 _load_obj 解析它取字段；一旦不是 JSON，所有引用都会判
+    ref_bad，报出来是"模型引用写错"，实际是证据坏了，归因完全反了
+    （实测：一条 1606 字的 defect_log 返回就能触发，正确引用全被判失败）。
+
+    逐档收紧结构；三档都压不住时不再切字符串，改为降级成一个仍可解析的
+    包装对象，把能留的内容放 preview 里。模型看到 preview 仍可引用其中的
+    数字（_value_match 支持字符串内抽数），校验层也能据此判是"证据截断"
+    而不是"模型写错"。
+    """
+    for arr, strlen in _SLIM_LEVELS:
+        text = json.dumps(_slim_result(res, 0, arr, strlen),
+                          ensure_ascii=False, default=str)
+        if len(text) <= limit:
+            return text, False
+
+    # 结构已压到最小仍超限：降级为合法 JSON，明细进 preview
+    full = json.dumps(res, ensure_ascii=False, default=str)
+    out = {
+        "_payload_overflow": True,
+        "note": "返回体过大，已省略结构化明细；preview 是原始内容前段，可从中读数",
+        "top_keys": list(res.keys())[:12] if isinstance(res, dict) else [],
+        "preview": "",
+    }
+    room = limit - len(json.dumps(out, ensure_ascii=False)) - 8   # 留转义余量
+    n = max(0, room)
+    out["preview"] = full[:n]
+    text = json.dumps(out, ensure_ascii=False)
+    while n > 0 and len(text) > limit:      # 转义会撑长，逐步收窄直到不超
+        n = int(n * 0.8)
+        out["preview"] = full[:n]
+        text = json.dumps(out, ensure_ascii=False)
+    return text, True
 
 
 def _owned_device_ids(state):
@@ -579,7 +617,7 @@ def act(state):
             result_head=res_json[:400],
         )
 
-        slim = _payload(res)
+        slim, cut = _payload(res)
         out_msgs.append({
             "role": "tool",
             "tool_call_id": tc["id"],
@@ -587,9 +625,11 @@ def act(state):
             "content": slim,
         })
         # evidence 存同一份压缩文本：模型看到的和校验层能溯源的必须一致，
-        # 存原样会让"模型没读到的数字"也能通过溯源，等于给校验层开后门
+        # 存原样会让"模型没读到的数字"也能通过溯源，等于给校验层开后门。
+        # truncated 记下来：这条证据被压到装不下，字段可能根本不在里面，
+        # 校验时必须把这种情况和"模型引用写错"分开。
         evidence.append({"tool": name, "args": args, "result": slim,
-                         "turn": int(state.get("turn") or 1)})
+                         "truncated": cut, "turn": int(state.get("turn") or 1)})
         names.append(name)
 
     return {
@@ -770,14 +810,23 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
 
         obj = _load_obj(ev[k - 1])
         if obj is _MISS:
+            # 不该发生：_payload 已保证输出永远是合法 JSON（超限时降级成
+            # _payload_overflow 包装对象）。真到了这里说明有别处写坏了证据。
             stats["ref_bad"] += 1
             misquoted.append(f"{text}（第{k}条不是结构化返回）")
             continue
 
         got = _get_path(obj, path)
         if got is _MISS:
-            stats["path_miss"] += 1
-            misquoted.append(f"{text}（字段不存在:{path}）")
+            # 证据被压缩装不下时，字段本身可能就没送进来。这时模型写的路径
+            # 也许完全正确，只是那条证据里已经没有它 —— 判模型写错是误判。
+            # 和"字段真不存在"分开：前者放行标灰，后者判失败。
+            if ev[k - 1].get("truncated"):
+                stats["cite_cut"] += 1
+                blocked.append(f"{text}（第{k}条返回体过大已压缩，该字段未保留）")
+            else:
+                stats["path_miss"] += 1
+                misquoted.append(f"{text}（字段不存在:{path}）")
             continue
 
         if _value_match(v, got, unit):
@@ -842,7 +891,8 @@ def verify(state):
              # json_bad  模型没按 claims 契约输出 → 整条无法核验，判失败
              # unsourced claim 的 ref 写了 null（有数字、没出处）
              # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
-             "json_bad": 0, "unsourced": 0, "ref_bad": 0}
+             # cite_cut  那条证据返回体过大被压缩，字段没保留 → 放行标灰
+             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0}
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。

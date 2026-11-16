@@ -244,6 +244,14 @@ def main():
                     "tools": r["tools"],
                     "reasons": r["reasons"],
                     "final": state.get("final", "") or "",
+                    # 证据全文一起落盘：否则改了校验规则想复盘"当时为什么被判未溯源"，
+                    # 手里只有结论、没有它引的那些数据，只能整份评测重跑一遍（25 条约 50 万 token）。
+                    # 带上 evidence 之后，任何一次历史评测都能离线重算判定。
+                    "evidence": [
+                        e.get("result") if isinstance(e.get("result"), str)
+                        else json.dumps(e.get("result"), ensure_ascii=False, default=str)
+                        for e in (state.get("evidence") or [])
+                    ],
                 }
                 with (ROOT / "eval" / "history.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(rec, ensure_ascii=False) + "\n")

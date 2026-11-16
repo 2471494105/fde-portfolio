@@ -302,5 +302,44 @@ class ExprChannelTest(unittest.TestCase):
         self.assertIn("1.4倍", res["blocked"])
 
 
+class CountChannelTest(unittest.TestCase):
+    """「最近 5 次标定」里的 5 是数数组长度数出来的，不是抄的，应当放行。
+
+    四条：数对了放行 / 数错了拦 / 非计数单位不适用 / 嵌套数组也数得到。
+    第三条是防"任何数都拿数组长度解释"。
+    """
+
+    RECS5 = '{"device_id": "CX-104", "records": [{},{},{},{},{}]}'
+
+    def _verify(self, final, payload):
+        state = {"final": final, "evidence": [{"result": payload, "turn": 1}],
+                 "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("count", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_count_matching_array_length_is_allowed(self):
+        res = self._verify("最近 5 次标定全部通过[1]。", self.RECS5)
+        self.assertEqual(res["blocked"], [])
+        self.assertGreaterEqual(res["cite_stats"]["counted"], 1)
+
+    def test_wrong_count_is_blocked(self):
+        res = self._verify("最近 6 次标定全部通过[1]。", self.RECS5)
+        self.assertIn("6次[1]", res["blocked"])
+
+    def test_count_channel_not_applied_to_length_units(self):
+        res = self._verify("标定漂移 5mm[1]。", self.RECS5)
+        self.assertIn("5mm[1]", res["blocked"])
+
+    def test_nested_array_length_is_found(self):
+        res = self._verify("最近 5 次标定全部通过[1]。",
+                           '{"data": {"records": [{},{},{},{},{}]}}')
+        self.assertEqual(res["blocked"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

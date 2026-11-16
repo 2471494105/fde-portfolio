@@ -689,6 +689,38 @@ def _expr_ok(ex, v, unit, nums):
     return _hit(a, nums, ratio_ok=False) and _hit(b, nums, ratio_ok=False)
 
 
+def _lists_of(obj):
+    """递归收集 JSON 里所有列表的长度。"""
+    found = []
+    if isinstance(obj, list):
+        found.append(len(obj))
+        for x in obj:
+            found.extend(_lists_of(x))
+    elif isinstance(obj, dict):
+        for x in obj.values():
+            found.extend(_lists_of(x))
+    return found
+
+
+def _count_hit(v, text):
+    """结论里的"X 次 / X 条 / X 个"能不能由这条证据里某个列表的长度得到。
+
+    证据返回的多是记录数组（标定记录、缺陷日志、分组结果）。模型说
+    "最近 5 次标定全部通过"时，那个 5 不是抄来的，是数数组长度数出来的，
+    文本里根本没有"5"。只认计数单位——"5mm""5 天"用数组长度解释毫无意义。
+
+    收紧点：数值必须是整数、且**恰好等于**某个列表长度。
+    不取"≤ 长度"也不取"分组数"，否则 10 个分组就能让"10 条"蒙混过关。
+    """
+    if not float(v).is_integer():
+        return False
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    return int(v) in _lists_of(obj)
+
+
 def _hit(v, nums, ratio_ok=True, tol=0.05, ratio_tol=0.001):
     """直接命中：证据里就有这个数（含"证据存比率、结论写百分比"两种口径）。
 
@@ -776,7 +808,8 @@ def verify(state):
 
     blocked = []
     stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
-             "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0}
+             "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0,
+             "counted": 0}
 
     for sent in _sentences(final):
         pairs = QTY_RE.findall(sent)
@@ -843,6 +876,13 @@ def verify(state):
             # 注意要传原始证据文本（ev_texts），scopes 里是抽好的数字，没有日期结构。
             if unit == "天" and any(_day_gap_hit(v, ev_texts[k - 1]) for k in valid):
                 stats["derived"] += 1
+                continue
+
+            # 计数：证据里有个长度恰好等于 v 的记录数组。
+            # "最近 5 次标定全部通过"里的 5 是数出来的，不是抄的，跟 derived 同类。
+            if unit in ("次", "条", "个") \
+                    and any(_count_hit(v, ev_texts[k - 1]) for k in valid):
+                stats["counted"] += 1
                 continue
 
             stats["cited_bad"] += 1

@@ -1,0 +1,328 @@
+{
+ "meta": {
+  "ts": "2026-11-16 22:49:03",
+  "commit": "ae28aa2",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "b125ea215ed5",
+  "code_hash": "3bf30a275a9b",
+  "cases_total": 25,
+  "evaluated": 9,
+  "workers": 3,
+  "use_checkpoint": false
+ },
+ "summary": {
+  "n": 9,
+  "semantic_ok": 3,
+  "semantic_rate": 0.3333,
+  "tool_rate": 0.8889,
+  "gb_rate": 0.8889,
+  "kw_rate": 0.8333,
+  "steps_bad": 1,
+  "intent_bad": 0,
+  "fc_fail": 1,
+  "blocked_n": 5,
+  "elapsed_s": 841.9
+ },
+ "results": [
+  {
+   "id": "H1",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_light_usage",
+    "query_calibration",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 8,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "光源",
+    "寿命",
+    "1号工位"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [],
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "final_head": "## 结论  **根因方向：1 号工位光源老化衰减（已超额定寿命 620 小时），并叠加亮度设定被两次下调；标定不是原因。**  ### 证据  **1）误判高度集中在单个工位，因此属于硬件问题（工位级部件）** - 设备误判整体：200 条记录中过杀 46 条，过杀率 23%（=46/200）[2] - 1 号工位："
+  },
+  {
+   "id": "H2",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_calibration",
+    "query_defect_log",
+    "query_defect_log",
+    "query_light_usage",
+    "query_defect_log",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 10,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 0.5,
+   "kw_hit": [
+    "镜头"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "99条[4]",
+    "19条[4]",
+    "101条[4]",
+    "1.37个",
+    "33.33%[6]",
+    "10个[6]",
+    "22%[6]",
+    "90天[7]",
+    "0.059mm[7]",
+    "200条[3]"
+   ],
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "未溯源数字(99条[4],19条[4],101条[4],1.37个,33.33%[6],10个[6],22%[6],90天[7],0.059mm[7],200条[3])"
+   ],
+   "final_head": "## 结论：所有工位共用的参数（模型或判定阈值）出现偏差，不是单个工位的硬件问题，也不是你认为的“标定完全正常”。  **一、误判分布没有指向单个工位**  按工位聚合（10-14 至 11-14，共 200 条记录、37 次误判）[4]： - 2号工位：99 条，误判 19 条，19.19%[4] - 1号工位：10"
+  },
+  {
+   "id": "H3",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_calibration",
+    "query_defect_log",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict",
+    "check_doc_conflict",
+    "query_calibration",
+    "query_light_usage"
+   ],
+   "steps": 11,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "标定",
+    "漂移"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [],
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "final_head": "## 结论  **根因方向：整机标定漂移（测量基准偏移），并非光源或单工位硬件问题。**  关键时间点吻合： - 最近的标定在 **2026-11-07 08:30** 完成；漂移量为 **2.25 px / 0.42 mm，结果为「告警」**[4]，漂移变化明显上升，前三次标定结果均为「通过」：8-12 为 0.05"
+  },
+  {
+   "id": "H4",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_calibration",
+    "query_light_usage",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 7,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "1号工位",
+    "光源"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "5.5倍",
+    "30天[3,3]"
+   ],
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "未溯源数字(5.5倍,30天[3,3])"
+   ],
+   "final_head": "## 结论：本次误判集中在一个工位；主要怀疑对象是该工位光源衰减（已超寿命），可以排除标定漂移  **1. 误判集中分布：集中在1号工位** - 近 7 天（11-07 ~ 11-14）共 113 件，误判 27 件，整体误判率 23.89%（=27/113）[2] - 1号工位：34 件中 20 件误判，58.82%"
+  },
+  {
+   "id": "A4",
+   "type": "算法",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict",
+    "query_calibration",
+    "query_light_usage"
+   ],
+   "steps": 9,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "划痕"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [],
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "final_head": "## 结论：属于算法侧问题，硬件没有异常迹象；具体是“划痕”这一 defect_type（缺陷类型）的判定标准偏严，并非设备本身挑料或批量问题  **证据（同一设备，最近 7 天 2026-11-07～11-14）：**  - **误判高度集中在缺陷类型上**：划痕共 54 条判定，其中 35 条是过杀，过杀率 64."
+  },
+  {
+   "id": "A5",
+   "type": "算法",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_calibration",
+    "search_manual",
+    "check_doc_conflict",
+    "query_light_usage"
+   ],
+   "steps": 9,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "批次",
+    "B20261105"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "18次[4]"
+   ],
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "未溯源数字(18次[4])"
+   ],
+   "final_head": "## 结论  新供应商这批物料确实像是主要原因，问题更可能出在**物料批次引入带来的模型适配问题**，光源或镜头硬件问题的可能性较小。但目前的证据只够确定方向，还不能直接判定“模型需要重训”。  **证据一：误判高度集中在单一物料批次**  近 7 天共 94 条记录、20 次过杀，整体误判率 21.3%[2]。按批次"
+  },
+  {
+   "id": "I2",
+   "type": "信息不全",
+   "semantic_ok": false,
+   "reasons": [
+    "运行异常:APITimeoutError: Request timed out."
+   ],
+   "tools": [],
+   "steps": 0,
+   "tool_rate": 0,
+   "gb_rate": 0,
+   "kw_rate": 0,
+   "steps_ok": false,
+   "blocked": [],
+   "fc_fail": true,
+   "final_head": ""
+  },
+  {
+   "id": "W1",
+   "type": "建单",
+   "intent": "action",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_light_usage",
+    "query_defect_log",
+    "query_calibration",
+    "create_work_order"
+   ],
+   "steps": 5,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "工单",
+    "WO-"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "9倍[3]"
+   ],
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "未溯源数字(9倍[3])"
+   ],
+   "final_head": "**结论：根因成立，工单已建（系统判为重复，返回已有单 WO-20261116-002，派设备科）。**  **证据核对（你说的数和工具一致）：** - 光源累计 8620h、额定 8000h、超 620h，当前亮度设定 65[2] —— 与你说的 8620h 吻合。 - 1 号工位过杀率 58.82%（=20/34）"
+  },
+  {
+   "id": "I8",
+   "type": "意图",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_light_usage",
+    "query_calibration",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 9,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "批次",
+    "B20261105"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "30天[7]"
+   ],
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "未溯源数字(30天[7])"
+   ],
+   "final_head": "## 结论：数据不支持“镜头脏了”这个判断  **证据一：误判没有集中在一个工位，而镜头是工位独有部件**  最近 7 天三个工位的误判率分别是 2号 31.03%、3号 18.42%、1号 14.81%[2]，整体 21.28%（=20/94）[2]。三个工位都有可观的误判，没有哪个工位是明显离群的主因。如果真是某一"
+  }
+ ]
+}

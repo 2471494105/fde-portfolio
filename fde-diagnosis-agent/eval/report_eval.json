@@ -1,21 +1,21 @@
 {
  "meta": {
-  "ts": "2026-11-16 23:17:59",
-  "commit": "4f7e098",
+  "ts": "2026-11-16 23:32:29",
+  "commit": "36a4f79",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "efc245976dd0",
+  "code_hash": "9cddd44d8549",
   "cases_total": 25,
-  "evaluated": 3,
-  "workers": 2,
-  "use_checkpoint": false
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
  },
  "summary": {
-  "n": 3,
-  "semantic_ok": 2,
-  "semantic_rate": 0.6667,
+  "n": 1,
+  "semantic_ok": 0,
+  "semantic_rate": 0.0,
   "tool_rate": 1.0,
   "gb_rate": 1.0,
   "kw_rate": 1.0,
@@ -23,41 +23,9 @@
   "intent_bad": 0,
   "fc_fail": 0,
   "blocked_n": 1,
-  "elapsed_s": 341.7
+  "elapsed_s": 65.1
  },
  "results": [
-  {
-   "id": "H1",
-   "type": "硬件",
-   "intent": "diagnose",
-   "intent_ok": true,
-   "tools": [
-    "query_device_profile",
-    "query_defect_log",
-    "query_defect_log",
-    "query_defect_log",
-    "query_light_usage",
-    "query_calibration",
-    "search_manual",
-    "check_doc_conflict"
-   ],
-   "steps": 8,
-   "tool_rate": 1.0,
-   "gb_rate": 1.0,
-   "kw_rate": 1.0,
-   "kw_hit": [
-    "光源",
-    "寿命",
-    "1号工位"
-   ],
-   "req_miss": [],
-   "steps_ok": true,
-   "blocked": [],
-   "fc_fail": false,
-   "semantic_ok": true,
-   "reasons": [],
-   "final_head": "## 结论  **根因方向：1 号工位的光源与镜头这类硬件偏老化，并不指向算法或标定问题。** 证据链：  - **误判高度集中在 1 个工位**：最近 7 天整体误判率 23.89%[2#false_positive_rate]，但 1 号工位判 34 条、其中误判 20 条、误判率 58.82%[2#groups["
-  },
   {
    "id": "H2",
    "type": "硬件",
@@ -66,19 +34,17 @@
    "tools": [
     "query_device_profile",
     "query_defect_log",
-    "query_defect_log",
-    "query_defect_log",
     "query_calibration",
-    "query_light_usage",
     "query_defect_log",
+    "query_defect_log",
+    "query_light_usage",
     "query_defect_log",
     "search_manual",
     "check_doc_conflict",
     "query_defect_log",
-    "search_manual",
-    "check_doc_conflict"
+    "search_manual"
    ],
-   "steps": 13,
+   "steps": 11,
    "tool_rate": 1.0,
    "gb_rate": 1.0,
    "kw_rate": 1.0,
@@ -89,43 +55,36 @@
    "req_miss": [],
    "steps_ok": true,
    "blocked": [
-    "1.37个",
-    "90天[9]"
+    "9.6倍[4]"
    ],
    "fc_fail": false,
    "semantic_ok": false,
    "reasons": [
-    "未溯源数字(1.37个,90天[9])"
+    "未溯源数字(9.6倍[4])"
    ],
-   "final_head": "## 结论  **根因方向：不是标定，也不是光源，而是镜头/防护窗污染导致的成像质量下降（两工位同等受影响）。** 你提供的情况基本属实，但有一处需要先核对：设备档案里 CX-105 只有 **1-2 号工位**，保养周期登记为 **90 天**[1#maintenance_cycle_days]，而厂内 SOP 要求"
-  },
-  {
-   "id": "A4",
-   "type": "算法",
-   "intent": "diagnose",
-   "intent_ok": true,
-   "tools": [
-    "query_device_profile",
-    "query_defect_log",
-    "query_defect_log",
-    "query_defect_log",
-    "search_manual",
-    "check_doc_conflict"
-   ],
-   "steps": 6,
-   "tool_rate": 1.0,
-   "gb_rate": 1.0,
-   "kw_rate": 1.0,
-   "kw_hit": [
-    "划痕"
-   ],
-   "req_miss": [],
-   "steps_ok": true,
-   "blocked": [],
-   "fc_fail": false,
-   "semantic_ok": true,
-   "reasons": [],
-   "final_head": "## 结论  **根因判断：问题在算法侧（模型对“划痕”这一类过检 + 判定阈值口径本身不规范），不是某个工位的硬件故障。**  判断依据是误判的集中方式：它明显集中在**缺陷类型**上，而在**工位**和**批次**上都是均匀分散的。  **1）集中在“划痕”这一类（算法特征）** - 近 7 天总判定 96 条[2"
+   "cite_stats": {
+    "qty": 39,
+    "pct": 19,
+    "cited_ok": 27,
+    "cited_bad": 1,
+    "cite_oob": 0,
+    "uncited": 10,
+    "recomputed": 0,
+    "derived": 0,
+    "counted": 1,
+    "path_total": 24,
+    "path_ok": 18,
+    "path_bad": 11,
+    "path_miss": 0,
+    "path_arr": 1,
+    "path_span": 10,
+    "cited_direct": 9,
+    "cited_path": 18,
+    "missed_anchor": 8,
+    "cited": 27,
+    "ev": 11
+   },
+   "final_head": "## 结论  **这是一次已持续约 10 天的渐进式误判上升，并不属于标定问题；从现有数据看，无法锁定单一工位、批次或缺陷类型，最可能出在两个工位共用的侧，也就是模型漂移，或同一产线环境下的镜头、防护窗污染。**  ### 一、你给的前提：标定正常 —— 与工具一致，但有一个趋势点要提醒  - 最近一次标定 2026-"
   }
  ]
 }

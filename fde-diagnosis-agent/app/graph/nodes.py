@@ -80,7 +80,9 @@ def _split_anchor(text):
 # 设备号 CX-104、告警码 E-101、日期 2024-08-15 都是标识符而非论据，刻意排除——
 # 之前只校验 %，一条 420 字的告警解释结论 pct_count=0，等于一个数都没看，
 # 却照样显示"数字全部可溯源"。
-_QTY_UNIT = "天|小时|分钟|秒|mm|条|台|次|个|块|倍|工位"
+# "个" 必须排除"个百分点"："只差 1.37 个百分点"里的 1.37 不是计数，
+# 但 (\d+)\s*(个) 会从"个"字里切出一个假的数量来。实测在 H2 上误拦过一条。
+_QTY_UNIT = r"天|小时|分钟|秒|mm|条|台|次|(?:个(?!百分点))|块|倍|工位"
 QTY_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*(%|{_QTY_UNIT})")
 
 # 证据里的日期只认完整年月日。MM-DD 无法判断是否跨年，YYYY/MM/DD 这类写法库里也不出现
@@ -853,33 +855,39 @@ def _get_path(obj, path):
     return cur
 
 
-def _path_hit(v, k, path, unit, ev):
-    """路径锚点是否真指向 v。
+def _path_probe(v, k, path, unit, ev):
+    """路径锚点探测。返回 (类型, 值是否相等)。
 
-    返回 True（指向且值相等）/ False（指向了但值不等）/ None（本次判不了，
-    例如证据取不到、result 不是 JSON）。None 一律不判死——第一步是观测，
-    解析能力不足时宁可退回原有五条通道，也不能因为 parser 弱就拦人。
+    类型分三种，因为"锚点没命中"背后是三种完全不同的原因，
+    混成一个计数就看不出模型到底错在哪：
+      ok    字段存在且是标量
+      miss  路径上某一段不存在（字段名或下标写错）
+      arr   锚点指向对象/数组（模型想引用整组记录，语法还不支持）
+      none  本次判不了（证据取不到、result 不是 JSON），一律不判死
     """
     if not (1 <= k <= len(ev)):
-        return None
+        return "miss", False
     obj = _load_obj(ev[k - 1])
     if obj is _MISS:
-        return None
+        return "none", False
     got = _get_path(obj, path)
     if got is _MISS:
-        return False
+        return "miss", False
+    if isinstance(got, (list, dict)):
+        return "arr", False
     if isinstance(got, bool) or not isinstance(got, (int, float, str)):
-        return False
+        return "none", False
     try:
         gv = float(got)
     except (TypeError, ValueError):
-        return False
+        return "none", False
     # 率类字段存的是小数（false_positive_rate=0.154），模型写的是 15.4%。
-    # 不换算的话百分比会全军覆没，path_bad 统计就失去意义。
+    # 不换算的话百分比会全军覆没，统计就失去意义。
     cands = [gv]
     if unit == "%" and 0 < gv <= 1:
         cands.append(gv * 100)
-    return any(abs(c - v) <= max(abs(v) * 0.001, 1e-9) for c in cands)
+    ok = any(abs(c - v) <= max(abs(v) * 0.001, 1e-9) for c in cands)
+    return "ok", ok
 
 
 def _sentences(text):
@@ -929,9 +937,16 @@ def verify(state):
     stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
              "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0,
              "counted": 0,
-             # 路径锚点的观测指标。第一步只看模型愿不愿意写、写对了多少，
-             # 这三个数就是"协议能不能落地"的唯一证据。
-             "path_total": 0, "path_ok": 0, "path_bad": 0}
+             # 路径锚点的观测指标。原先全塞进一个 path_bad，看不出模型错在哪：
+             # miss=字段/下标写错，arr=指向整组记录（语法还没支持），
+             # span=字段都在但这个数不是它们的值（多为同句多数字只标一个锚点）。
+             "path_total": 0, "path_ok": 0, "path_bad": 0,
+             "path_miss": 0, "path_arr": 0, "path_span": 0,
+             # 引用来源拆开：direct 是角标 [k]，path 是 [k#path]。
+             # 原来混在 cited_ok 里，报"引用 23 个"却说不清是靠哪种引用的。
+             "cited_direct": 0, "cited_path": 0,
+             # 该锚未锚：句中有锚点语法可用，但这个数既没被锚点覆盖、也不在算式里。
+             "missed_anchor": 0}
 
     for sent in _sentences(final):
         # 先剥锚点再抽数字：路径里的 [0] 和字段名里的数字都不该参与判定。
@@ -956,17 +971,35 @@ def verify(state):
             if unit == "%":
                 stats["pct"] += 1
 
+            # 漏锚判定放在路径分支前面：句子里没锚点、这个数又不在算式里，
+            # 说明模型压根没尝试用字段锚点，属于遵从度问题，不是通道不够。
+            if not path_ks and (unit, v) not in exprs:
+                stats["missed_anchor"] += 1
+
             # 路径锚点优先：模型直接交代了这个数出自哪个字段，比"第几条证据"硬得多。
-            # 判不出来（None，例如解析失败）不往下拦，交给原有五条通道——
+            # 判不出来（none，例如解析失败）不往下拦，交给原有五条通道——
             # 这一步的目标是量遵从率，不是顺手收紧。
             if path_ks:
-                verdicts = [_path_hit(v, pk, p, unit, ev) for pk, p in path_ks]
-                if any(r is True for r in verdicts):
+                kinds = []
+                hit = False
+                for pk, p in path_ks:
+                    kind, match = _path_probe(v, pk, p, unit, ev)
+                    if kind == "ok" and match:
+                        hit = True
+                        break
+                    kinds.append(kind)
+                if hit:
                     stats["path_ok"] += 1
+                    stats["cited_path"] += 1
                     stats["cited_ok"] += 1
                     continue
-                if any(r is False for r in verdicts):
-                    stats["path_bad"] += 1
+                if "miss" in kinds:
+                    stats["path_miss"] += 1
+                elif "arr" in kinds:
+                    stats["path_arr"] += 1
+                elif "ok" in kinds:
+                    stats["path_span"] += 1
+                stats["path_bad"] += 1
 
             if not ks:
                 stats["uncited"] += 1
@@ -992,6 +1025,7 @@ def verify(state):
 
             # 强溯源 1：引用的那条证据里直接有这个数
             if any(_hit(v, s, ratio_ok=(unit == "%")) for s in scopes):
+                stats["cited_direct"] += 1
                 stats["cited_ok"] += 1
                 continue
 
@@ -999,6 +1033,7 @@ def verify(state):
             # "0.42mm 是限值的 1.4 倍（=0.42/0.3）"里，0.42 来自标定记录、0.3 来自手册。
             if _expr_ok(exprs.get((unit, v)), v, unit,
                         [n for s in scopes for n in s]):
+                stats["cited_direct"] += 1
                 stats["cited_ok"] += 1
                 continue
 

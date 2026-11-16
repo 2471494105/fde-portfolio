@@ -60,6 +60,10 @@ def judge(traj, state):
     final = state.get("final", "") or ""
     steps = state.get("steps", 0)
     blocked = state.get("blocked", [])
+    # 校验层的判定明细一并入报告。之前只记 blocked 的字符串，
+    # 想知道"路径锚点写对了几次"就得拿 evidence 离线重算一遍，
+    # 等于每次复盘都要临时写脚本——这一层留档就断了。
+    cite_stats = state.get("cite_stats") or {}
 
     expect = traj["expect_tools"]
     hit = [t for t in expect if t in tools]
@@ -165,6 +169,7 @@ def judge(traj, state):
         "fc_fail": fc_fail,
         "semantic_ok": semantic_ok,
         "reasons": reasons,
+        "cite_stats": cite_stats,
         "final_head": final[:160].replace("\n", " "),
     }
 
@@ -220,6 +225,7 @@ def main():
                 "reasons": [f"运行异常:{type(exc).__name__}: {exc}"],
                 "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
                 "kw_rate": 0, "steps_ok": False, "blocked": [], "fc_fail": True,
+                "cite_stats": {},
                 "final_head": "",
             }
         return traj, state, judge(traj, state)
@@ -243,6 +249,7 @@ def main():
                     "steps": r["steps"],
                     "tools": r["tools"],
                     "reasons": r["reasons"],
+                    "cite_stats": r.get("cite_stats") or {},
                     "final": state.get("final", "") or "",
                     # 证据全文一起落盘：否则改了校验规则想复盘"当时为什么被判未溯源"，
                     # 手里只有结论、没有它引的那些数据，只能整份评测重跑一遍（25 条约 50 万 token）。

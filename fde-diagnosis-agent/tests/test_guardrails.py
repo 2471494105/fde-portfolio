@@ -393,6 +393,33 @@ class PathAnchorTest(unittest.TestCase):
         # 路径不存在只记 bad；90 天确实在证据里，不能因为模型路径写错就判它编造。
         res = self._verify("标定周期 90 天[1#no_such_field]。")
         self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertGreaterEqual(res["cite_stats"]["path_miss"], 1)
+        self.assertEqual(res["blocked"], [])
+
+    def test_anchor_to_array_is_counted_separately(self):
+        # [1#groups] 指向整组记录，是合法意图，只是语法还没支持——
+        # 必须和"字段名写错"分开计，否则看不出模型在自发使用对象级锚点。
+        res = self._verify("共 3 个工位[1#groups]。")
+        self.assertGreaterEqual(res["cite_stats"]["path_arr"], 1)
+        self.assertEqual(res["cite_stats"]["path_miss"], 0)
+
+    def test_uncovered_number_in_anchored_sentence_is_span(self):
+        # 一句里两个数只标一个锚点：命中的算 path_ok，没命中的算 span，不算字段错。
+        res = self._verify("共判 200 条、其中 62 条来自 1 号工位[1#groups[0].count]。")
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+        self.assertGreaterEqual(res["cite_stats"]["path_span"], 1)
+        self.assertEqual(res["cite_stats"]["path_miss"], 0)
+
+    def test_number_without_anchor_is_missed(self):
+        # 整句没有锚点、也不是算式结果 —— 这是遵从度问题，不能算通道不够。
+        res = self._verify("标定周期 90 天。")
+        self.assertGreaterEqual(res["cite_stats"]["missed_anchor"], 1)
+        self.assertEqual(res["blocked"], [])
+
+    def test_percent_point_is_not_a_quantity(self):
+        # "只差 1.37 个百分点"里的 1.37 是差值，不是计数个单位。
+        res = self._verify("两个工位只差 1.37 个百分点[1#total]。")
+        self.assertEqual(res["cite_stats"]["qty"], 0)
         self.assertEqual(res["blocked"], [])
 
 

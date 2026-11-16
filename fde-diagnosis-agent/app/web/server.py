@@ -206,15 +206,12 @@ def _node_detail(name: str, delta) -> str:
             return "引用写错 " + "、".join(quoted)
         if blocked:
             return "未溯源 " + "、".join(blocked)
+        if s.get("json_bad"):
+            return "结论未按 claims 契约输出，引用无法核验"
         if s.get("qty"):
-            n_unc = s.get("uncited", 0)
-            parts = [f"数量 {s['qty']} 个", f"带引用 {s.get('cited', 0)}"]
-            # "未标角"和"全部可溯源"不能并列——前者是漏标，后者是没有编造，
-            # 两件事同时为真时同一行写会读成自相矛盾。
-            if n_unc:
-                parts.append(f"未标角 {n_unc}（全证据里能查到）")
-            else:
-                parts.append("全部带引用")
+            parts = [f"数字 {s['qty']} 个", f"有出处 {s.get('cited_ok', 0)}"]
+            if s.get("unsourced"):
+                parts.append(f"无出处 {s['unsourced']}（已标灰）")
             return " · ".join(parts)
         return "结论里没有需要溯源的数字"
     if name == "finalize":

@@ -1,0 +1,88 @@
+{
+ "meta": {
+  "ts": "2026-11-17 00:23:15",
+  "commit": "5af3b39",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "b125ea215ed5",
+  "code_hash": "7f0b17d25503",
+  "cases_total": 25,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
+ },
+ "summary": {
+  "n": 1,
+  "semantic_ok": 1,
+  "semantic_rate": 1.0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "steps_bad": 0,
+  "intent_bad": 0,
+  "fc_fail": 0,
+  "blocked_n": 1,
+  "trace_ok_n": 0,
+  "trace_rate": 0.0,
+  "cite_hit": 16,
+  "cite_qty": 17,
+  "cite_rate": 0.9412,
+  "misquote_n": 0,
+  "elapsed_s": 34.2
+ },
+ "results": [
+  {
+   "id": "H1",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_calibration",
+    "query_light_usage",
+    "query_defect_log",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 9,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "光源",
+    "寿命",
+    "1号工位"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "74%（=20/27）的误判集中在1号工位"
+   ],
+   "misquoted": [],
+   "trace_ok": false,
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "cite_stats": {
+    "qty": 17,
+    "pct": 7,
+    "cited_ok": 16,
+    "cited_path": 16,
+    "cite_oob": 0,
+    "path_ok": 16,
+    "path_bad": 0,
+    "path_miss": 0,
+    "json_bad": 0,
+    "unsourced": 1,
+    "ref_bad": 0,
+    "cited": 16,
+    "ev": 9
+   },
+   "final_head": "1号工位光源已超额定寿命、亮度被两次下调，导致该工位过杀集中；夜班环境光更弱，进一步放大了亮度不足的影响，标定与批次均无异常 - 近7天整体误判率 23.89% - 1号工位误判率 58.82% - 3号工位误判率 10.64% - 2号工位误判率 6.25% - 74%（=20/27）的误判集中在1号工位[无出处] "
+  }
+ ]
+}

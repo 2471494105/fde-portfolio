@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 00:14:18",
-  "commit": "6dbed10",
+  "ts": "2026-11-17 00:23:15",
+  "commit": "5af3b39",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "c06faac3f38b",
+  "code_hash": "7f0b17d25503",
   "cases_total": 25,
   "evaluated": 1,
   "workers": 1,
@@ -29,7 +29,7 @@
   "cite_qty": 17,
   "cite_rate": 0.9412,
   "misquote_n": 0,
-  "elapsed_s": 29.5
+  "elapsed_s": 34.2
  },
  "results": [
   {
@@ -44,10 +44,11 @@
     "query_calibration",
     "query_light_usage",
     "query_defect_log",
-    "check_doc_conflict",
-    "search_manual"
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict"
    ],
-   "steps": 8,
+   "steps": 9,
    "tool_rate": 1.0,
    "gb_rate": 1.0,
    "kw_rate": 1.0,
@@ -59,7 +60,7 @@
    "req_miss": [],
    "steps_ok": true,
    "blocked": [
-    "工具给出的光源衰减影响估计为误判率上升 10%~25%"
+    "74%（=20/27）的误判集中在1号工位"
    ],
    "misquoted": [],
    "trace_ok": false,
@@ -68,32 +69,20 @@
    "reasons": [],
    "cite_stats": {
     "qty": 17,
-    "pct": 5,
+    "pct": 7,
     "cited_ok": 16,
-    "cited_bad": 0,
+    "cited_path": 16,
     "cite_oob": 0,
-    "uncited": 0,
-    "recomputed": 0,
-    "derived": 0,
-    "counted": 0,
-    "expr_bad": 0,
-    "inferred": 0,
-    "path_total": 0,
     "path_ok": 16,
     "path_bad": 0,
     "path_miss": 0,
-    "path_arr": 0,
-    "path_span": 0,
-    "cited_direct": 0,
-    "cited_path": 16,
-    "missed_anchor": 0,
     "json_bad": 0,
     "unsourced": 1,
     "ref_bad": 0,
     "cited": 16,
-    "ev": 8
+    "ev": 9
    },
-   "final_head": "{   \"conclusion\": \"误判集中在1号工位（其它两个工位正常），属该工位独立部件问题：光源累计点亮已超额定寿命、亮度被两次下调，导致夜班环境光弱时对比度不足而大量过杀，不是模型或阈值问题\",   \"claims\": [     {\"text\": \"近7天整体误判率 23.89%\", \"value\": 23"
+   "final_head": "1号工位光源已超额定寿命、亮度被两次下调，导致该工位过杀集中；夜班环境光更弱，进一步放大了亮度不足的影响，标定与批次均无异常 - 近7天整体误判率 23.89% - 1号工位误判率 58.82% - 3号工位误判率 10.64% - 2号工位误判率 6.25% - 74%（=20/27）的误判集中在1号工位[无出处] "
   }
  ]
 }

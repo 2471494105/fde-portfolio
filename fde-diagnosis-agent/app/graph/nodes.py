@@ -21,87 +21,6 @@ from app.tools.workorder import query_work_order
 MAX_STEPS = 12
 
 DEVICE_RE = re.compile(r"CX-\d{3}", re.IGNORECASE)
-PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
-
-# 引用角标：[1] [2]。只认 1–2 位数字，[2026-11-08] 这类日期不会被当成引用。
-CITE_RE = re.compile(r"\[(\d{1,2})\]")
-
-# 路径锚点：[3#maintenance_cycle_days]、[4#groups[0].count]。
-# 引用粒度从"第几条证据"降到"哪个字段下一句话里的 90 天出自哪。
-# 现在模型想表达"这个 90 天是档案里的维护周期"，只有 [1] 或 [9] 两种写法；
-# 一句话里三个数字来自三条证据时，句末只能标一个角标——
-# 90天[9] 就是这么引错的，不是模型疏忽，是引用语法本身不够用。
-#
-# 为什么不用正则：[4#groups[0].count] 的路径自带方括号，
-# 任何 [^\]]+ 都会在 groups[0 处提前截断（实测就是这个 bug）；
-# 而且 [0] 会被 CITE_RE 顺手当成角标 0。所以改成手写扫描 + 把锚点从句子里剥掉。
-_PATH_CH = set("_.-")
-
-
-def _split_anchor(text):
-    """把路径锚点从句子里剥掉，返回 (纯文本, [(k, path)])。
-
-    剥掉是因为路径里的 [0] 会被当成引用角标、里面的数字会被当成数量。
-    """
-    out, kept, i, n = [], [], 0, len(text)
-    while i < n:
-        lb = text.find("[", i)
-        if lb < 0:
-            break
-        j, s = lb + 1, lb + 1
-        while j < n and text[j].isdigit() and j - s < 2:
-            j += 1
-        if j > s and j < n and text[j] == "#":
-            k = int(text[s:j])
-            j += 1
-            depth, pstart = 0, j
-            while j < n:
-                ch = text[j]
-                if ch == "[":
-                    depth += 1
-                elif ch == "]":
-                    if depth == 0:
-                        break
-                    depth -= 1
-                elif not (ch.isalnum() or ch in _PATH_CH):
-                    break
-                j += 1
-            if j > pstart and j < n and text[j] == "]":
-                kept.append(text[i:lb])
-                out.append((k, text[pstart:j]))
-                i = j + 1
-                continue
-        kept.append(text[i:lb + 1])
-        i = lb + 1
-    kept.append(text[i:])
-    return "".join(kept), out
-
-# 需要溯源的量：百分比 + 带单位的数值。
-# 设备号 CX-104、告警码 E-101、日期 2024-08-15 都是标识符而非论据，刻意排除——
-# 之前只校验 %，一条 420 字的告警解释结论 pct_count=0，等于一个数都没看，
-# 却照样显示"数字全部可溯源"。
-# "个" 必须排除"个百分点"："只差 1.37 个百分点"里的 1.37 不是计数，
-# 但 (\d+)\s*(个) 会从"个"字里切出一个假的数量来。实测在 H2 上误拦过一条。
-_QTY_UNIT = r"天|小时|分钟|秒|mm|条|台|次|(?:个(?!百分点))|块|倍|工位"
-QTY_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*(%|{_QTY_UNIT})")
-
-# 证据里的日期只认完整年月日。MM-DD 无法判断是否跨年，YYYY/MM/DD 这类写法库里也不出现
-_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
-
-# 显式算式：74%（=20/27）或 74%(20/27)。
-# 要求写算式，是因为"靠凑"根本不可信——单条证据 135 个数字时，
-# 任意编造的百分比有 76% 能被两个数相除凑出来，这条通道等于白送。
-EXPR_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*%\s*[（(]\s*=?\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)"
-)
-
-# 倍率算式：1.4倍（=0.42/0.3）。
-# 原来只有百分比算式被认，模型写"倍"时同样规范、同样给了分子分母，却被当成编造拦下
-# （实测一次真实诊断就拦了 1 个）。算式本身是最强的溯源证据——模型主动交代了怎么算的。
-EXPR_MULT_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*倍\s*[（(]\s*=?\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)"
-)
-
 SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
 
 你的工作：
@@ -682,176 +601,20 @@ def act(state):
     }
 
 
-def _recomputable(v, nums, tol=1.0):
-    """结论里的数量能不能由同一份证据里的两个数算出来（a/b * 100 ≈ v）。
-
-    模型常会做"1号工位占全部过杀的比例"这类衍生计算。算法对、但没写计算式，
-    严格说不可验证；可从工程上，把它全判成编造会造成大量误报，
-    而校验层的误报比漏报更伤——一旦频繁误报，人就会忽略告警。
-
-    关键约束：nums 只传**单条证据**的数字，不再是全部证据混池。
-    之前所有证据的数放在一个池子里两两相除，300 个随机编造值有 41% 能被"凑"出来，
-    校验层因此形同虚设。
-    """
-    counts = [n for n in nums if 1 < n < 10000]
-    for a in counts:
-        for b in counts:
-            if b and abs(a / b * 100 - v) <= tol:
-                return True
-    return False
 
 
-def _ratio_recomputable(v, nums, tol=0.05):
-    """结论里的"多少倍"能不能由同一份证据里的两个数相除算出来（a/b ≈ v）。
-
-    和 _recomputable 同源，只换判定式：那边是百分比（a/b*100），这边是倍率（a/b）。
-    单独开一个函数而不是加参数，是因为两者的容差语义不同：
-    "9.62 报成 9.6"是四舍五入，该按相对误差判，不该用百分比的绝对值容差。
-
-    代价是证据里有 N 个数时能凑出 O(N^2) 个倍率，随机编造也可能撞上。
-    所以命中只放行标灰，**不计入引用率**——和 recomputed 同类。
-    """
-    vals = [n for n in nums if n > 0]
-    eps = max(tol, abs(v) * 0.02)
-    for a in vals:
-        for b in vals:
-            if b and abs(a / b - v) <= eps:
-                return True
-    return False
 
 
-def _dates_of(text):
-    """抽出文本里所有完整日期（YYYY-MM-DD），去重后按时间排序。"""
-    out = []
-    for y, m, d in _DATE_RE.findall(text or ""):
-        try:
-            out.append(datetime.date(int(y), int(m), int(d)))
-        except ValueError:
-            continue
-    return sorted(set(out))
 
 
-def _day_gap_hit(v, text, tol=0.05):
-    """结论里的"X 天"能不能由这条证据里**相邻两次记录**的日期相减得到。
-
-    为什么单列这一类：诊断结论几乎每条都会算"两次标定间隔 36 天""两次告警间隔"，
-    两个日期都在证据里、差值也算得对，但原来的校验只认"数字直接出现"和
-    "a/b 算百分比"两种溯源，于是这类合法推导被系统性误拦——实测一次真实诊断
-    被拦下 3 个数字，全是天数差。
-
-    为什么只允许相邻两天、不放开任意两两：
-    query_calibration 一次返回 10 条记录，10 个日期两两组合是 45 个差值，
-    覆盖 0~90 天近乎每两天一个取值，编造任意天数都能"凑"上，等于开后门。
-    相邻差只有 9 个，且语义恰好就是模型要表达的"两次记录的间隔"。
-    """
-    ds = _dates_of(text)
-    for a, b in zip(ds, ds[1:]):
-        if abs((b - a).days - v) <= tol:
-            return True
-    return False
 
 
-def _expr_ok(ex, v, unit, nums):
-    """句子里写了算式，且算式真的成立、分子分母都能在给定数字里找到。
-
-    nums 传"本次判定允许的那批数字"，不是无脑全池：
-    分子分母经常分别来自两条证据（0.42mm 来自标定记录、0.3mm 来自手册），
-    要求必须在同一条证据里凑齐，会把这种规范写法判成编造；
-    但也不能退到全池——无角标时退回全池已是既有口径，有角标时只用被引用的那几条。
-
-    和"靠两个数相除凑出百分比"的区别：那条不需要模型说明，属于弱溯源，只放行不计数；
-    这条要求**模型自己写出 a/b**，是最强的证明，计入引用。
-    """
-    if not ex:
-        return False
-    a, b = ex
-    if not b:
-        return False
-    if unit == "%":
-        if abs(a / b * 100 - v) > 0.5:
-            return False
-    elif abs(a / b - v) > 0.05:
-        return False
-    return _hit(a, nums, ratio_ok=False) and _hit(b, nums, ratio_ok=False)
 
 
-def _lists_of(obj):
-    """递归收集 JSON 里所有列表的长度。"""
-    found = []
-    if isinstance(obj, list):
-        found.append(len(obj))
-        for x in obj:
-            found.extend(_lists_of(x))
-    elif isinstance(obj, dict):
-        for x in obj.values():
-            found.extend(_lists_of(x))
-    return found
 
-
-def _count_hit(v, text):
-    """结论里的"X 次 / X 条 / X 个"能不能由这条证据里某个列表的长度得到。
-
-    证据返回的多是记录数组（标定记录、缺陷日志、分组结果）。模型说
-    "最近 5 次标定全部通过"时，那个 5 不是抄来的，是数数组长度数出来的，
-    文本里根本没有"5"。只认计数单位——"5mm""5 天"用数组长度解释毫无意义。
-
-    收紧点：数值必须是整数、且**恰好等于**某个列表长度。
-    不取"≤ 长度"也不取"分组数"，否则 10 个分组就能让"10 条"蒙混过关。
-    """
-    if not float(v).is_integer():
-        return False
-    try:
-        obj = json.loads(text)
-    except (ValueError, TypeError):
-        return False
-    return int(v) in _lists_of(obj)
-
-
-def _hit(v, nums, ratio_ok=True, tol=0.05, ratio_tol=0.001):
-    """直接命中：证据里就有这个数（含"证据存比率、结论写百分比"两种口径）。
-
-    两条通道都必须收得很紧，否则"数字密集的证据 + 宽容差"等于没检查：
-    - 数值通道 tol=0.05：实测在 135 个数字的单条证据里，tol=0.5 能让 27.8% 的随机值
-      "命中"（只有 11 个数字的证据也有 12.4%）；收到 0.05 后降到约 2.8%。
-    - 比率通道 ratio_tol=0.001：证据存 0.632、结论写 63.2% 是正常的两种口径。
-      原来的 0.01 会让 91.7%（v/100=0.917）撞上证据里的 0.92 就算命中——
-      数字一密，任何百分比都能找到"一半的邻居"。
-    - ratio_ok=False 用于绝对量：9200 小时的 v/100=92 不该因为证据里有个 92 就算命中。
-    """
-    for n in nums:
-        if abs(n - v) <= tol:
-            return True
-        if ratio_ok and abs(n - v / 100) <= ratio_tol:
-            return True
-    return False
-
-
-def _found(v, unit, nums):
-    """这个数量能不能在这批数字里找到出处。
-
-    百分比允许复算（模型常做 a/b 的衍生计算，例如 20/27 写 74%）；
-    其它单位（天 / mm / 条 / 小时 …）只认直接命中：
-    "5mm" 这种绝对量靠两个数相除凑出来毫无业务意义，
-    实测 105/2024*100 ≈ 5.19 就能把一个证据里根本没有的 5mm 放行。
-    """
-    if _hit(v, nums, ratio_ok=(unit == "%")):
-        return True
-    return unit == "%" and _recomputable(v, nums)
-
-
-def _nums_of(text):
-    # 不带 -? ：否则 "10%-25%" 会被抽成 -25，把合法的 25% 判成未溯源
-    return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", text or "")]
-
-
-def _ev_text(e):
-    r = e.get("result")
-    return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, default=str)
-
-
-# 路径解析用的哨兵：路径走不通时返回它，调用方据此区分"没有这个字段"和"值是 None"。
+# 取不到值的哨兵。用独立对象而不是 None：字段值本身可能就是 null，
+# 两者必须能分开——"字段不存在"和"字段就是空"是两件事。
 _MISS = object()
-_PATH_ATOM = re.compile(r"\.?([^.\[\]]+)|\[(\d+)\]")
 
 
 def _load_obj(e):
@@ -865,6 +628,10 @@ def _load_obj(e):
         return json.loads(r)
     except (ValueError, TypeError):
         return _MISS
+
+
+# 字段路径切段：字段名或 [下标]。groups[0].rate → ("groups", None) ("rate", None) (None, 0)
+_PATH_ATOM = re.compile(r"([A-Za-z_]\w*)|\[(\d+)\]")
 
 
 def _get_path(obj, path):
@@ -885,40 +652,6 @@ def _get_path(obj, path):
             cur = cur[name]
     return cur
 
-
-def _path_probe(v, k, path, unit, ev):
-    """路径锚点探测。返回 (类型, 值是否相等)。
-
-    类型分三种，因为"锚点没命中"背后是三种完全不同的原因，
-    混成一个计数就看不出模型到底错在哪：
-      ok    字段存在且是标量
-      miss  路径上某一段不存在（字段名或下标写错）
-      arr   锚点指向对象/数组（模型想引用整组记录，语法还不支持）
-      none  本次判不了（证据取不到、result 不是 JSON），一律不判死
-    """
-    if not (1 <= k <= len(ev)):
-        return "miss", False
-    obj = _load_obj(ev[k - 1])
-    if obj is _MISS:
-        return "none", False
-    got = _get_path(obj, path)
-    if got is _MISS:
-        return "miss", False
-    if isinstance(got, (list, dict)):
-        return "arr", False
-    if isinstance(got, bool) or not isinstance(got, (int, float, str)):
-        return "none", False
-    try:
-        gv = float(got)
-    except (TypeError, ValueError):
-        return "none", False
-    # 率类字段存的是小数（false_positive_rate=0.154），模型写的是 15.4%。
-    # 不换算的话百分比会全军覆没，统计就失去意义。
-    cands = [gv]
-    if unit == "%" and 0 < gv <= 1:
-        cands.append(gv * 100)
-    ok = any(abs(c - v) <= max(abs(v) * 0.001, 1e-9) for c in cands)
-    return "ok", ok
 
 
 def _parse_claims(text):
@@ -1059,11 +792,6 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
     stats["ev"] = len(ev)
 
 
-def _sentences(text):
-    """按句切。引用角标是句级的：模型不会把 [1] 贴在每个数字后面，
-    而是写在句末（"标定周期 90 天。[1]"），所以数字按所在句子认领角标。"""
-    return re.split(r"[。；\n|]", text)
-
 
 def verify(state):
     """程序级校验：结论里的每个数量必须能被它引用的那条证据支撑。
@@ -1087,48 +815,37 @@ def verify(state):
         msgs = state.get("messages") or []
         if msgs and msgs[-1].get("role") == "assistant":
             final = (msgs[-1].get("content") or "").strip()
+    no_final = False
     if not final:
         names = ", ".join(state.get("tool_names", []))
         final = f"（已达取证步数上限，已执行工具：{names}，未能形成完整结论）"
+        no_final = True
 
     # 溯源只用本轮和上一轮的工具返回：更早的证据已经被挤出上下文窗口，
     # 模型本轮根本没读到，拿它兜底等于给未溯源数字开后门
     cur_turn = int(state.get("turn") or 1)
     ev = [e for e in (state.get("evidence") or [])
           if int(e.get("turn") or 1) >= cur_turn - 1]
-    ev_texts = [_ev_text(e) for e in ev]
-    # 角标 k 指向 ev 的第 k 条（1 起），与模型在 messages 里看到的顺序一致
-    all_nums = _nums_of(" ".join(ev_texts))
-    # 用户自己给出的数字也算合法来源（W0 踩过：用户输入的设备号被当成编造）
-    all_nums += _nums_of(state.get("user_msg", ""))
 
     blocked = []
-    # 未溯源 ≠ 编造。blocked 里的值分两种：
-    #   没写出处（uncited）—— 可能是数出来/算出来的，程序认不出，标灰放行
-    #   写出处但写错（cited_bad）—— 声称出自第 k 条，第 k 条里却没有，这是伪引用
-    # 前者不判死，后者判死。混在一个列表里等于判同一个刑。
+    # 未溯源 ≠ 伪引用。两个列表装的是两类东西：
+    #   blocked    ref 写成 null —— 模型明说"这个数没有直接出处"，标灰放行
+    #   misquoted  ref 指到了字段、但那个字段撑不住这个数 —— 判失败
+    # 前者可能是算出来的、数出来的、或自己定的目标，程序无从判断，不该判死；
+    # 后者是明确声称了出处又对不上，性质不同，混在一起等于判同一个刑。
     misquoted = []
-    stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
-             "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0,
-             "counted": 0, "expr_bad": 0, "inferred": 0,
-             # 路径锚点的观测指标。原先全塞进一个 path_bad，看不出模型错在哪：
-             # miss=字段/下标写错，arr=指向整组记录（语法还没支持），
-             # span=字段都在但这个数不是它们的值（多为同句多数字只标一个锚点）。
-             "path_total": 0, "path_ok": 0, "path_bad": 0,
-             "path_miss": 0, "path_arr": 0, "path_span": 0,
-             # 引用来源拆开：direct 是角标 [k]，path 是 [k#path]。
-             # 原来混在 cited_ok 里，报"引用 23 个"却说不清是靠哪种引用的。
-             "cited_direct": 0, "cited_path": 0,
-             # 该锚未锚：句中有锚点语法可用，但这个数既没被锚点覆盖、也不在算式里。
-             "missed_anchor": 0,
-             # 结构化契约（档 B）的三个计数：
-             # json_bad  模型没按 JSON 输出，整条退回文本解析 → 用来量遵从率
+    stats = {"qty": 0, "pct": 0,
+             "cited_ok": 0,          # 引用成立（= path_ok，保留旧名给汇总用）
+             "cited_path": 0,        # 走的是字段路径
+             "cite_oob": 0,          # ref 指向不存在的第 k 条（多为上下文裁剪所致）
+             "path_ok": 0, "path_bad": 0, "path_miss": 0,
+             # json_bad  模型没按 claims 契约输出 → 整条无法核验，判失败
              # unsourced claim 的 ref 写了 null（有数字、没出处）
              # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
              "json_bad": 0, "unsourced": 0, "ref_bad": 0}
 
-    # 结构化契约优先：模型按 claims 输出时，引用是字段不是文本里的字，
-    # 不用再去正则里猜"这个数属于哪个锚点"。
+    # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
+    # 所以不用再去正则里猜"这个数属于哪个锚点"。
     doc = _parse_claims(final)
     if doc is not None:
         _verify_claims(doc, ev, stats, blocked, misquoted)
@@ -1137,145 +854,13 @@ def verify(state):
                    final_len=len(final), **stats)
         return {"final": final, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
-    # 没按契约输出：退回旧的文本解析，json_bad 留档用来量遵从率
+
+    # 没按契约输出。这里不放行：放行等于"这条没校验"，
+    # 而没校验的结论被当成通过，才是真正危险的地方。
+    # 唯一例外是步数用尽、压根没形成结论那条，它本来就没声明要溯源。
     stats["json_bad"] = 1
-
-    for sent in _sentences(final):
-        # 先剥锚点再抽数字：路径里的 [0] 和字段名里的数字都不该参与判定。
-        sent_body, path_ks = _split_anchor(sent)
-        stats["path_total"] += len(path_ks)
-        pairs = QTY_RE.findall(sent_body)
-        if not pairs:
-            continue
-        ks = [int(k) for k in CITE_RE.findall(sent_body)]
-        # 同一句可能有多个数字多个锚点，所以逐个数字去试。
-        # 同一句里写了的显式算式，按 (单位, 结果值) 索引。
-        # 带上单位是因为 "%" 和 "倍" 的算式形态不同（a/b*100 与 a/b），不能混用。
-        exprs = {}
-        for m in EXPR_RE.finditer(sent_body):
-            exprs[("%", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
-        for m in EXPR_MULT_RE.finditer(sent_body):
-            exprs[("倍", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
-
-        for num, unit in pairs:
-            v = float(num)
-            stats["qty"] += 1
-            if unit == "%":
-                stats["pct"] += 1
-
-            # 漏锚判定放在路径分支前面：句子里没锚点、这个数又不在算式里，
-            # 说明模型压根没尝试用字段锚点，属于遵从度问题，不是通道不够。
-            if not path_ks and (unit, v) not in exprs:
-                stats["missed_anchor"] += 1
-
-            # 路径锚点优先：模型直接交代了这个数出自哪个字段，比"第几条证据"硬得多。
-            # 判不出来（none，例如解析失败）不往下拦，交给原有五条通道——
-            # 这一步的目标是量遵从率，不是顺手收紧。
-            if path_ks:
-                kinds = []
-                hit = False
-                for pk, p in path_ks:
-                    kind, match = _path_probe(v, pk, p, unit, ev)
-                    if kind == "ok" and match:
-                        hit = True
-                        break
-                    kinds.append(kind)
-                if hit:
-                    stats["path_ok"] += 1
-                    stats["cited_path"] += 1
-                    stats["cited_ok"] += 1
-                    continue
-                if "miss" in kinds:
-                    stats["path_miss"] += 1
-                elif "arr" in kinds:
-                    stats["path_arr"] += 1
-                elif "ok" in kinds:
-                    stats["path_span"] += 1
-                stats["path_bad"] += 1
-
-            if not ks:
-                stats["uncited"] += 1
-                if _hit(v, all_nums, ratio_ok=(unit == "%")):
-                    continue
-                # 没标角标但写了完整算式：照样放行。算式比"数字恰好出现在某条证据里"
-                # 更硬——模型主动交代了怎么算的，读者可以自己复核。
-                ex = exprs.get((unit, v))
-                if _expr_ok(ex, v, unit, all_nums):
-                    continue
-                # 算式写了但算不对，比"没写算式"更严重：读者照着一算就对不上。
-                # 这不算"没出处"，算"给了错的出处"，和角标指错同类。
-                if ex:
-                    stats["expr_bad"] += 1
-                    misquoted.append(f"{num}{unit}(算式算错)")
-                    continue
-                if unit == "%" and _recomputable(v, all_nums):
-                    stats["recomputed"] += 1
-                    continue
-                # 倍率复算：两个数相除 ≈ 这个倍数。放行标灰，不计引用。
-                if unit == "倍" and _ratio_recomputable(v, all_nums):
-                    stats["inferred"] += 1
-                    blocked.append(f"{num}{unit}")
-                    continue
-                blocked.append(f"{num}{unit}")
-                continue
-
-            valid = [k for k in ks if 1 <= k <= len(ev_texts)]
-            if not valid:
-                # 角标越界：多半是上下文裁剪把前面的证据挤掉了，不能算编造
-                stats["cite_oob"] += 1
-                continue
-
-            scopes = [_nums_of(ev_texts[k - 1]) for k in valid]
-
-            # 强溯源 1：引用的那条证据里直接有这个数
-            if any(_hit(v, s, ratio_ok=(unit == "%")) for s in scopes):
-                stats["cited_direct"] += 1
-                stats["cited_ok"] += 1
-                continue
-
-            # 强溯源 2：写了算式且算式成立。分子分母允许分别来自被引用的不同证据——
-            # "0.42mm 是限值的 1.4 倍（=0.42/0.3）"里，0.42 来自标定记录、0.3 来自手册。
-            if _expr_ok(exprs.get((unit, v)), v, unit,
-                        [n for s in scopes for n in s]):
-                stats["cited_direct"] += 1
-                stats["cited_ok"] += 1
-                continue
-
-            # 弱溯源：靠两个数相除凑出来。放行，但不算"引用"——
-            # 单条证据 135 个数字时，随机编造的百分比有 76% 能被这样凑出来，
-            # 把它算进引用率就等于自己骗自己。
-            if unit == "%" and any(_recomputable(v, s) for s in scopes):
-                stats["recomputed"] += 1
-                continue
-
-            # 推导值：证据里相邻两次记录的日期差。放行，但不算"引用"——
-            # 它确实是推出来的，不是抄的，跟 recomputed 同类，各记一个计数。
-            # 注意要传原始证据文本（ev_texts），scopes 里是抽好的数字，没有日期结构。
-            if unit == "天" and any(_day_gap_hit(v, ev_texts[k - 1]) for k in valid):
-                stats["derived"] += 1
-                continue
-
-            # 计数：证据里有个长度恰好等于 v 的记录数组。
-            # "最近 5 次标定全部通过"里的 5 是数出来的，不是抄的，跟 derived 同类。
-            if unit in ("次", "条", "个") \
-                    and any(_count_hit(v, ev_texts[k - 1]) for k in valid):
-                stats["counted"] += 1
-                continue
-
-            # 倍率复算：模型常把"两个值相除"的结论挂在被引证据上，
-            # 而证据里只有原始两个值、没有商。能复算出来就放行标灰——
-            # 它和"角标指到一条压根没这个数的证据"是两件事。
-            if unit == "倍" and any(_ratio_recomputable(v, s) for s in scopes):
-                stats["inferred"] += 1
-                blocked.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
-                continue
-
-            stats["cited_bad"] += 1
-            blocked.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
-            misquoted.append(f"{num}{unit}[{','.join(str(k) for k in ks)}]")
-
-    stats["cited"] = stats["cited_ok"]
-    stats["ev"] = len(ev)
+    if not no_final:
+        misquoted.append("结论未按 claims 契约输出，引用无法核验")
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
     return {"final": final, "final_text": final, "blocked": blocked,

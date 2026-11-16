@@ -25,13 +25,54 @@
 import json
 import os
 import random
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.graph.build import run
-from app.graph.nodes import _ev_text, _found, _hit, _nums_of
+
+# ---- 以下函数原在 nodes.py，随 claims 契约退役后已从运行时删除 ----
+# 本脚本要复现"随机编造 300 个百分比，旧口径直接命中 177 个、复算再放 123 个、
+# 正确拦下 0 个"这个结论，所以把旧口径的纯函数留在这里当独立实现。
+# 它们只描述"旧逻辑怎么判"，不参与任何线上校验；改这里不影响产品行为。
+
+
+def _ev_text(e):
+    r = e.get("result")
+    return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False, default=str)
+
+
+def _nums_of(text):
+    # 不带 -? ：否则 "10%-25%" 会被抽成 -25，把合法的 25% 判成未溯源
+    return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", text or "")]
+
+
+def _recomputable(v, nums, tol=1.0):
+    """旧口径：全部证据的数字混池两两相除，能凑出来就算有出处。"""
+    counts = [n for n in nums if 1 < n < 10000]
+    for a in counts:
+        for b in counts:
+            if b and abs(a / b * 100 - v) <= tol:
+                return True
+    return False
+
+
+def _hit(v, nums, ratio_ok=True, tol=0.05, ratio_tol=0.001):
+    for n in nums:
+        if abs(n - v) <= tol:
+            return True
+        if ratio_ok and abs(n - v / 100) <= ratio_tol:
+            return True
+    return False
+
+
+def _found(v, unit, nums):
+    """百分比允许复算，其它单位只认直接命中。"""
+    if _hit(v, nums, ratio_ok=(unit == "%")):
+        return True
+    return unit == "%" and _recomputable(v, nums)
 
 MSG = "CX-101 误判率有点高，你看看怎么回事"
 N_SAMPLE = 300

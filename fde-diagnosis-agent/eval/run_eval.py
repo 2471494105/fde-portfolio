@@ -67,8 +67,10 @@ def judge(traj, state):
     # blocked 里的其余值（没写出处、数出来程序认不出）标灰放行——
     # 它们区分不了"我算的"和"我编的"，判死等于把合法的派生分析一起杀掉。
     misquoted = state.get("misquoted", [])
-    # 溯源质量独立成指标：语义正确率考"能不能干活"，溯源达标率考"干得干不干净"。
-    trace_ok = not blocked
+    # 溯源达标 = 没有伪引用（引了字段、但字段撑不住这个数）。
+    # ref 写 null 不算不达标：那是"没有出处的数字"，标灰放行即可，
+    # 拿它判失败会让"模型诚实标注"反而变成减分项。
+    trace_ok = not misquoted
     # 校验层的判定明细一并入报告。之前只记 blocked 的字符串，
     # 想知道"路径锚点写对了几次"就得拿 evidence 离线重算一遍，
     # 等于每次复盘都要临时写脚本——这一层留档就断了。
@@ -313,8 +315,7 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
-    print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带角标/字段锚点的比例）")
-    print(f"溯源达标率    {trace_ok_n}/{n} = {trace_ok_n / n:.1%}   （blocked 为空，宽松口径）")
+    print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
     print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")
@@ -322,7 +323,7 @@ def main():
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
     print(f"fc 失败       {fc}/{n}")
-    print(f"有未溯源数字  {blocked_n}/{n}   （标灰放行，不计失败）")
+    print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 

@@ -262,5 +262,45 @@ class DerivedDayGapTest(unittest.TestCase):
         self.assertIn("87天[1]", res["blocked"])
 
 
+class ExprChannelTest(unittest.TestCase):
+    """写了完整算式的数量应当放行，无论百分比还是倍率，也无论分子分母是否同源。
+
+    四条必须同时成立。最后一条是关键：没有"算式算错要拦"，
+    一个"见到倍就放行"的实现照样能过前三条。
+    """
+
+    def _verify(self, final, *payloads):
+        ev = [{"result": p, "turn": 1} for p in payloads]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("expr", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_multiplier_with_expression_is_allowed(self):
+        res = self._verify("实测漂移是限值的 1.4 倍（=0.42/0.3）。",
+                           '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
+        self.assertEqual(res["blocked"], [])
+
+    def test_multiplier_without_expression_is_blocked(self):
+        res = self._verify("实测漂移是限值的 1.4 倍。",
+                           '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
+        self.assertIn("1.4倍", res["blocked"])
+
+    def test_expression_across_two_evidence_is_allowed(self):
+        res = self._verify("漂移 0.42mm 是限值的 1.4 倍（=0.42/0.3）[1][2]。",
+                           '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
+        self.assertEqual(res["blocked"], [])
+
+    def test_wrong_expression_is_blocked(self):
+        res = self._verify("实测漂移是限值的 1.4 倍（=0.42/0.9）。",
+                           '{"drift_mm": 0.42}', '{"limit_mm": 0.3}')
+        self.assertIn("1.4倍", res["blocked"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

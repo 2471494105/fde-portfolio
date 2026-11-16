@@ -43,6 +43,13 @@ EXPR_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*%\s*[（(]\s*=?\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)"
 )
 
+# 倍率算式：1.4倍（=0.42/0.3）。
+# 原来只有百分比算式被认，模型写"倍"时同样规范、同样给了分子分母，却被当成编造拦下
+# （实测一次真实诊断就拦了 1 个）。算式本身是最强的溯源证据——模型主动交代了怎么算的。
+EXPR_MULT_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*倍\s*[（(]\s*=?\s*(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)"
+)
+
 SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
 
 你的工作：
@@ -658,6 +665,30 @@ def _day_gap_hit(v, text, tol=0.05):
     return False
 
 
+def _expr_ok(ex, v, unit, nums):
+    """句子里写了算式，且算式真的成立、分子分母都能在给定数字里找到。
+
+    nums 传"本次判定允许的那批数字"，不是无脑全池：
+    分子分母经常分别来自两条证据（0.42mm 来自标定记录、0.3mm 来自手册），
+    要求必须在同一条证据里凑齐，会把这种规范写法判成编造；
+    但也不能退到全池——无角标时退回全池已是既有口径，有角标时只用被引用的那几条。
+
+    和"靠两个数相除凑出百分比"的区别：那条不需要模型说明，属于弱溯源，只放行不计数；
+    这条要求**模型自己写出 a/b**，是最强的证明，计入引用。
+    """
+    if not ex:
+        return False
+    a, b = ex
+    if not b:
+        return False
+    if unit == "%":
+        if abs(a / b * 100 - v) > 0.5:
+            return False
+    elif abs(a / b - v) > 0.05:
+        return False
+    return _hit(a, nums, ratio_ok=False) and _hit(b, nums, ratio_ok=False)
+
+
 def _hit(v, nums, ratio_ok=True, tol=0.05, ratio_tol=0.001):
     """直接命中：证据里就有这个数（含"证据存比率、结论写百分比"两种口径）。
 
@@ -752,10 +783,13 @@ def verify(state):
         if not pairs:
             continue
         ks = [int(k) for k in CITE_RE.findall(sent)]
-        # 同一句里写了的显式算式，按结果值索引，供百分比复用
+        # 同一句里写了的显式算式，按 (单位, 结果值) 索引。
+        # 带上单位是因为 "%" 和 "倍" 的算式形态不同（a/b*100 与 a/b），不能混用。
         exprs = {}
         for m in EXPR_RE.finditer(sent):
-            exprs[float(m.group(1))] = (float(m.group(2)), float(m.group(3)))
+            exprs[("%", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
+        for m in EXPR_MULT_RE.finditer(sent):
+            exprs[("倍", float(m.group(1)))] = (float(m.group(2)), float(m.group(3)))
 
         for num, unit in pairs:
             v = float(num)
@@ -766,6 +800,10 @@ def verify(state):
             if not ks:
                 stats["uncited"] += 1
                 if _hit(v, all_nums, ratio_ok=(unit == "%")):
+                    continue
+                # 没标角标但写了完整算式：照样放行。算式比"数字恰好出现在某条证据里"
+                # 更硬——模型主动交代了怎么算的，读者可以自己复核。
+                if _expr_ok(exprs.get((unit, v)), v, unit, all_nums):
                     continue
                 if unit == "%" and _recomputable(v, all_nums):
                     stats["recomputed"] += 1
@@ -786,15 +824,12 @@ def verify(state):
                 stats["cited_ok"] += 1
                 continue
 
-            # 强溯源 2：写了算式，且算式成立、分子分母都在该条证据里
-            ex = exprs.get(v) if unit == "%" else None
-            if ex:
-                a, b = ex
-                if b and abs(a / b * 100 - v) <= 0.5 \
-                        and any(_hit(a, s, ratio_ok=False)
-                                and _hit(b, s, ratio_ok=False) for s in scopes):
-                    stats["cited_ok"] += 1
-                    continue
+            # 强溯源 2：写了算式且算式成立。分子分母允许分别来自被引用的不同证据——
+            # "0.42mm 是限值的 1.4 倍（=0.42/0.3）"里，0.42 来自标定记录、0.3 来自手册。
+            if _expr_ok(exprs.get((unit, v)), v, unit,
+                        [n for s in scopes for n in s]):
+                stats["cited_ok"] += 1
+                continue
 
             # 弱溯源：靠两个数相除凑出来。放行，但不算"引用"——
             # 单条证据 135 个数字时，随机编造的百分比有 76% 能被这样凑出来，

@@ -108,6 +108,9 @@ def run(user_msg: str, thread_id: str | None = None, trace_run: bool = True,
             # 只存前 300 字符会导致事后无法离线复算"这条为什么被/没被拦"
             final=state.get("final", ""),
             final_head=state.get("final", "")[:300],
+            # 结论的可读版本：claims 渲染成人话，ref 为空的数字后面带[无出处]。
+            # 前端显示这个，不显示原始 JSON。
+            final_text=state.get("final_text", ""),
         )
         # 把 trace_id 带出去，Web 端据此回查这次运行的完整轨迹
         state["trace_id"] = t.run_id

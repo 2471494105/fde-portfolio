@@ -428,5 +428,84 @@ class PathAnchorTest(unittest.TestCase):
         self.assertEqual(res["blocked"], [])
 
 
+class ClaimContractTest(unittest.TestCase):
+    """结构化契约（档 B）：结论输出成 claims 数组，一个数字一条，各自带 ref。
+
+    这条路的价值是把「引用」从文本解析搬到结构字段，所以三条必须成立：
+      一、ref 对得上 → 通过；ref 写 null → 放行但标灰
+      二、ref 指不到字段 / 字段值不符 → 判失败（伪引用）
+      三、模型没按契约输出时退回文本解析，不能丢结论
+    第三条是关键：只测"契约生效"的实现，会在模型格式抖动时整条丢结论。
+    """
+
+    GROUPS = ('{"false_positive_rate": 0.1541, "groups": ['
+              '{"key": "1号工位", "count": 34, "rate": 0.5882}]}')
+
+    def _verify(self, doc, *payloads):
+        final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
+        ev = [{"result": p, "turn": 1} for p in payloads]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("claim", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_matching_ref_is_cited(self):
+        res = self._verify({"conclusion": "1 号工位偏高", "claims": [
+            {"text": "误判率 58.82%", "value": 58.82, "unit": "%",
+             "ref": "1#groups[0].rate"}]}, self.GROUPS)
+        self.assertEqual(res["blocked"], [])
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["cited_ok"], 1)
+        # 小数 ↔ 百分比的换算是这里最容易错的一环，单独断言
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_null_ref_is_grey_not_fatal(self):
+        # 自己定的验收目标：有数字、没出处 → 放行但标灰
+        res = self._verify({"conclusion": "复位后应回落", "claims": [
+            {"text": "预计降到 6%", "value": 6, "unit": "%", "ref": None}]},
+            self.GROUPS)
+        self.assertEqual(len(res["blocked"]), 1)
+        self.assertEqual(res["misquoted"], [])
+        self.assertIn("[无出处]", res["final_text"])
+
+    def test_missing_field_is_misquoted(self):
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "判定 34 条", "value": 34, "unit": "条",
+             "ref": "1#groups[0].cnt"}]}, self.GROUPS)
+        self.assertTrue(any("34 条" in m for m in res["misquoted"]))
+        self.assertGreaterEqual(res["cite_stats"]["path_miss"], 1)
+
+    def test_value_mismatch_is_misquoted(self):
+        # 字段存在但值不对：这是"写出处但写错"，比没写出处严重
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "判定 99 条", "value": 99, "unit": "条",
+             "ref": "1#groups[0].count"}]}, self.GROUPS)
+        self.assertTrue(any("99 条" in m for m in res["misquoted"]))
+        self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+
+    def test_ref_to_text_field_matches_number_inside(self):
+        # 工具返回的评估说明是整段文字（"上升 10%-25%"），模型引用这段里的 25。
+        # 字段不是数字，但里面有这个数——不能因为类型不是 float 就判成引用写错。
+        res = self._verify({"conclusion": "光源超寿命", "claims": [
+            {"text": "误判率通常上升 10%~25%", "value": 25, "unit": "%",
+             "ref": "1#assessment"}]},
+            '{"assessment": "已超额定寿命 620 小时，上升 10%-25%，建议更换光源"}')
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_no_json_falls_back_to_text_scan(self):
+        # 模型没按契约输出时不能丢结论，退回文本解析并记 json_bad
+        res = self._verify("标定周期 90 天[1#maintenance_cycle_days]。",
+                           '{"maintenance_cycle_days": 90}')
+        self.assertGreaterEqual(res["cite_stats"]["json_bad"], 1)
+        self.assertEqual(res["misquoted"], [])
+        self.assertEqual(res["final_text"], "标定周期 90 天[1#maintenance_cycle_days]。")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -300,7 +300,7 @@ function renderDone(d){
     ? `<div class="warnbox">校验拦截：结论中的 ${d.blocked.map(x => `<strong>${x}</strong>`).join('、')} 无法在工具返回中找到，已标记为不可溯源。</div>`
     : '';
 
-  $('conclusion').innerHTML = md(d.final || '（无结论）');
+  $('conclusion').innerHTML = md(d.final_text || d.final || '（无结论）');
   renderTrace(d.evidence);
   loadRuns();
 }

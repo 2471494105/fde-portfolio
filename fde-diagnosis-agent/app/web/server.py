@@ -137,6 +137,7 @@ def diagnose(req: DiagnoseIn):
     state = run(req.msg, thread_id=sid)
     return {
         "final": state.get("final", ""),
+        "final_text": state.get("final_text", ""),
         "blocked": state.get("blocked", []),
         "misquoted": state.get("misquoted", []),
         "steps": state.get("steps", 0),
@@ -288,6 +289,7 @@ def _sse(msg: str, sid: str | None):
         done = {
             "type": "done",
             "final": state.get("final", ""),
+            "final_text": state.get("final_text", ""),
             "blocked": state.get("blocked", []),
             "misquoted": state.get("misquoted", []),
             "cite": state.get("cite_stats", {}),

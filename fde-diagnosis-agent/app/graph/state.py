@@ -57,5 +57,8 @@ class State(TypedDict, total=False):
     cite_stats: dict
     steps: int
     final: str
+    # 结论的可读版本：结构化契约（claims）渲染成人话，ref 为空的数字后面带[无出处]。
+    # final 保留模型原文，final_text 给人看——两者分开，评测和 UI 各取所需。
+    final_text: str
     # 因"只写了计划没真调用"而退回重试的次数，防止死循环
     plan_retry: int

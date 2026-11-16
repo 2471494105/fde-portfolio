@@ -1,0 +1,99 @@
+{
+ "meta": {
+  "ts": "2026-11-17 00:14:18",
+  "commit": "6dbed10",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "b125ea215ed5",
+  "code_hash": "c06faac3f38b",
+  "cases_total": 25,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
+ },
+ "summary": {
+  "n": 1,
+  "semantic_ok": 1,
+  "semantic_rate": 1.0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "steps_bad": 0,
+  "intent_bad": 0,
+  "fc_fail": 0,
+  "blocked_n": 1,
+  "trace_ok_n": 0,
+  "trace_rate": 0.0,
+  "cite_hit": 16,
+  "cite_qty": 17,
+  "cite_rate": 0.9412,
+  "misquote_n": 0,
+  "elapsed_s": 29.5
+ },
+ "results": [
+  {
+   "id": "H1",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_calibration",
+    "query_light_usage",
+    "query_defect_log",
+    "check_doc_conflict",
+    "search_manual"
+   ],
+   "steps": 8,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "光源",
+    "寿命",
+    "1号工位"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "工具给出的光源衰减影响估计为误判率上升 10%~25%"
+   ],
+   "misquoted": [],
+   "trace_ok": false,
+   "fc_fail": false,
+   "semantic_ok": true,
+   "reasons": [],
+   "cite_stats": {
+    "qty": 17,
+    "pct": 5,
+    "cited_ok": 16,
+    "cited_bad": 0,
+    "cite_oob": 0,
+    "uncited": 0,
+    "recomputed": 0,
+    "derived": 0,
+    "counted": 0,
+    "expr_bad": 0,
+    "inferred": 0,
+    "path_total": 0,
+    "path_ok": 16,
+    "path_bad": 0,
+    "path_miss": 0,
+    "path_arr": 0,
+    "path_span": 0,
+    "cited_direct": 0,
+    "cited_path": 16,
+    "missed_anchor": 0,
+    "json_bad": 0,
+    "unsourced": 1,
+    "ref_bad": 0,
+    "cited": 16,
+    "ev": 8
+   },
+   "final_head": "{   \"conclusion\": \"误判集中在1号工位（其它两个工位正常），属该工位独立部件问题：光源累计点亮已超额定寿命、亮度被两次下调，导致夜班环境光弱时对比度不足而大量过杀，不是模型或阈值问题\",   \"claims\": [     {\"text\": \"近7天整体误判率 23.89%\", \"value\": 23"
+  }
+ ]
+}

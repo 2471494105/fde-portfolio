@@ -58,6 +58,9 @@ def _norm(text):
 def judge(traj, state):
     tools = state.get("tool_names", [])
     final = state.get("final", "") or ""
+    # 用渲染后的可读版本判断关键词：final 现在是 claims JSON，
+    # 直接匹配会把字段名（"conclusion"）也算进去，等于放宽了关键词检查。
+    readable = state.get("final_text") or final
     steps = state.get("steps", 0)
     blocked = state.get("blocked", [])
     # 伪引用单独判死：写了 [k] 但第 k 条证据里没有这个数。
@@ -83,7 +86,7 @@ def judge(traj, state):
     gb_rate = (len(gb_hit) / len(gb_expect)) if gb_expect else 1.0
 
     kws = traj.get("final_keywords", [])
-    flat = _norm(final)
+    flat = _norm(readable)
     kw_hit = [k for k in kws if _norm(k) in flat]
     kw_rate = (len(kw_hit) / len(kws)) if kws else 1.0
 
@@ -178,7 +181,7 @@ def judge(traj, state):
         "semantic_ok": semantic_ok,
         "reasons": reasons,
         "cite_stats": cite_stats,
-        "final_head": final[:160].replace("\n", " "),
+        "final_head": readable[:160].replace("\n", " "),
     }
 
 

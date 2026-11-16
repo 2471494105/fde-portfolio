@@ -127,19 +127,31 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
    你是助手，不是审批人。
 9. 不要在正文里写行动计划。要调用工具就直接发起 tool_calls；不打算再查了就写结论。
    "接下来我调用 query_calibration"这种句子不会被执行，只会让这一轮白白空转。
-10. 结论里每个数字后面要标引用编号 [k]，能定位到具体字段就写成 [k#字段路径]。
-   k 表示这个数出自第 k 条工具返回，按你实际看到的顺序从 1 开始数。
-   字段路径照工具返回的 JSON 原样写：顶层 [1#maintenance_cycle_days]、
-   数组下标 [4#groups[0].count]、嵌套 [4#groups[0].rate]。写法：
-   - 单个字段：标定周期 90 天[1#maintenance_cycle_days]
-   - 一句话里多个数字来自不同字段：整体误判率 15.4%[3#false_positive_rate]、
-     1 号工位判定 62 条[3#groups[0].count]
-   - 你自己的算出来的比值必须写出算式：74%（=20/27）[1]，分子分母都要在引用的那条证据里。
-     校验层会复算，凑不出算式的数字按编造处理。
-   工具返回里没有对应字段的数（自己加总出来的、自己定的验收目标），照原样标 [k] 就行，
-   不要硬编一个不存在的路径——标错路径比不标更糟。
+10. 结论必须输出成 JSON，而且只输出这一个 JSON，不要包 ```json``` 代码块。
+   数据结构：
+{
+  "conclusion": "一句话根因，不要在这里写数字",
+  "claims": [
+    {"text": "含数字的原话", "value": 90, "unit": "天", "ref": "1#maintenance_cycle_days"},
+    {"text": "误判率 58.82%", "value": 58.82, "unit": "%", "ref": "3#groups[0].rate"},
+    {"text": "复位后预计降到 6%~11%", "value": 6, "unit": "%", "ref": null}
+  ],
+  "advice": ["先重新标定再复测", "把 11-07 前后的标定记录调出来"]
+}
+   规则：
+   - 结论里每出现一个数字，就单独占一条 claim。三个数字要写三条，
+     不许挤在一句话里共用一个 ref——这是最关键的一条。
+   - value 只写数字本身：58.82% 写成 58.82，unit 写 "%"；90 天写成 90，unit 写 "天"。
+   - ref 写这个数的出处：第 k 条工具返回的字段路径，k 按你实际看到的顺序从 1 数。
+     字段路径照工具返回的 JSON 原样写，顶层 "2#maintenance_cycle_days"、
+     数组下标 "3#groups[0].count"、嵌套 "6#records[0].drift_px"。
+   - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，并在 text 里写算式：
+     {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null}
+   - 自己定的验收目标、假设值，ref 也写 null。
+   - 没有数字的论述写进 conclusion 或 advice，不要塞进 claims。
+   - ref 写错比写 null 更糟：拿不准就不写字段路径，写 null。
 
-回答用中文，先说结论（根因 + 证据），再说处置建议。
+回答用中文。conclusion 说根因，claims 放全部带数字的证据，advice 说处置。
 """
 
 
@@ -909,6 +921,144 @@ def _path_probe(v, k, path, unit, ev):
     return "ok", ok
 
 
+def _parse_claims(text):
+    """从结论里取出结构化断言。返回 dict 或 None（模型没按契约输出）。
+
+    模型有时会把 JSON 包在 ```json ``` 里，先剥掉再解析。
+    剥不掉、解析失败、没有 claims 字段，一律返回 None，
+    由调用方退回旧的文本解析路径——契约迁移期不能因为一次格式抖动就丢结论。
+    """
+    s = (text or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[A-Za-z]*\s*", "", s)
+        s = re.sub(r"```\s*$", "", s).strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        d = json.loads(s[i:j + 1])
+    except Exception:
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("claims"), list):
+        return None
+    return d
+
+
+def _value_match(v, got, unit, tol=0.02):
+    """claim 里写的数值和字段实际值是否一致。
+
+    百分比字段通常存小数（0.1541），结论写的是 15.41%——
+    这条换算必须在这里做，否则每个百分比都会被判成"引用写错"。
+    容差按相对值给：58.82 和 0.588235 这种四舍五入差异不该算错。
+
+    字段值是整段文字时（工具返回的评估说明常这样：{"assessment":
+    "已超额定寿命 620 小时，上升 10%-25%"}），没法做等值比较，
+    只能比"这段文字里有没有这个数"。这不比数值相等弱——模型引的字段里
+    确实有这个数，是返回结构本身没有把它拆成独立字段。
+    """
+    try:
+        t = float(v)
+    except (TypeError, ValueError):
+        return False
+    if isinstance(got, str):
+        nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", got)]
+        return any(abs(n - t) <= max(tol, abs(t) * 0.01) for n in nums)
+    try:
+        g = float(got)
+    except (TypeError, ValueError):
+        return False
+    if unit == "%" and 0 < g <= 1:
+        g *= 100
+    return abs(g - t) <= max(tol, abs(t) * 0.01)
+
+
+def _render_claims(doc):
+    """把结构化结论渲染成人话，供 UI 显示和评测关键词匹配。
+
+    ref 为空的数字后面补 [无出处]——这是"标灰"唯一真正落地的地方：
+    标记必须跟着数字走，只记在报告里等于没标。
+    """
+    parts = []
+    concl = str(doc.get("conclusion") or "").strip()
+    if concl:
+        parts.append(concl)
+    for c in doc.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
+        t = str(c.get("text") or "").strip()
+        if not t:
+            continue
+        mark = "" if c.get("ref") else "[无出处]"
+        parts.append(f"- {t}{mark}")
+    for a in doc.get("advice") or []:
+        a = str(a).strip()
+        if a:
+            parts.append(f"* {a}")
+    return "\n".join(parts)
+
+
+def _verify_claims(doc, ev, stats, blocked, misquoted):
+    """按 claim 逐条校验：一个数字一条，各自带 ref。
+
+    这条路把「引用」从文本解析搬到结构字段，所以三类老毛病结构性消失：
+      span      一句三个数字共用一个锚点 —— 想写三个就必须写三条 claim
+      写错/没写 混在同一个解析失败里 —— ref 空是没写，ref 指不到是写错
+      标灰看不见 只能记在报告里     —— 渲染时把标记跟在数字后面
+    """
+    for c in doc.get("claims") or []:
+        if not isinstance(c, dict):
+            continue
+        text = str(c.get("text") or "").strip()
+        unit = str(c.get("unit") or "").strip()
+        v = c.get("value")
+        if v is None:
+            continue          # 纯论述型 claim，没有数字就不用溯源
+        stats["qty"] += 1
+        if unit == "%":
+            stats["pct"] += 1
+
+        ref = c.get("ref")
+        if not ref:
+            stats["unsourced"] += 1
+            blocked.append(text or str(v))
+            continue
+
+        m = re.match(r"^\s*(\d{1,2})#(.+?)\s*$", str(ref))
+        if not m:
+            stats["ref_bad"] += 1
+            misquoted.append(f"{text}（出处格式错:{ref}）")
+            continue
+        k, path = int(m.group(1)), m.group(2)
+
+        if not (1 <= k <= len(ev)):
+            stats["cite_oob"] += 1
+            blocked.append(f"{text}（第{k}条不存在）")
+            continue
+
+        obj = _load_obj(ev[k - 1])
+        if obj is _MISS:
+            stats["ref_bad"] += 1
+            misquoted.append(f"{text}（第{k}条不是结构化返回）")
+            continue
+
+        got = _get_path(obj, path)
+        if got is _MISS:
+            stats["path_miss"] += 1
+            misquoted.append(f"{text}（字段不存在:{path}）")
+            continue
+
+        if _value_match(v, got, unit):
+            stats["path_ok"] += 1
+            stats["cited_path"] += 1
+            stats["cited_ok"] += 1
+        else:
+            stats["path_bad"] += 1
+            misquoted.append(f"{text}（字段值 {got} ≠ {v}{unit}）")
+
+    stats["cited"] = stats["cited_ok"]
+    stats["ev"] = len(ev)
+
+
 def _sentences(text):
     """按句切。引用角标是句级的：模型不会把 [1] 贴在每个数字后面，
     而是写在句末（"标定周期 90 天。[1]"），所以数字按所在句子认领角标。"""
@@ -970,7 +1120,25 @@ def verify(state):
              # 原来混在 cited_ok 里，报"引用 23 个"却说不清是靠哪种引用的。
              "cited_direct": 0, "cited_path": 0,
              # 该锚未锚：句中有锚点语法可用，但这个数既没被锚点覆盖、也不在算式里。
-             "missed_anchor": 0}
+             "missed_anchor": 0,
+             # 结构化契约（档 B）的三个计数：
+             # json_bad  模型没按 JSON 输出，整条退回文本解析 → 用来量遵从率
+             # unsourced claim 的 ref 写了 null（有数字、没出处）
+             # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
+             "json_bad": 0, "unsourced": 0, "ref_bad": 0}
+
+    # 结构化契约优先：模型按 claims 输出时，引用是字段不是文本里的字，
+    # 不用再去正则里猜"这个数属于哪个锚点"。
+    doc = _parse_claims(final)
+    if doc is not None:
+        _verify_claims(doc, ev, stats, blocked, misquoted)
+        final_text = _render_claims(doc)
+        trace.emit("verify", blocked=blocked, misquoted=misquoted,
+                   final_len=len(final), **stats)
+        return {"final": final, "final_text": final_text,
+                "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
+    # 没按契约输出：退回旧的文本解析，json_bad 留档用来量遵从率
+    stats["json_bad"] = 1
 
     for sent in _sentences(final):
         # 先剥锚点再抽数字：路径里的 [0] 和字段名里的数字都不该参与判定。
@@ -1110,8 +1278,8 @@ def verify(state):
     stats["ev"] = len(ev)
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
-    return {"final": final, "blocked": blocked, "misquoted": misquoted,
-            "cite_stats": stats}
+    return {"final": final, "final_text": final, "blocked": blocked,
+            "misquoted": misquoted, "cite_stats": stats}
 
 
 def _pct(v, digits=2):

@@ -4,6 +4,7 @@
 程序只做三件模型做不好的事：L1 信息补全、工具执行、结论校验。
 """
 
+import datetime
 import json
 import re
 import time
@@ -31,6 +32,9 @@ CITE_RE = re.compile(r"\[(\d{1,2})\]")
 # 却照样显示"数字全部可溯源"。
 _QTY_UNIT = "天|小时|分钟|秒|mm|条|台|次|个|块|倍|工位"
 QTY_RE = re.compile(rf"(\d+(?:\.\d+)?)\s*(%|{_QTY_UNIT})")
+
+# 证据里的日期只认完整年月日。MM-DD 无法判断是否跨年，YYYY/MM/DD 这类写法库里也不出现
+_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
 # 显式算式：74%（=20/27）或 74%(20/27)。
 # 要求写算式，是因为"靠凑"根本不可信——单条证据 135 个数字时，
@@ -567,6 +571,7 @@ def act(state):
         ms = round((time.perf_counter() - t0) * 1000)
 
         ok = not (isinstance(res, dict) and "error" in res)
+        res_json = json.dumps(res, ensure_ascii=False, default=str)
         trace.emit(
             "tool",
             name=name,
@@ -574,7 +579,11 @@ def act(state):
             ms=ms,
             ok=ok,
             error=(res.get("error") if not ok else None),
-            result_head=json.dumps(res, ensure_ascii=False, default=str)[:400],
+            # 存全文，不只 head：slim 之后模型看到的就是这份结果，
+            # 只存前 400 字符会让"事后重算校验"拿着残缺证据跑，
+            # 得出的是另一个题目的答案（实测 cited 从 15 掉到 10 全是截断造成的）。
+            result=res_json,
+            result_head=res_json[:400],
         )
 
         slim = _payload(res)
@@ -615,6 +624,37 @@ def _recomputable(v, nums, tol=1.0):
         for b in counts:
             if b and abs(a / b * 100 - v) <= tol:
                 return True
+    return False
+
+
+def _dates_of(text):
+    """抽出文本里所有完整日期（YYYY-MM-DD），去重后按时间排序。"""
+    out = []
+    for y, m, d in _DATE_RE.findall(text or ""):
+        try:
+            out.append(datetime.date(int(y), int(m), int(d)))
+        except ValueError:
+            continue
+    return sorted(set(out))
+
+
+def _day_gap_hit(v, text, tol=0.05):
+    """结论里的"X 天"能不能由这条证据里**相邻两次记录**的日期相减得到。
+
+    为什么单列这一类：诊断结论几乎每条都会算"两次标定间隔 36 天""两次告警间隔"，
+    两个日期都在证据里、差值也算得对，但原来的校验只认"数字直接出现"和
+    "a/b 算百分比"两种溯源，于是这类合法推导被系统性误拦——实测一次真实诊断
+    被拦下 3 个数字，全是天数差。
+
+    为什么只允许相邻两天、不放开任意两两：
+    query_calibration 一次返回 10 条记录，10 个日期两两组合是 45 个差值，
+    覆盖 0~90 天近乎每两天一个取值，编造任意天数都能"凑"上，等于开后门。
+    相邻差只有 9 个，且语义恰好就是模型要表达的"两次记录的间隔"。
+    """
+    ds = _dates_of(text)
+    for a, b in zip(ds, ds[1:]):
+        if abs((b - a).days - v) <= tol:
+            return True
     return False
 
 
@@ -705,7 +745,7 @@ def verify(state):
 
     blocked = []
     stats = {"qty": 0, "pct": 0, "cited_ok": 0, "cited_bad": 0,
-             "cite_oob": 0, "uncited": 0, "recomputed": 0}
+             "cite_oob": 0, "uncited": 0, "recomputed": 0, "derived": 0}
 
     for sent in _sentences(final):
         pairs = QTY_RE.findall(sent)
@@ -761,6 +801,13 @@ def verify(state):
             # 把它算进引用率就等于自己骗自己。
             if unit == "%" and any(_recomputable(v, s) for s in scopes):
                 stats["recomputed"] += 1
+                continue
+
+            # 推导值：证据里相邻两次记录的日期差。放行，但不算"引用"——
+            # 它确实是推出来的，不是抄的，跟 recomputed 同类，各记一个计数。
+            # 注意要传原始证据文本（ev_texts），scopes 里是抽好的数字，没有日期结构。
+            if unit == "天" and any(_day_gap_hit(v, ev_texts[k - 1]) for k in valid):
+                stats["derived"] += 1
                 continue
 
             stats["cited_bad"] += 1

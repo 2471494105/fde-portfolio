@@ -214,5 +214,53 @@ class TracerIsolationTest(unittest.TestCase):
         self.assertEqual(rec["tokens_total"], 0)
 
 
+class DerivedDayGapTest(unittest.TestCase):
+    """天数由证据里相邻两次记录的日期相减得出时，应放行并计入 derived。
+
+    四条断言必须同时成立，少一条都会被宽泛实现骗过：
+    - 只证"能放行"：一个"见到天就放行"的实现也能过；
+    - 只证"算错要拦"：一个"永远拦"的实现也能过；
+    - 只有一端日期：证明放行不是无条件的；
+    - 首末跨度：证明用的是相邻差，不是任意两两相减（否则 10 条记录能凑出几乎任意天数）。
+    """
+
+    RECS = (
+        '{"records": ['
+        '{"ts": "2026-11-07 08:30:00"}, '
+        '{"ts": "2026-10-26 09:30:00"}, '
+        '{"ts": "2026-09-20 14:00:00"}, '
+        '{"ts": "2026-08-12 10:00:00"}]}'
+    )
+
+    def _verify(self, final, payload):
+        state = {"final": final, "evidence": [{"result": payload, "turn": 1}],
+                 "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("day-gap", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_adjacent_date_gap_is_derived_not_blocked(self):
+        res = self._verify("08-12 到 09-20 间隔 39 天[1]。", self.RECS)
+        self.assertEqual(res["blocked"], [])
+        self.assertGreaterEqual(res["cite_stats"]["derived"], 1)
+
+    def test_gap_with_only_one_date_is_blocked(self):
+        res = self._verify("两次标定间隔 39 天[1]。",
+                           '{"records": [{"ts": "2026-11-07 08:30:00"}]}')
+        self.assertIn("39天[1]", res["blocked"])
+
+    def test_wrong_gap_value_is_blocked(self):
+        res = self._verify("两次标定间隔 45 天[1]。", self.RECS)
+        self.assertIn("45天[1]", res["blocked"])
+
+    def test_span_across_records_is_not_a_gap(self):
+        res = self._verify("首末两次相隔 87 天[1]。", self.RECS)
+        self.assertIn("87天[1]", res["blocked"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

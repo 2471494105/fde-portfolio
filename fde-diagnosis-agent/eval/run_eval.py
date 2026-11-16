@@ -23,62 +23,8 @@ sys.path.insert(0, str(ROOT))
 
 from app.graph.build import run  # noqa: E402
 from app.graph.llm import BASE_URL, MODEL, PROVIDER  # noqa: E402
+from app.meta import code_hash as _code_hash, git_commit as _git_commit  # noqa: E402
 from eval.trajectories import TRAJECTORIES  # noqa: E402
-
-# 决定模型行为的文件：改其中任何一个都可能让历史结论失效
-_BEHAVIOR_FILES = (
-    "app/graph/nodes.py",
-    "app/graph/llm.py",
-    "app/tools/schemas.py",
-    "app/tools/workorder.py",
-)
-
-
-def _git_commit():
-    """读 .git 取当前 commit，不依赖 PATH 里的 git。
-
-    git 装了但这台机器上 `git` 命令不可用（不在 PATH），所以不能 shell 出去调。
-    .git 在上一级目录 06_GitHub作品仓库，向上最多找 6 层。
-    """
-    try:
-        d = ROOT
-        for _ in range(6):
-            g = d / ".git"
-            if g.is_dir():
-                head = (g / "HEAD").read_text(encoding="utf-8").strip()
-                if not head.startswith("ref:"):
-                    return head[:7]
-                ref = head.split(":", 1)[1].strip()
-                f = g / ref
-                if f.is_file():
-                    return f.read_text(encoding="utf-8").strip()[:7]
-                packed = g / "packed-refs"
-                if packed.is_file():
-                    for line in packed.read_text(encoding="utf-8").splitlines():
-                        parts = line.split()
-                        if len(parts) == 2 and parts[1] == ref:
-                            return parts[0][:7]
-                return ""
-            d = d.parent
-    except Exception:
-        return ""
-    return ""
-
-
-def _code_hash():
-    """决定模型行为的文件指纹。
-
-    刻意不单抽 prompt 常量：正则会因为改个变量名就失效，而漏掉的部分
-    （schemas 的 enum、workorder 的枚举白名单）本来也是模型可见行为——
-    今天刚踩过，枚举写错会改幂等键。整文件 hash 覆盖更全，代价是改注释也会变。
-    """
-    h = hashlib.sha256()
-    for rel in _BEHAVIOR_FILES:
-        try:
-            h.update((ROOT / rel).read_bytes())
-        except Exception:
-            h.update(rel.encode("utf-8"))
-    return h.hexdigest()[:12]
 
 
 def _cases_hash():

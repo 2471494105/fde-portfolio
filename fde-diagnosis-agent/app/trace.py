@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from app.meta import stamp as _version_stamp
+
 ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / "runs"
 
@@ -51,8 +53,15 @@ class Tracer:
 
         # provider / base_url 必须单独记：同一个模型名可能挂在多个中转站上，
         # 只记 model 事后分不清这批数据是谁跑的、按谁家的价算。
+        # commit / code_hash 在这里自动采集，不由调用方传参：
+        # 每加一个新入口就记得补这两个参数是不现实的，漏一次就断一条链。
+        try:
+            ver = _version_stamp()
+        except Exception:
+            ver = {"commit": "", "code_hash": ""}
         self.write("run_start", user_msg=user_msg, model=model, note=note,
-                   provider=provider, base_url=base_url)
+                   provider=provider, base_url=base_url,
+                   commit=ver.get("commit", ""), code_hash=ver.get("code_hash", ""))
 
     def write(self, event, **payload):
         if self._fh is None:

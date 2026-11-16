@@ -69,6 +69,11 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
    - 自己定的验收目标、假设值，ref 也写 null。
    - 没有数字的论述写进 conclusion 或 advice，不要塞进 claims。
    - ref 写错比写 null 更糟：拿不准就不写字段路径，写 null。
+   - text / advice / conclusion 里要强调某个词，用中文引号「」，不许用英文双引号。
+     外层 JSON 本身就是双引号，你中间插一个裸双引号，字符串当场截断，
+     整份结论解析失败——你写对的内容一个也用不上，还全被判成"引用无法核验"。
+     实测反例：advice 里写「无法严格量化"夜班vs白班"差异」，
+     JSON 在第 2339 字符处断掉，14 条正确的引用全部作废。
 
 回答用中文。conclusion 说根因，claims 放全部带数字的证据，advice 说处置。
 """
@@ -709,6 +714,62 @@ def _get_path(obj, path):
 
 
 
+_CJK_OPEN = "「"
+_CJK_CLOSE = "」"
+
+
+def _fix_bare_quotes(body):
+    """修 JSON 字符串值里未转义的英文双引号。修不动返回 None。
+
+    模型在 text/advice 里想强调一个词时会写成 "夜班vs白班"，外层也是双引号，
+    字符串提前闭合，整份 JSON 解析失败。内容一个字都没错，
+    代价却是整条结论被判"引用无法核验、语义正确率 0"——
+    把格式错误当成内容错误来罚，是最贵的一类误判。
+
+    只动"值内部、不在结构分隔符位置"的那一种：
+      在字符串内遇到双引号时，看它跳过空白后是不是 , : } ] 之一。
+      是 → 它是收尾引号，原样保留。
+      不是 → 说明它是模型手写进文案的，换成中文引号。
+    结构一个字节都不动，所以修出来的语义和模型想表达的一致。
+
+    修完仍然要走全部校验（ref 逐条对证据、值逐条比对），
+    所以这条路不是放行通道，只是把"格式坏了"和"内容错了"分开。
+    """
+    out = []
+    in_str = False
+    opened = 0          # 已替换的开引号次数，用来决定这次用「还是」
+    i, n = 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == "\\":
+            out.append(body[i:i + 2])
+            i += 2
+            continue
+        if ch != '"':
+            out.append(ch)
+            i += 1
+            continue
+        if not in_str:
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        j = i + 1
+        while j < n and body[j] in " \t\r\n":
+            j += 1
+        if j >= n or body[j] in ",:}]":
+            in_str = False
+            out.append(ch)
+            i += 1
+            continue
+        out.append(_CJK_OPEN if opened % 2 == 0 else _CJK_CLOSE)
+        opened += 1
+        i += 1
+    if opened % 2:
+        return None     # 只配了一半，不敢猜它想包到哪
+    return "".join(out)
+
+
 def _parse_claims(text):
     """从结论里取出结构化断言。返回 dict 或 None（模型没按契约输出）。
 
@@ -723,10 +784,22 @@ def _parse_claims(text):
     i, j = s.find("{"), s.rfind("}")
     if i < 0 or j <= i:
         return None
+    body = s[i:j + 1]
     try:
-        d = json.loads(s[i:j + 1])
+        d = json.loads(body)
     except Exception:
-        return None
+        # 解析失败先试一次「引号修复」，只修格式不动内容。
+        # 修出来的对象打上 _repaired，让 verify 能把"救回来几条"记进统计——
+        # 静默修复最危险：模型越不守规矩，你越看不见。
+        fixed = _fix_bare_quotes(body)
+        if fixed is None:
+            return None
+        try:
+            d = json.loads(fixed)
+        except Exception:
+            return None
+        if isinstance(d, dict):
+            d["_repaired"] = True
     if not isinstance(d, dict) or not isinstance(d.get("claims"), list):
         return None
     return d
@@ -911,12 +984,17 @@ def verify(state):
              # unsourced claim 的 ref 写了 null（有数字、没出处）
              # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
              # cite_cut  那条证据返回体过大被压缩，字段没保留 → 放行标灰
-             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0}
+             # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
+             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
+             "json_fixed": 0}
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。
     doc = _parse_claims(final)
     if doc is not None:
+        # 引号修复救回来的要计数：修复是静默的，不记就看不见模型多不守规矩。
+        if doc.pop("_repaired", False):
+            stats["json_fixed"] = 1
         _verify_claims(doc, ev, stats, blocked, misquoted)
         final_text = _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,

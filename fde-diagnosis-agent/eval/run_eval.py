@@ -314,6 +314,10 @@ def main():
     # 证据超长被压缩、字段没送进去：这类引用无法核验，但不是模型写错。
     # 单独计数，否则它会躲在"引用写错"里，把证据问题报成模型问题。
     cite_cut = sum((r.get("cite_stats") or {}).get("cite_cut", 0) for r in results)
+    # 结论 JSON 里值内裸引号被自动修好才解析成功的条数。
+    # 这个必须看得见：修复是静默的，不单独计数就等于"模型越不守契约越没人知道"。
+    json_fixed = sum(1 for r in results
+                     if (r.get("cite_stats") or {}).get("json_fixed"))
     steps_bad = sum(1 for r in results if not r["steps_ok"])
 
     print("\n" + "=" * 60)
@@ -329,6 +333,7 @@ def main():
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
+    print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
@@ -352,6 +357,7 @@ def main():
         "cite_qty": cite_qty,
         "cite_rate": round(cite_rate, 4),
         "cite_cut": cite_cut,
+        "json_fixed": json_fixed,
         "misquote_n": misquote_n,
         "elapsed_s": round(elapsed, 1),
     }

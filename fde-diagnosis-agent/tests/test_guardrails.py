@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app import trace
-from app.graph import nodes
+from app.graph import build, nodes
 from app.tools import workorder
 
 
@@ -471,6 +471,112 @@ class ContextEvidenceAlignmentTest(unittest.TestCase):
                 self.assertEqual(res["cite_stats"]["ev"], expected,
                                  f"{turns} 轮：verify 用了 {res['cite_stats']['ev']} 条证据，"
                                  f"窗口应是 {expected} 条")
+
+
+class BareQuoteRepairTest(unittest.TestCase):
+    """结论 JSON 里值内裸引号：修格式，但不放宽校验。
+
+    真实失败样本：advice 里写「无法严格量化"夜班vs白班"差异」，
+    外层双引号被当场截断，2427 字符的结论在第 2339 字符处解析失败，
+    14 条正确的引用全部作废、语义正确率归零。
+    """
+
+    BAD = ('{"conclusion": "x", "claims": [{"text": "58.82%", "value": 58.82, '
+           '"unit": "%", "ref": "2#groups[0].rate"}], '
+           '"advice": ["无法严格量化"夜班vs白班"差异"]}')
+
+    def test_raw_sample_really_breaks_first(self):
+        # 前提断言：不改就是坏的。没有这一条，修复测试可能只是在测空气。
+        with self.assertRaises(Exception):
+            json.loads(self.BAD)
+
+    def test_repair_keeps_content_and_structure(self):
+        doc = nodes._parse_claims(self.BAD)
+        self.assertIsNotNone(doc, "修完必须能解析")
+        self.assertTrue(doc.get("_repaired"), "走没走修复通道要留痕")
+        self.assertEqual(len(doc["claims"]), 1)
+        self.assertEqual(doc["claims"][0]["value"], 58.82)
+        self.assertEqual(doc["claims"][0]["ref"], "2#groups[0].rate")
+        self.assertIn("夜班vs白班", doc["advice"][0], "被引号包住的那个词不能丢")
+
+    def test_clean_json_is_not_marked_repaired(self):
+        # 反向断言：结构正常的不许进修复通道，否则「修过」这个标记就没意义了
+        doc = nodes._parse_claims('{"conclusion": "x", "claims": [], "advice": ["正常"]}')
+        self.assertIsNotNone(doc)
+        self.assertFalse(doc.get("_repaired"))
+
+    def test_half_pair_is_not_guessed(self):
+        # 只有一半引号时不敢猜它想包到哪，宁可判失败也不瞎修
+        self.assertIsNone(nodes._parse_claims(
+            '{"conclusion": "x", "claims": [], "advice": ["只开了一个"引号"]}'))
+
+    def test_repair_does_not_bypass_checking(self):
+        # 最要紧的一条：修完引号，ref 该判错还是判错。
+        # 否则「修复」就成了给校验层留的后门。
+        bad = self.BAD.replace('"2#groups[0].rate"', '"1#no_such_field"')
+        st = self._state()
+        st["final"] = bad
+        st["tool_names"] = ["query_defect_log"]
+        st["steps"] = 3
+        st["user_msg"] = ""
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("rep", model="m", provider="p", base_url="b"):
+                res = nodes.verify(st)
+        finally:
+            trace.RUNS_DIR = old
+        cs = res["cite_stats"]
+        self.assertEqual(cs["json_bad"], 0, "格式已经修好了，不该再判 json_bad")
+        self.assertEqual(cs["json_fixed"], 1)
+        self.assertEqual(cs["path_miss"] + cs["ref_bad"], 1,
+                         "修完照样要对证据，指错字段必须判失败")
+
+    def _state(self):
+        return {"turn": 1, "evidence": [
+            {"turn": 1, "tool": "query_defect_log",
+             "args": {"device_id": "CX-104"},
+             "result": json.dumps({"groups": [{"rate": 0.15}]}), "truncated": False}]}
+
+
+class ResultEventContractTest(unittest.TestCase):
+    """result 事件的两个出口（CLI/评测 与 Web 流式）必须写同样的字段。
+
+    分头写过一次：server._sse 只写 final_head，不写 final 全文。
+    同一次运行，走 CLI 能离线复算「这条结论为什么被/没被拦」，走 Web 不能——
+    而且不会有任何报错，只有在想回溯线上问题时才发现证据不全，
+    那时重跑的结果已经不一定一样了。
+    """
+
+    REQUIRED = {"turn", "intent", "steps", "tools", "blocked", "misquoted",
+                "device_ids", "slots", "final", "final_head", "final_text", "cite"}
+
+    def test_all_audit_fields_present(self):
+        st = {"turn": 2, "intent": "diagnose", "steps": 5, "tool_names": ["a"],
+              "blocked": [], "misquoted": ["伪引用一处"],
+              "device_ids": ["CX-104"], "slots": {"device_id": "CX-104"},
+              "final": '{"conclusion": "x", "claims": [], "advice": []}',
+              "final_text": "x", "cite_stats": {"qty": 1, "cited_ok": 1}}
+        ev = build.result_event(st)
+        missing = self.REQUIRED - set(ev)
+        self.assertFalse(missing, f"result 事件缺字段：{sorted(missing)}")
+        # final 必须是全文而不是 head，否则离线复算拿到的是另半道题
+        self.assertEqual(ev["final"], st["final"])
+        self.assertLessEqual(len(ev["final_head"]), 300)
+
+    def test_no_handwritten_result_event(self):
+        # 源码级约束：每一处写 result 事件的地方都必须带 **result_event(...)。
+        # 只在字段层面测，测不出「有人又手写一份」——而手写正是这次退化的成因。
+        app_dir = Path(__file__).resolve().parents[1] / "app"
+        hits = []
+        for py in app_dir.rglob("*.py"):
+            for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
+                if 'trace.emit("result"' in line or 't.write("result"' in line:
+                    hits.append((py.name, i, line.strip()))
+        self.assertTrue(hits, "没扫到任何 result 事件写法，断言条件已失效，需要跟着改")
+        for name, line_no, line in hits:
+            self.assertIn("result_event", line,
+                          f"{name}:{line_no} 又手写了一份 result 字段：{line}")
 
 
 if __name__ == "__main__":

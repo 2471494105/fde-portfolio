@@ -757,6 +757,38 @@ class ContextEvidenceAlignmentTest(unittest.TestCase):
         self.assertEqual(out[0].get("content"), "第一句原始诉求")
         self.assertFalse(any(m.get("content") == '{"turn": 1, "i": 0}' for m in out))
 
+    def test_check_sees_same_evidence_as_verify(self):
+        # check（回环前）与 verify（终局）必须看同一批证据。
+        # 两边各取一份的后果：check 拿全量，能查到模型早读不到的旧证据；
+        # verify 只拿窗口内的，同一条判"不在可见范围"→ 标灰，引用率悄悄少算。
+        # 单轮下全量等于窗口，看不出差别；一到多轮就变成"回环都白跑了，问题还在"。
+        # 这里第 3 轮的 lo=2，证据 1 已出窗口，所以两边都应只剩 1 条。
+        st = {
+            "turn": 3,
+            "messages": [{"role": "assistant", "content": ""}],
+            "evidence": [
+                {"result": '{"cnt": 7}', "turn": 1, "ev_no": 1},
+                {"result": '{"cnt": 5}', "turn": 2, "ev_no": 2},
+            ],
+            "final": json.dumps({"conclusion": "x", "claims": [], "advice": []},
+                                ensure_ascii=False),
+            "user_msg": "", "tool_names": [], "steps": 0,
+            "check_retry": 0, "check_notes": [], "check_unsourced0": 0,
+        }
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("chk", model="m", provider="p", base_url="b"):
+                v = nodes.verify(st)
+        finally:
+            trace.RUNS_DIR = old
+
+        self.assertEqual(nodes.check(st)["check_ev"], v["cite_stats"]["ev"],
+                         "check 与 verify 参与校验的证据条数不同："
+                         "check 会放行一条模型读不到的旧证据，"
+                         "verify 再把它算成不在可见范围")
+        self.assertEqual(v["cite_stats"]["ev"], 1)   # 反向：不能是"一律看全量"
+
     def test_verify_counts_exactly_the_window(self):
         # verify 的 cite_stats["ev"] 就是它实际拿来校验的证据条数。
         # 断言它等于 _ctx_window 算出的条数。

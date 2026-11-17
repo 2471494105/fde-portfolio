@@ -436,6 +436,23 @@ def _ctx_window(cur_turn):
     return lo, int(cur_turn)
 
 
+def _visible_evidence(state):
+    """参与溯源的证据：只取本轮可见轮次内的，和 _context_messages 同源。
+
+    为什么 check 和 verify 必须都调它：两处各取一份的后果在多轮里很难看——
+    check（回环前）拿全量证据，能查到一条模型早就读不到的旧证据，于是放行；
+    verify（终局）只拿窗口内的，同一条判 cite_oob，直接 FAIL。
+    表现是**回环白跑一轮仍然失败**，而报出来的话像"模型引错了号"。
+
+    check 的存在意义是"提前拦下会让 verify 失败的东西"。两边口径不一致，
+    它就只在单轮里有效——单轮下全量等于窗口，看不出差别。
+    """
+    cur_turn = int(state.get("turn") or 1)
+    lo, _ = _ctx_window(cur_turn)
+    return [e for e in (state.get("evidence") or [])
+            if int(e.get("turn") or 1) >= lo]
+
+
 def _context_messages(state):
     """送给模型的上下文窗口。
 
@@ -677,16 +694,20 @@ def check(state):
     notes = list(state.get("check_notes") or [])
     unsourced0 = int(state.get("check_unsourced0") or 0)
     doc = _parse_claims(state.get("final") or "")
+    # 和 verify 同一批证据。check_ev 也一并交出去：两边取的条数一旦不同，
+    # "check 放行、verify 判死"就会发生，而它只在不同轮数下才显形。
+    used = _visible_evidence(state)
 
     # 没按契约输出：交给 verify 判，不值得为格式再花一轮——
     # 上一轮就没写出合法 JSON，重跑一次大概率还是写不出。
     if doc is None:
         return {"check_action": "pass", "check_retry": retry,
-                "check_notes": notes, "check_unsourced0": unsourced0}
+                "check_notes": notes, "check_unsourced0": unsourced0,
+                "check_ev": len(used)}
 
     blocked, misquoted = [], []
     stats = _new_stats()
-    _verify_claims(doc, state.get("evidence") or [], stats, blocked, misquoted)
+    _verify_claims(doc, used, stats, blocked, misquoted)
 
     # 回环过一次时的唯一判据：不许拿 null 换通过。
     # 指错的 ref 全改成 null，misquoted 清零，但那些数从"指错了"变成"没指"——
@@ -697,11 +718,13 @@ def check(state):
                 f"回环后未溯源数字从 {unsourced0} 条涨到 {stats['unsourced']} 条："
                 f"把指错的 ref 改成 null 不是修正，是把引用问题换成了没引用")
         return {"check_action": "pass", "check_retry": retry,
-                "check_notes": notes, "check_unsourced0": unsourced0}
+                "check_notes": notes, "check_unsourced0": unsourced0,
+                "check_ev": len(used)}
 
     if not misquoted:
         return {"check_action": "pass", "check_retry": retry,
-                "check_notes": notes, "check_unsourced0": stats["unsourced"]}
+                "check_notes": notes, "check_unsourced0": stats["unsourced"],
+                "check_ev": len(used)}
 
     # 有伪引用且还有一次机会：把具体原因写回去。
     # 文案必须给出"改什么"，只说"引用有误"模型只能猜。
@@ -719,6 +742,7 @@ def check(state):
         "check_retry": retry + 1,
         "check_notes": notes,
         "check_unsourced0": stats["unsourced"],
+        "check_ev": len(used),
         # 清掉上一轮的终局痕迹，否则 route_after_plan 会读到旧的 enough 又进来一次
         "final": "",
         "stop_reason": "",
@@ -1321,10 +1345,9 @@ def verify(state):
     # 下界必须来自 _ctx_window，和 _context_messages 保留的轮数同源——
     # 这里原本写死 cur_turn - 1，与 CTX_VISIBLE_TURNS=2 数值巧合相等，
     # 改任一处就会让模型的 k 与 ev 的下标整体错位。
-    cur_turn = int(state.get("turn") or 1)
-    lo, _ = _ctx_window(cur_turn)
-    ev = [e for e in (state.get("evidence") or [])
-          if int(e.get("turn") or 1) >= lo]
+    # 取证据的规则收在 _visible_evidence 一处：check 也调它，两边口径必须一致，
+    # 否则 check 会放行一条模型读不到的旧证据，verify 再判 cite_oob。
+    ev = _visible_evidence(state)
 
     blocked = []
     # 未溯源 ≠ 伪引用。两个列表装的是两类东西：

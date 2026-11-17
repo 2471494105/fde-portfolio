@@ -54,11 +54,13 @@ class State(TypedDict, total=False):
     # 本轮字段（每轮重写）
     tool_names: list
     blocked: list
-    # 伪引用：[k] 指向了真实存在的那条证据，但该证据里没有这个数。
+    # 伪引用：ref 指向了一次真实发生过的调用，但那个字段里没有这个数。
     # 和 blocked 分开，是因为 blocked 里的多数值是"数出来但程序认不出"，
     # 两者不该判同一个刑——前者标灰放行，后者判失败。
     misquoted: list
-    # verify 的分层统计：qty / pct / cited_ok / cited_bad / cite_oob / uncited / cited / ev
+    # verify 的分层统计：qty / pct / cited_ok / path_ok / path_bad / path_miss /
+    # cite_oob / ref_bad / cite_cut / unsourced / quote_ok / quote_bad /
+    # range_ok / range_bad / bare_conclusion / svc_fail（完整清单见 nodes._new_stats）
     cite_stats: dict
     steps: int
     final: str

@@ -66,7 +66,7 @@ def judge(traj, state):
     readable = state.get("final_text") or final
     steps = state.get("steps", 0)
     blocked = state.get("blocked", [])
-    # 伪引用单独判死：写了 [k] 但第 k 条证据里没有这个数。
+    # 伪引用单独判死：ref 指了一次真实发生的调用，但那次的返回里没有这个数。
     # blocked 里的其余值（没写出处、数出来程序认不出）标灰放行——
     # 它们区分不了"我算的"和"我编的"，判死等于把合法的派生分析一起杀掉。
     misquoted = state.get("misquoted", [])

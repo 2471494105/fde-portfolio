@@ -1,6 +1,10 @@
-"""25 条 golden path 定义（H5+A5+I8+W3+T3+I9 = 25）。
+"""27 条 golden path 定义（25 条单轮 + M1/M2 两条多轮）。
 
 I9 是补 query_work_order 时新增的：补工具不补用例，新能力就没有自动化保障。
+
+多轮用例（`turns` 非空）自带一个单轮没有的判据 `round_ok`：最后一轮所有
+`ref` 必须在**本轮还看得见的证据**里成立（`cite_oob` + `path_miss` + `ref_bad` == 0）。
+没有这条判据，多轮用例跑的还是单轮那套指标，"进 eval"就白进了。
 
 设计原则：每条只考一件事，期望写成可程序判定的形式（工具名、聚合维度、结论关键词）。
 不写"应该诊断得对"这种没法判的话。
@@ -330,5 +334,45 @@ TRAJECTORIES = [
         "expect_intent": "lookup",
         "expect_ask": False,
         "steps_range": (1, 6),
+    },
+    # ---------- M：多轮（同一 thread_id 连跑，判最后一轮） ----------
+    # 单轮用例永远测不到的东西：上下文裁剪。CTX_VISIBLE_TURNS=2，所以
+    # 第 3 轮 lo=2，第 1 轮的证据被真正裁出视野。模型这时若还写"第 1 轮那条"，
+    # 引用就会落空——档 C 之前这里是 0/15，档 C 之后才稳定。
+    #
+    # 多轮用例"考什么"没有通用定义，只能各自声明 round_ok：见 run_eval.judge。
+    {
+        "id": "M1",
+        "type": "多轮",
+        # 三轮：查数据 → 问术语 → 查原因。第 3 轮时前两轮的证据部分被裁。
+        # 考的是一次跨轮不漂移：ref 全是工具名/工具名+指纹，不出现编号。
+        "turns": ["cx-104 数据",
+                  "cx-104 标定漂移是什么意思",
+                  "cx-104 最近误判率高得离谱，帮我查一下成因"],
+        "input": "cx-104 最近误判率高得离谱，帮我查一下成因",
+        "expect_tools": ["query_defect_log", "query_calibration"],
+        "forbid_tools": [],
+        "expect_group_by": ["station"],
+        "final_keywords": ["标定", "漂移"],
+        "expect_intent": "diagnose",
+        "expect_ask": False,
+        "steps_range": (4, 14),
+    },
+    {
+        "id": "M2",
+        "type": "多轮",
+        # 两轮，第 2 轮**不带设备号**。考的是槽位继承：
+        # 用户不会每次都重复报设备，上一轮确认的 CX-101 必须被带过来。
+        # 判错的样子很隐蔽——模型自己补一个设备号去查，查得到数据、报告全绿。
+        "turns": ["CX-101 数据",
+                  "误判率怎么这么高"],
+        "input": "误判率怎么这么高",
+        "expect_tools": ["query_defect_log"],
+        "forbid_tools": [],
+        "expect_group_by": ["station"],
+        "final_keywords": ["1号工位"],
+        "expect_intent": "diagnose",
+        "expect_ask": False,
+        "steps_range": (2, 14),
     },
 ]

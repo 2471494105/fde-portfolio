@@ -135,6 +135,23 @@ def judge(traj, state):
     req = traj.get("final_required", [])
     req_miss = [w for w in req if _norm(w) not in flat]
 
+    # 多轮用例：单轮那套判据看不出"跨轮还准不准"。第 3 轮真正要考的是——
+    # 模型引的每一处出处，在**它这一轮还能看到的证据里**都要成立。
+    # cite_oob（该工具的返回已被裁出）与 path_miss（编了字段）都是引用落空，
+    # 只是成因不同；ref_bad 是把编号写回来。三个都必须为 0 才算 round_ok。
+    # 不设这个判据的话，多轮用例和单轮用例考的是同一件事，"进 eval"就白进了。
+    round_ok = True
+    round_detail = ""
+    if traj.get("turns"):
+        cs = cite_stats or {}
+        dead = int(cs.get("cite_oob") or 0) + int(cs.get("path_miss") or 0) \
+            + int(cs.get("ref_bad") or 0)
+        round_ok = dead == 0
+        round_detail = (f"引用落空 {dead} 条"
+                        f"（oob={cs.get('cite_oob') or 0}"
+                        f" miss={cs.get('path_miss') or 0}"
+                        f" bad={cs.get('ref_bad') or 0}）")
+
     semantic_ok = (
         tool_rate >= 1.0
         and gb_rate >= 1.0
@@ -147,6 +164,7 @@ def judge(traj, state):
         and intent_ok
         and not forbid_words
         and not req_miss
+        and round_ok
     )
 
     # 归因：失败落在哪一类
@@ -173,6 +191,8 @@ def judge(traj, state):
         reasons.append("工具调用格式错")
     if not deduped_ok:
         reasons.append("未命中幂等（应返回已存在工单）")
+    if not round_ok:
+        reasons.append(round_detail)
 
     return {
         "id": traj["id"],
@@ -198,6 +218,9 @@ def judge(traj, state):
         "trace_ok": trace_ok,
         "fc_fail": fc_fail,
         "semantic_ok": semantic_ok,
+        "round_ok": round_ok,
+        "round_detail": round_detail,
+        "turns": len(traj.get("turns") or []),
         "reasons": reasons,
         "cite_stats": cite_stats,
         "final_head": readable[:160].replace("\n", " "),
@@ -238,8 +261,11 @@ def main():
 
     # 建单类共享 mock QMS 的外部状态：W2 考的是"再建一次应返回已存在"，
     # 与 W1 并发会交叉，幂等结果不可信。强制串行，且排在并发批之后。
-    serial = [t for t in targets if t["type"] == "建单"]
-    parallel = [t for t in targets if t["type"] != "建单"]
+    # 多轮类也必须串行，但原因不同：它们要共用 checkpointer（见 one()），
+    # 而 checkpointer 是进程内单例、只有一条连接，并发写会直接报
+    # "another command is already in progress"。
+    serial = [t for t in targets if t["type"] == "建单" or t.get("turns")]
+    parallel = [t for t in targets if not (t["type"] == "建单" or t.get("turns"))]
 
     # 并发必须关掉 checkpointer：它是进程内单例、只有一条 psycopg 连接
     use_ckpt = (workers == 1)
@@ -248,7 +274,19 @@ def main():
 
     def one(traj):
         try:
-            state = run(traj["input"], trace_run=False, use_checkpoint=use_ckpt)
+            turns = traj.get("turns")
+            if turns:
+                # 多轮必须共用 checkpointer：use_checkpoint=False 时 build_graph
+                # 每轮都新建一张图，上一轮的 messages / device_ids 全丢，
+                # 第 2 轮等于从零开始——那样"多轮用例"实际测的还是单轮，
+                # 而这正是它要防的那个假绿灯。
+                tid = f"eval-{traj['id']}-{int(time.time() * 1000)}"
+                state = None
+                for t in turns:
+                    state = run(t, thread_id=tid, trace_run=False,
+                                use_checkpoint=True)
+            else:
+                state = run(traj["input"], trace_run=False, use_checkpoint=use_ckpt)
         except Exception as exc:
             return traj, None, {
                 "id": traj["id"], "type": traj["type"], "semantic_ok": False,
@@ -256,7 +294,8 @@ def main():
                 "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
                 "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
                 "trace_ok": False, "fc_fail": True,
-                "cite_stats": {},
+                "cite_stats": {}, "round_ok": False, "round_detail": "",
+                "turns": len(traj.get("turns") or []),
                 "final_head": "",
             }
         return traj, state, judge(traj, state)
@@ -304,7 +343,7 @@ def main():
             for f in as_completed(futs):
                 record(*f.result())
     if serial:
-        print(f"[串行批] {len(serial)} 条（建单类共享外部状态，必须串行）")
+        print(f"[串行批] {len(serial)} 条（建单类共享外部状态 / 多轮类共用 checkpointer）")
         for t in serial:
             record(*one(t))
     elapsed = time.time() - t0
@@ -400,6 +439,14 @@ def main():
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")
     print(f"区间引用      {range_ok} 成 / {range_bad} 败   （ref 指文本字段且两端都在原文 = 成；"
           f"ref 指数值字段 = 败）")
+    # 多轮单独一行：这一行 0/0 说明本次没跑多轮用例，不是"多轮没问题"。
+    # 和上面那些行一样，分母为 0 时必须显式看见，不能被"没跑"伪装成"全绿"。
+    multi = [r for r in results if r.get("turns")]
+    if multi:
+        m_ok = sum(1 for r in multi if r.get("round_ok"))
+        print(f"多轮引用成立  {m_ok}/{len(multi)}   （最后一轮所有 ref 在本轮可见证据里成立）")
+    else:
+        print("多轮引用成立  未运行   （本次没有多轮用例）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，

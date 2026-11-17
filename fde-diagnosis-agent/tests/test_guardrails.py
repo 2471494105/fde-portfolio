@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import trace
 from app.graph import build, nodes
-from app.tools import workorder
+from app.tools import diagnosis, workorder
 from mock_qms import server
 
 
@@ -214,6 +214,50 @@ class IdemKeyTest(unittest.TestCase):
     def test_device_changes_key(self):
         self.assertNotEqual(server._idem_key("CX-101", "light_degradation"),
                             server._idem_key("CX-102", "light_degradation"))
+
+
+class LightLifeFieldsTest(unittest.TestCase):
+    """光源寿命字段：两个方向各一个字段，都不出负数。
+
+    测的是"字段名和值的方向必须一致"。旧实现只有一个 over_life_hours，
+    没超寿命时是 -1585，而文案写成"寿命正常（剩余 1585 小时）"——
+    同一件事两种符号。模型照文案说 1585、ref 指字段里的 -1585，
+    判据一比就判"引用写错"，而错在数据结构上，改 prompt 治不好。
+    """
+
+    def test_over_life_is_non_negative(self):
+        for cum, rated in ((8620, 8000), (6415, 8000), (3960, 8000), (8000, 8000)):
+            over, remaining, _ = diagnosis._life_fields(cum, rated)
+            self.assertGreaterEqual(over, 0, f"{cum}/{rated} 的 over_life_hours 是负数")
+            self.assertGreaterEqual(remaining, 0, f"{cum}/{rated} 的 remaining_hours 是负数")
+
+    def test_two_directions_are_mutually_exclusive(self):
+        """一个有值，另一个必须是 0。同时非零说明换算写错了方向。"""
+        for cum, rated in ((8620, 8000), (6415, 8000), (8000, 8000)):
+            over, remaining, _ = diagnosis._life_fields(cum, rated)
+            self.assertFalse(over > 0 and remaining > 0, "两个方向同时非零")
+
+    def test_over_life_when_exceeded(self):
+        over, remaining, _ = diagnosis._life_fields(8620, 8000)
+        self.assertEqual(over, 620)
+        self.assertEqual(remaining, 0)
+
+    def test_remaining_when_under_life(self):
+        over, remaining, _ = diagnosis._life_fields(6415, 8000)
+        self.assertEqual(over, 0)
+        self.assertEqual(remaining, 1585)
+
+    def test_estimate_does_not_repeat_the_numbers(self):
+        """反向断言：定性文案里不能再出现同一份数字。
+
+        有人为了"让模型看得懂"把 620 / 1585 写回文案，这条直接挂——
+        那就又变成两个数据源，模型抄哪一个都可能和 ref 对不上。
+        唯一允许的数字是"误判率上升 10%-25%"这类知识性区间，它不是寿命值。
+        """
+        for cum, rated, banned in ((8620, 8000, "620"), (6415, 8000, "1585")):
+            _, _, estimate = diagnosis._life_fields(cum, rated)
+            self.assertNotIn(banned, estimate,
+                             f"文案复述了寿命数字 {banned}，又造出第二个数据源")
 
 
 class TracerIsolationTest(unittest.TestCase):

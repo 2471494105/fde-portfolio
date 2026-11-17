@@ -176,6 +176,31 @@ def query_calibration(device_id: str, limit: int = 5) -> dict:
     }
 
 
+def _life_fields(cumulative: int, rated: int):
+    """把累计点亮时长与额定寿命换算成两个方向明确的字段。
+
+    对外只给非负数：说"超了多少"看 over_life_hours，说"还剩多少"看
+    remaining_hours，各自在另一个方向上是 0。这样字段名和数值方向永远一致，
+    不会出现 over_life_hours = -1585 这种读起来就自相矛盾的值。
+
+    定性判断（estimate）**只写判断，不复述数字**：
+    数字已经在两个字段里各有一份，文案再写一遍就成了第二个数据源，
+    而且符号极容易反过来——上一版是 over_life_hours = -1585 配
+    "寿命正常（剩余 1585 小时）"，模型照文案说 1585、ref 指字段里的 -1585，
+    判据一比就判"引用写错"。
+    """
+    over = cumulative - rated
+    over_hours = over if over > 0 else 0
+    remaining = -over if over < 0 else 0
+    if over > 0:
+        estimate = "已超额定寿命，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源"
+    elif over > -1000:
+        estimate = "接近额定寿命，建议安排预防性更换"
+    else:
+        estimate = "寿命正常"
+    return over_hours, remaining, estimate
+
+
 def query_light_usage(device_id: str) -> dict:
     with connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM light_usage WHERE device_id = %s", (device_id,))
@@ -186,20 +211,16 @@ def query_light_usage(device_id: str) -> dict:
                        WHERE device_id = %s ORDER BY ts""", (device_id,))
         hist = cur.fetchall()
 
-    over = row["cumulative_hours"] - row["rated_life_hours"]
-    if over > 0:
-        estimate = f"已超额定寿命 {over} 小时，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源"
-    elif over > -1000:
-        estimate = f"接近额定寿命（还差 {-over} 小时），建议安排预防性更换"
-    else:
-        estimate = f"寿命正常（剩余 {-over} 小时）"
+    over_hours, remaining, estimate = _life_fields(
+        row["cumulative_hours"], row["rated_life_hours"])
 
     return {
         "device_id": device_id,
         "light_model": row["light_model"],
         "cumulative_hours": row["cumulative_hours"],
         "rated_life_hours": row["rated_life_hours"],
-        "over_life_hours": over,
+        "over_life_hours": over_hours,
+        "remaining_hours": remaining,
         "brightness_set": row["brightness_set"],
         "last_replaced_at": _fmt(row["last_replaced_at"]),
         "brightness_history": [{"ts": _fmt(h["ts"]), "value": h["value"]} for h in hist],

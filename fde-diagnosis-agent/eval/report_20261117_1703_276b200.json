@@ -1,0 +1,117 @@
+{
+ "meta": {
+  "ts": "2026-11-17 17:00:55",
+  "commit": "276b200",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "caa4d49aaeb3",
+  "code_hash": "80d903d449e9",
+  "cases_total": 27,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
+ },
+ "summary": {
+  "n": 1,
+  "semantic_ok": 0,
+  "semantic_rate": 0.0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "steps_bad": 0,
+  "budget_exhausted": 0,
+  "enough": 1,
+  "check_rounds_n": 0,
+  "intent_bad": 0,
+  "ask_bad": 0,
+  "deduped_grey": 0,
+  "intent_conf_low_n": 0,
+  "fc_fail": 0,
+  "blocked_n": 1,
+  "trace_ok_n": 0,
+  "trace_rate": 0.0,
+  "cite_hit": 12,
+  "cite_qty": 15,
+  "cite_rate": 0.8,
+  "cite_cut": 0,
+  "json_fixed": 0,
+  "misquote_n": 1,
+  "range_ok": 0,
+  "range_bad": 0,
+  "elapsed_s": 139.7
+ },
+ "results": [
+  {
+   "id": "A2",
+   "type": "算法",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "ask_ok": true,
+   "deduped_env": "",
+   "intent_conf": 0.9,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "search_manual",
+    "check_doc_conflict",
+    "query_calibration"
+   ],
+   "steps": 8,
+   "stop_reason": "enough",
+   "check_rounds": 0,
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "划痕",
+    "阈值"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "划痕误判样本置信度在 0.907 到 0.933 之间，均高于两份文档的阈值"
+   ],
+   "misquoted": [
+    "2号工位误判率 36.36%（字段值 0.0667 ≠ 36.36%）",
+    "3号工位误判率 29.27%（字段值 0.0 ≠ 29.27%）"
+   ],
+   "trace_ok": false,
+   "fc_fail": false,
+   "semantic_ok": false,
+   "round_ok": true,
+   "round_detail": "",
+   "turns": 0,
+   "reasons": [
+    "引用写错(2号工位误判率 36.36%（字段值 0.0667 ≠ 36.36%）,3号工位误判率 29.27%（字段值 0.0 ≠ 29.27%）)"
+   ],
+   "cite_stats": {
+    "qty": 15,
+    "pct": 7,
+    "cited_ok": 12,
+    "cited_path": 12,
+    "cite_oob": 0,
+    "path_ok": 12,
+    "path_bad": 2,
+    "path_miss": 0,
+    "json_bad": 0,
+    "unsourced": 1,
+    "ref_bad": 0,
+    "cite_cut": 0,
+    "json_fixed": 0,
+    "range_ok": 0,
+    "range_bad": 0,
+    "quote_ok": 0,
+    "quote_bad": 0,
+    "bare_conclusion": 0,
+    "svc_fail": 0,
+    "cited": 12,
+    "ev": 8
+   },
+   "final_head": "误判高度集中在「划痕」这一缺陷类型上，三个工位分布均匀、标定漂移平稳，问题指向所有工位共用的划痕判定模型与判定参数，而不是某个工位的硬件。另需提醒：判定置信度阈值在三份文档中取值不一致，需要人工确认按哪一份执行。 - 划痕误判率 64.81%（35/54）[query_defect_log{group_by=defec"
+  }
+ ]
+}

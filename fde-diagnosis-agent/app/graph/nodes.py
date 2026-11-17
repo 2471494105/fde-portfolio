@@ -569,7 +569,7 @@ def route_after_plan(state):
 
     # 两条结束路径分开走，不再汇进同一个出口：
     #   budget_exhausted → finalize，结论是"预算掐断的半成品"
-    #   enough           → verify，结论是"模型判断够了"
+    #   enough           → check，先按规则自查一遍；不通过就把原因回喂，让它自己改
     # 之前两者都走 verify→finalize，报告上无法区分，一次 12 步没结论的运行
     # 和一次 3 步干净收工的运行长得一模一样。
     if stop == STOP_BUDGET_EXHAUSTED and has_calls:
@@ -582,7 +582,90 @@ def route_after_plan(state):
     # plan_retry 已经在 plan 里置位，所以最多退一次，不会死循环。
     if int(state.get("plan_retry") or 0) == 0 and _pending_call(last.get("content")):
         return "plan"
-    return "verify"
+    return "check"
+
+
+MAX_CHECK_RETRY = 1
+
+
+def check(state):
+    """交出结论前的自查：把"哪条规则、为什么失败"回喂，让模型自己改一次。
+
+    依据是 Claude Agent SDK 对 agent loop 的描述（gather context → take action →
+    verify work → repeat），以及同页那句更具体的话：
+    "The best form of feedback is providing clearly defined rules for an output,
+    then explaining which rules failed and why."
+
+    也就是说 verify 的产出不是一个布尔，是**失败原因**，而且要能回到循环里。
+    本项目原来把 verify 放在循环外，判完就 finalize，模型一个字都没看到。
+    后果有实测样本：11-17 那次 H1，模型把 2 号工位的 11.39% 和 3 号工位的 4.84%
+    抄反了，_verify_claims 准确抓到「字段值 0.1139 ≠ 4.84%」，
+    但抓到时已经在终点，只能判失败。同一句话当时回喂过去，它自己能改。
+
+    这里只决定"要不要再跑一轮"，正式统计与渲染仍归 verify：
+    在 check 里也落一份正式 stats，同一份数字会被算两次，汇总直接翻倍。
+    """
+    retry = int(state.get("check_retry") or 0)
+    notes = list(state.get("check_notes") or [])
+    unsourced0 = int(state.get("check_unsourced0") or 0)
+    doc = _parse_claims(state.get("final") or "")
+
+    # 没按契约输出：交给 verify 判，不值得为格式再花一轮——
+    # 上一轮就没写出合法 JSON，重跑一次大概率还是写不出。
+    if doc is None:
+        return {"check_action": "pass", "check_retry": retry,
+                "check_notes": notes, "check_unsourced0": unsourced0}
+
+    blocked, misquoted = [], []
+    stats = _new_stats()
+    _verify_claims(doc, state.get("evidence") or [], stats, blocked, misquoted)
+
+    # 回环过一次时的唯一判据：不许拿 null 换通过。
+    # 指错的 ref 全改成 null，misquoted 清零，但那些数从"指错了"变成"没指"——
+    # 后者不报错，却比前者更差。这条不显式记下来，模型就有一条零成本过关的路。
+    if retry >= MAX_CHECK_RETRY:
+        if stats["unsourced"] > unsourced0:
+            notes.append(
+                f"回环后未溯源数字从 {unsourced0} 条涨到 {stats['unsourced']} 条："
+                f"把指错的 ref 改成 null 不是修正，是把引用问题换成了没引用")
+        return {"check_action": "pass", "check_retry": retry,
+                "check_notes": notes, "check_unsourced0": unsourced0}
+
+    if not misquoted:
+        return {"check_action": "pass", "check_retry": retry,
+                "check_notes": notes, "check_unsourced0": stats["unsourced"]}
+
+    # 有伪引用且还有一次机会：把具体原因写回去。
+    # 文案必须给出"改什么"，只说"引用有误"模型只能猜。
+    lines = "\n".join(f"- {m}" for m in misquoted)
+    feedback = (
+        f"[引用未通过]\n{lines}\n"
+        "请重新输出完整的 claims JSON：把数字改成字段里的实际值；"
+        "如果这个数确实是算出来的、数出来的或预测值，就把 ref 改成 null "
+        "并在 text 里保留算式；如果判断是证据不够，就继续调工具补齐，不要硬写结论。\n"
+        "把指错的 ref 直接改成 null 不算修正。"
+    )
+    return {
+        "messages": [{"role": "user", "content": feedback}],
+        "check_action": "retry",
+        "check_retry": retry + 1,
+        "check_notes": notes,
+        "check_unsourced0": stats["unsourced"],
+        # 清掉上一轮的终局痕迹，否则 route_after_plan 会读到旧的 enough 又进来一次
+        "final": "",
+        "stop_reason": "",
+        "plan_retry": 0,
+    }
+
+
+def route_after_check(state):
+    """check 自己的决定。
+
+    用 check_action 而不是"看 messages 有没有变长"：后者在模型恰好在 messages
+    里留了一条空 content 时会失效，而路由失效的表现是"本该回环的没回环"——
+    静默的，只在纠错次数上少一次，不报任何错。
+    """
+    return "plan" if state.get("check_action") == "retry" else "verify"
 
 
 # 压缩档位：(数组保留项数, 字符串截断长度)。由宽到紧依次尝试。
@@ -947,6 +1030,30 @@ def _render_claims(doc):
     return "\n".join(parts)
 
 
+def _new_stats():
+    """校验统计的空壳。verify 正式判定用它，check 预判也用它。
+
+    抽出来是因为 check 需要在**不落正式统计**的前提下跑一遍 _verify_claims：
+    它只想知道"会不会失败"，判完就丢。两边各写一份默认键，迟早有一边少了
+    某个 key，然后在某个分支里 KeyError——而那个分支恰好只在真跑时才进。
+    """
+    return {"qty": 0, "pct": 0,
+            "cited_ok": 0,          # 引用成立（= path_ok，保留旧名给汇总用）
+            "cited_path": 0,        # 走的是字段路径
+            "cite_oob": 0,          # ref 指向不存在的第 k 条（多为上下文裁剪所致）
+            "path_ok": 0, "path_bad": 0, "path_miss": 0,
+            # json_bad  模型没按 claims 契约输出 → 整条无法核验，判失败
+            # unsourced claim 的 ref 写了 null（有数字、没出处）
+            # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
+            # cite_cut  那条证据返回体过大被压缩，字段没保留 → 放行标灰
+            # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
+            "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
+            "json_fixed": 0,
+            # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
+            # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
+            "range_ok": 0, "range_bad": 0}
+
+
 def _verify_claims(doc, ev, stats, blocked, misquoted):
     """按 claim 逐条校验：一个数字一条，各自带 ref。
 
@@ -1101,22 +1208,10 @@ def verify(state):
     #   misquoted  ref 指到了字段、但那个字段撑不住这个数 —— 判失败
     # 前者可能是算出来的、数出来的、或自己定的目标，程序无从判断，不该判死；
     # 后者是明确声称了出处又对不上，性质不同，混在一起等于判同一个刑。
-    misquoted = []
-    stats = {"qty": 0, "pct": 0,
-             "cited_ok": 0,          # 引用成立（= path_ok，保留旧名给汇总用）
-             "cited_path": 0,        # 走的是字段路径
-             "cite_oob": 0,          # ref 指向不存在的第 k 条（多为上下文裁剪所致）
-             "path_ok": 0, "path_bad": 0, "path_miss": 0,
-             # json_bad  模型没按 claims 契约输出 → 整条无法核验，判失败
-             # unsourced claim 的 ref 写了 null（有数字、没出处）
-             # ref_bad   ref 格式错，或引用的那条证据不是结构化返回
-             # cite_cut  那条证据返回体过大被压缩，字段没保留 → 放行标灰
-             # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
-             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
-             "json_fixed": 0,
-             # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
-             # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
-             "range_ok": 0, "range_bad": 0}
+    # check 抓到的额外问题要并进来：那是"回环后用 ref=null 换通过"这类绕法。
+    # 不并进来的话，它就是个写了没人读的字段，而且绕法本身会静默通过。
+    misquoted = list(state.get("check_notes") or [])
+    stats = _new_stats()
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。

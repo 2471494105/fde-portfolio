@@ -2,11 +2,16 @@
 
 START → intake（正则抽候选实体，不判意图）
       → understand（模型判意图，程序只校验自洽性）
-          ├─ diagnose  → plan ⇄ act → verify → finalize → END
-          ├─ action    → plan ⇄ act → verify → finalize → END
-          ├─ lookup    → lookup ────────────┘
+          ├─ diagnose  → plan ⇄ act        ┐
+          │              plan → check ─────┼→ verify → finalize → END
+          ├─ action    → plan ⇄ act        │   （check 不通过就回 plan 一次）
+          ├─ lookup    → lookup ───────────┘
           ├─ knowledge → knowledge ─────────┘
           └─ clarify   → ask_user → END
+
+check 是 verify 前面的自查闸口：把"哪条规则、为什么失败"回喂给模型，让它自己改一次。
+依据是 Claude Agent SDK 的 gather → act → verify → repeat，verify 在循环内、且产出是失败原因。
+回环上限 MAX_CHECK_RETRY=1，"拿 ref=null 换通过"另有一条判定（见 nodes.check）。
 
 多轮靠 checkpointer：同一个 thread_id 再 invoke，会从该 thread 上次的 checkpoint
 恢复 state（messages / evidence / slots / session_summary 都在里面）。
@@ -19,11 +24,13 @@ from app.graph.llm import BASE_URL, MODEL, PROVIDER
 from app.graph.nodes import (
     act,
     ask_user,
+    check,
     finalize,
     intake,
     knowledge,
     lookup,
     plan,
+    route_after_check,
     route_after_plan,
     route_after_understand,
     understand,
@@ -42,6 +49,7 @@ def build_graph(use_checkpoint: bool = True):
     g.add_node("knowledge", knowledge)
     g.add_node("plan", plan)
     g.add_node("act", act)
+    g.add_node("check", check)
     g.add_node("verify", verify)
     g.add_node("finalize", finalize)
 
@@ -53,7 +61,15 @@ def build_graph(use_checkpoint: bool = True):
     )
     g.add_conditional_edges(
         "plan", route_after_plan,
-        {"act": "act", "verify": "verify", "finalize": "finalize"},
+        {"act": "act", "check": "check", "finalize": "finalize"},
+    )
+    # check 是 verify 前面的自查闸口，不是新的终局：
+    # 回环一次 → 回 plan 重出结论；不通过但已用掉机会 → 照样交给 verify 判失败。
+    # verify 只保留一个出口，判完就是终局，这样"改过几次才通过"和"一次就过"
+    # 在报告里能分开看（result_event 的 check_rounds）。
+    g.add_conditional_edges(
+        "check", route_after_check,
+        {"plan": "plan", "verify": "verify"},
     )
     g.add_edge("act", "plan")
     g.add_edge("lookup", "verify")
@@ -88,6 +104,10 @@ def result_event(state):
         # （budget_exhausted = 被预算掐断的半成品；enough = 12 步内自己判断够了）。
         # 只报步数等于把这两件事合并，事后拿不到任何归因线索。
         "stop_reason": state.get("stop_reason", ""),
+        # 回环次数要单列：0 次 = 一次就过，1 次 = 被拦下后改才对。
+        # 只报 misquoted 为空，会把这两件事混成"没问题"，
+        # 而"改过几次才对"本身就是模型稳定性的一个指标。
+        "check_rounds": state.get("check_retry", 0),
         "tools": state.get("tool_names", []),
         "blocked": state.get("blocked", []),
         "misquoted": state.get("misquoted", []),

@@ -62,6 +62,12 @@ class State(TypedDict, total=False):
     final_text: str
     # 因"只写了计划没真调用"而退回重试的次数，防止死循环
     plan_retry: int
+    # check 的回环计数与路由动作。verify 放在循环外时是"判完就终局"，
+    # 模型没有改的机会；回环一次是把"哪条规则、为什么失败"回喂过去（见 check 的注释）。
+    check_retry: int       # 已经回环几次，上限 MAX_CHECK_RETRY
+    check_action: str      # retry / pass，供 route_after_check 读，不靠推断
+    check_notes: list      # check 抓到的、需要并进最终判定的问题（如"拿 null 换通过"）
+    check_unsourced0: int  # 回环前的未溯源条数，用来判断"是不是改成 null 蒙过去"
     # 本轮为什么停：need_more / enough / budget_exhausted，由 plan 写入（纯推导，不花 token）。
     # 和 steps 必须同时存在——steps 只说"用了几次"，说不出"是额度用完了，还是判断够了"。
     # 这两件事一个字都不能混：前者是半成品结论，后者是可交付结论，可信度差着量级。

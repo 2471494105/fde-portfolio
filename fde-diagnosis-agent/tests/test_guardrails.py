@@ -364,6 +364,97 @@ class RangeClaimTest(unittest.TestCase):
         self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
 
 
+class CheckLoopTest(unittest.TestCase):
+    """结论交出前的自查闸口：verify 从"终点"变成"能回头的检查点"。
+
+    依据是 Claude Agent SDK 的 gather context → take action → verify work → repeat，
+    以及同页那句「providing clearly defined rules for an output, then explaining
+    which rules failed and why」——verify 的产出是失败原因，不是布尔。
+
+    改之前 verify 在循环外，判完就终局。11-17 那次 H1：模型把 2/3 号工位的 rate
+    抄反了，_verify_claims 准确抓到「字段值 0.1139 ≠ 4.84%」，但抓到时已在终点，
+    只能判 FAIL。同一句话当时回喂过去，它自己能改。
+
+    四条必须成立：
+      一、干净的结论不回环（否则每次都多花一轮调用）
+      二、伪引用回环一次，回喂文案里有具体值，不是"引用有误"
+      三、已经回环过就不再回环（防死循环）
+      四、回环后拿 ref=null 换通过要被记下来——这是新开的作弊面
+    """
+
+    PAYLOAD = '{"rate": 0.1139, "ok_rate": 0.0484}'
+
+    def _run_check(self, final, retry=0, notes=None, unsourced0=0):
+        st = {"final": final, "check_retry": retry, "check_notes": list(notes or []),
+              "check_unsourced0": unsourced0,
+              "evidence": [{"result": self.PAYLOAD, "turn": 1, "truncated": False}],
+              "messages": []}
+        return nodes.check(st)
+
+    def test_clean_claim_passes_without_retry(self):
+        out = self._run_check(json.dumps({"conclusion": "x", "claims": [
+            {"text": "2 号工位误判率 11.39%", "value": 11.39, "unit": "%",
+             "ref": "1#rate"}]}, ensure_ascii=False))
+        self.assertEqual(out["check_action"], "pass")
+        self.assertEqual(out["check_retry"], 0)
+        self.assertNotIn("messages", out)
+
+    def test_bad_claim_retries_once_with_reason(self):
+        out = self._run_check(json.dumps({"conclusion": "x", "claims": [
+            {"text": "2 号工位误判率 4.84%", "value": 4.84, "unit": "%",
+             "ref": "1#rate"}]}, ensure_ascii=False))
+        self.assertEqual(out["check_action"], "retry")
+        self.assertEqual(out["check_retry"], 1)
+        msg = out["messages"][-1]["content"]
+        # 回喂必须带具体值：只说"引用有误"，模型只能猜该改哪个数
+        self.assertIn("0.1139", msg)
+        self.assertIn("4.84", msg)
+        self.assertIn("null", msg)
+
+    def test_second_round_does_not_retry_again(self):
+        out = self._run_check(json.dumps({"conclusion": "x", "claims": [
+            {"text": "2 号工位误判率 4.84%", "value": 4.84, "unit": "%",
+             "ref": "1#rate"}]}, ensure_ascii=False), retry=1)
+        self.assertEqual(out["check_action"], "pass")
+        self.assertEqual(out["check_retry"], 1)
+
+    def test_null_swap_after_retry_is_flagged(self):
+        # 回环前 0 条未溯源；回环后把指错的 ref 全改成 null，misquoted 清零了。
+        # 那些数从"指错了"变成"没指"——后者不报错，却比前者更差。
+        out = self._run_check(json.dumps({"conclusion": "x", "claims": [
+            {"text": "2 号工位误判率 4.84%", "value": 4.84, "unit": "%",
+             "ref": None}]}, ensure_ascii=False), retry=1, unsourced0=0)
+        self.assertEqual(out["check_action"], "pass")
+        self.assertTrue(any("不是修正" in n for n in out["check_notes"]))
+
+    def test_non_json_goes_straight_to_verify(self):
+        # 上一轮就没写出合法 JSON，重跑一次大概率还是写不出：不值得为格式再花一轮
+        out = self._run_check("这不是 JSON 结论")
+        self.assertEqual(out["check_action"], "pass")
+
+    def test_route_reads_check_action(self):
+        self.assertEqual(nodes.route_after_check({"check_action": "retry"}), "plan")
+        self.assertEqual(nodes.route_after_check({"check_action": "pass"}), "verify")
+
+    def test_check_notes_reach_final_judgement(self):
+        # check 抓到的"拿 null 换通过"必须进最终 misquoted。
+        # 不并进去的话，它就是个写了没人读的字段，绕法本身静默通过。
+        st = {"final": json.dumps({"conclusion": "x", "claims": [
+            {"text": "误判率 11.39%", "value": 11.39, "unit": "%",
+             "ref": "1#rate"}]}, ensure_ascii=False),
+              "evidence": [{"result": self.PAYLOAD, "turn": 1, "truncated": False}],
+              "turn": 1, "user_msg": "", "tool_names": [], "steps": 0,
+              "check_notes": ["回环后未溯源数字从 0 条涨到 2 条：把指错的 ref 改成 null 不是修正"]}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("chk", model="m", provider="p", base_url="b"):
+                res = nodes.verify(st)
+        finally:
+            trace.RUNS_DIR = old
+        self.assertTrue(any("不是修正" in m for m in res["misquoted"]))
+
+
 class PayloadBudgetTest(unittest.TestCase):
     """证据体积：任何返回都必须压成**合法 JSON**，且不超上限。
 
@@ -619,7 +710,8 @@ class ResultEventContractTest(unittest.TestCase):
     那时重跑的结果已经不一定一样了。
     """
 
-    REQUIRED = {"turn", "intent", "steps", "stop_reason", "tools", "blocked", "misquoted",
+    REQUIRED = {"turn", "intent", "steps", "stop_reason", "check_rounds",
+                "tools", "blocked", "misquoted",
                 "device_ids", "slots", "final", "final_head", "final_text", "cite"}
 
     def test_all_audit_fields_present(self):
@@ -685,11 +777,13 @@ class StopReasonTest(unittest.TestCase):
               "steps": 12}
         self.assertEqual(nodes.route_after_plan(st), "finalize")
 
-    def test_route_sends_enough_to_verify(self):
+    def test_route_sends_enough_to_check(self):
+        # 判断够了不再直冲 verify：先进 check 自查，
+        # 否则模型抄错的数只能等到终点才暴露，那会儿已经没有改的机会了
         st = {"stop_reason": nodes.STOP_ENOUGH,
               "messages": [{"role": "assistant", "content": '{"conclusion": "x"}'}],
               "steps": 3}
-        self.assertEqual(nodes.route_after_plan(st), "verify")
+        self.assertEqual(nodes.route_after_plan(st), "check")
 
     def test_missing_stop_reason_falls_back_to_same_rule(self):
         # 多轮会话从旧 checkpoint 恢复时，state 里还没有这个字段。

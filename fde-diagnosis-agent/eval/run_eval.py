@@ -82,6 +82,10 @@ def judge(traj, state):
     # 只看 steps 分不出"扫满 12 步还是没结论"和"12 步里自己判断够了"——
     # 前者是半成品，后者是可交付结论，可信度差着量级。
     stop_reason = state.get("stop_reason", "")
+    # check 闸口回环过几次：0 = 一次就过，1 = 被拦下后改才对。
+    # 和 misquote_n 必须分开看——只看"没失败"会把"一次就干净"和"改过一次才对"
+    # 混成同一个"没问题"，而后者本身就是模型稳定性的一个指标。
+    check_rounds = int(state.get("check_retry") or 0)
 
     expect = traj["expect_tools"]
     hit = [t for t in expect if t in tools]
@@ -178,6 +182,7 @@ def judge(traj, state):
         "tools": tools,
         "steps": steps,
         "stop_reason": stop_reason,
+        "check_rounds": check_rounds,
         "tool_rate": round(tool_rate, 3),
         "gb_rate": round(gb_rate, 3),
         "kw_rate": round(kw_rate, 3),
@@ -341,6 +346,10 @@ def main():
     # 正常收工（模型自己判断够了）的条数，和上面那个数成对出现：
     # 只看一个数分不出"没发生过预算耗尽"和"根本没统计"。
     enough_n = sum(1 for r in results if r.get("stop_reason") == "enough")
+    # 被 check 拦下、回环一次才通过的条数。0 有两种可能：
+    # 模型本来就没写错，或者 check 根本没生效——后者看 misquote_n 和
+    # "区间引用"那一行是否都为 0 也判断不出来，只能靠 at_check 的实测样本区分。
+    check_n = sum(1 for r in results if r.get("check_rounds"))
 
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
@@ -351,6 +360,7 @@ def main():
     print(f"步数越界      {steps_bad}/{n}   （按用例期望区间判）")
     print(f"预算耗尽      {budget_n}/{n}   （还想查但额度已尽，这几条结论是半成品）")
     print(f"判断够了收工  {enough_n}/{n}   （模型自己判断证据够了，正常结束）")
+    print(f"引用自查回环  {check_n}/{n}   （被 check 拦下、把原因回喂后重出才通过的条数）")
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
     print(f"fc 失败       {fc}/{n}")
@@ -376,6 +386,7 @@ def main():
         "steps_bad": steps_bad,
         "budget_exhausted": budget_n,
         "enough": enough_n,
+        "check_rounds_n": check_n,
         "intent_bad": intent_bad,
         "fc_fail": fc,
         "blocked_n": blocked_n,

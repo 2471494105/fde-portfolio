@@ -149,12 +149,6 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 # 模型判为诊断/查询但输出字段不自洽时的降级说明
 _INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "clarify"}
 
-# 只有这两类走 claims 契约：它们的结论由模型写，一个数字一个 ref。
-# lookup 的结论是程序按模板拼的（数字直接来自工具返回），knowledge 是自由文本，
-# 两者都没承诺过 claims 契约。拿契约去判它们，会把"程序拼的文本"记成
-# "模型不按契约输出"——归因错人，还会让 lookup 类用例恒 FAIL。
-CLAIMS_INTENTS = ("diagnose", "action")
-
 # 意图置信闸的两条线。
 #
 # 低线以下不猜了，直接追问——带着错的理解跑满 8 步是这里最贵的错。
@@ -1368,30 +1362,22 @@ def verify(state):
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。
+    # 这条对**所有**路径生效，不留豁免：Anthropic 的 citations 形状里没有
+    # "某条路径不做引用保证"这种通道，真做不到就该明确声明，而不是关掉检查。
     doc = _parse_claims(final)
-    raw_intent = str(state.get("intent") or "").strip()
-    # 没有 intent（老数据、单测直接构造 state）时按 claims 判：
-    # 跳过校验比误判更危险——"没校验的结论被当成通过"正是下面那段要防的事。
-    claims_path = raw_intent in CLAIMS_INTENTS or not raw_intent
-    if claims_path and doc is not None:
+    # 节点自己排好版的（lookup 的表格）不要用列表渲染覆盖：
+    # claims 给校验层，final_text 给人看，两份各有分工。
+    preset_text = str(state.get("final_text") or "").strip()
+    if doc is not None:
         # 引号修复救回来的要计数：修复是静默的，不记就看不见模型多不守规矩。
         if doc.pop("_repaired", False):
             stats["json_fixed"] = 1
         _verify_claims(doc, ev, stats, blocked, misquoted)
-        final_text = _render_claims(doc)
+        final_text = preset_text or _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,
                    final_len=len(final), **stats)
         return {"final": final, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
-
-    # 非 claims 路径（lookup / knowledge）：结论不是模型按契约写的，
-    # 判它"未按契约输出"是归因错人。这里直接放行，但把 cite_stats 照常交出去，
-    # 让报告能看见"这条路径本来就没有引用统计"，而不是看见一个假的 json_bad。
-    if not claims_path:
-        trace.emit("verify", path="no_claims", intent=state.get("intent"),
-                   final_len=len(final), **stats)
-        return {"final": final, "final_text": final, "blocked": blocked,
-                "misquoted": misquoted, "cite_stats": stats}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
     # 而没校验的结论被当成通过，才是真正危险的地方。
@@ -1412,7 +1398,26 @@ def _pct(v, digits=2):
         return str(v)
 
 
-def _data_block(prof, log):
+def _data_block(prof, log, ev_prof, ev_log):
+    """拼这台设备的档案块，同时把每个数字记成一条 claim。
+
+    为什么要在拼的时候顺手记：文本里的数字和 evidence 里的字段原本毫无绑定，
+    拼接代码抄错字段（把 false_positive_rate 当成 rate）不会有任何报错。
+    而拼的这一行，正是唯一"知道这个数来自哪个字段"的时刻——过了就没了。
+
+    不再是"程序拼文本、校验层另找一份事实"：文本和 claim 出自同一处取值，
+    同一份事实只有一份。
+    """
+    claims = []
+
+    def add(text, value, unit, ref):
+        # 字段缺失时不记 claim：没有值的数字本来就不该出现在结论里，
+        # 记一条 value=None 的 claim 只会让校验层多一条无从判断的条目。
+        if value is None or value == "" or value == "-":
+            return
+        claims.append({"text": text, "value": value, "unit": unit, "ref": ref})
+
+    prof_ref = f"{ev_prof}#"
     lines = [
         f"### {prof['device_id']}（{prof.get('line', '-')} / {prof.get('station', '-')}）",
         "",
@@ -1425,7 +1430,13 @@ def _data_block(prof, log):
         f"| 保养周期 | {prof.get('maintenance_cycle_days', '-')} 天 |",
         f"| 日志条数 | {prof.get('log_count', '-')}（最新 {prof.get('latest_log_at', '-')}） |",
     ]
+    add(f"保养周期 {prof.get('maintenance_cycle_days')} 天",
+        prof.get("maintenance_cycle_days"), "天", prof_ref + "maintenance_cycle_days")
+    add(f"日志条数 {prof.get('log_count')} 条",
+        prof.get("log_count"), "条", prof_ref + "log_count")
+
     if isinstance(log, dict) and "error" not in log:
+        log_ref = f"{ev_log}#"
         lines += [
             "",
             f"最近 7 天（{log.get('time_from', '-')} ~ {log.get('time_to', '-')}）："
@@ -1435,11 +1446,29 @@ def _data_block(prof, log):
             "| 工位 | 判定 | 过杀 | 误判率 |",
             "|---|---|---|---|",
         ]
-        for g in (log.get("groups") or [])[:8]:
+        add(f"共判定 {log.get('total')} 条", log.get("total"), "条", log_ref + "total")
+        add(f"过杀 {log.get('false_positive_count')} 条",
+            log.get("false_positive_count"), "条", log_ref + "false_positive_count")
+
+        rate = log.get("false_positive_rate")
+        add(f"整体误判率 {_pct(rate)}",
+            (round(float(rate) * 100, 2) if isinstance(rate, (int, float)) else rate),
+            "%", log_ref + "false_positive_rate")
+
+        for i, g in enumerate((log.get("groups") or [])[:8]):
             lines.append(
                 f"| {g['key']} | {g['count']} | {g['false_positive']} | {_pct(g['rate'])} |"
             )
-    return "\n".join(lines)
+            add(f"{g['key']} 判定 {g['count']} 条",
+                g.get("count"), "条", f"{log_ref}groups[{i}].count")
+            add(f"{g['key']} 过杀 {g['false_positive']} 条",
+                g.get("false_positive"), "条", f"{log_ref}groups[{i}].false_positive")
+            rate = g.get("rate")
+            add(f"{g['key']} 误判率 {_pct(rate)}",
+                (round(float(rate) * 100, 2) if isinstance(rate, (int, float)) else rate),
+                "%", f"{log_ref}groups[{i}].rate")
+
+    return "\n".join(lines), claims
 
 
 def lookup(state):
@@ -1449,7 +1478,7 @@ def lookup(state):
     「误判分布」并直接给了根因结论——用模板拼能从根上杜绝它替用户补意图。
     """
     ids = (state.get("device_ids") or [])[:3]
-    blocks, evidence, names, steps = [], [], [], 0
+    blocks, evidence, names, steps, claims = [], [], [], 0, []
 
     turn = int(state.get("turn") or 1)
     # 编号沿用 act 那套绝对号（跨轮递增）。lookup 的证据也得有号：
@@ -1458,9 +1487,9 @@ def lookup(state):
     base = len(state.get("evidence") or [])
     for d in ids:
         prof = query_device_profile(d)
+        prof_no = base + len(evidence) + 1
         evidence.append({"tool": "query_device_profile", "args": {"device_id": d},
-                         "result": prof, "turn": turn,
-                         "ev_no": base + len(evidence) + 1})
+                         "result": prof, "turn": turn, "ev_no": prof_no})
         names.append("query_device_profile")
         steps += 1
         if isinstance(prof, dict) and "error" in prof:
@@ -1468,13 +1497,15 @@ def lookup(state):
             blocks.append(f"### {d}\n\n未查到这台设备。当前库里有：{', '.join(known)}")
             continue
         log = query_defect_log(d, group_by="station")
+        log_no = base + len(evidence) + 1
         evidence.append({"tool": "query_defect_log",
                          "args": {"device_id": d, "group_by": "station"},
-                         "result": log, "turn": turn,
-                         "ev_no": base + len(evidence) + 1})
+                         "result": log, "turn": turn, "ev_no": log_no})
         names.append("query_defect_log")
         steps += 1
-        blocks.append(_data_block(prof, log))
+        text, block_claims = _data_block(prof, log, prof_no, log_no)
+        blocks.append(text)
+        claims.extend(block_claims)
 
         # 工单也属于"这台设备的数据"，在这里一并给出来。
         # 之前这里只查档案与误判统计，导致用户问「上次那个工单处理了吗」被判成 lookup 后
@@ -1483,9 +1514,10 @@ def lookup(state):
         # 刻意不渲染 root_cause 全文：lookup 的合同是"不做根因判断"，
         # 把根因描述摆进给用户的文本里，等于变相给了结论。
         wo = query_work_order(device_id=d)
+        wo_no = base + len(evidence) + 1
         evidence.append({"tool": "query_work_order",
                          "args": {"device_id": d}, "result": wo, "turn": turn,
-                         "ev_no": base + len(evidence) + 1})
+                         "ev_no": wo_no})
         names.append("query_work_order")
         steps += 1
         if wo.get("state") == "found":
@@ -1495,6 +1527,9 @@ def lookup(state):
                 for o in wo["orders"]
             )
             blocks.append(f"### {d} 历史工单（{wo['count']} 张）\n\n{lines}")
+            claims.append({"text": f"历史工单 {wo['count']} 张",
+                           "value": wo["count"], "unit": "张",
+                           "ref": f"{wo_no}#count"})
         else:
             blocks.append(f"### {d} 历史工单\n\n{wo.get('note', '没有工单记录')}")
 
@@ -1503,8 +1538,19 @@ def lookup(state):
         "\n\n---\n以上是设备档案、最近 7 天的误判统计与历史工单，**没有做根因判断**。"
         "需要排查原因的话，说一句现象（哪类缺陷、从什么时候开始、哪个班次更重），我再往下查。"
     )
-    trace.emit("lookup", device_ids=ids, blocks=len(blocks), steps=steps)
-    return {"final": body + tail, "evidence": evidence, "tool_names": names, "steps": steps}
+    # final 走 claims 契约（给校验层），final_text 保留表格（给人看）。
+    # 两份出自同一处取值：拼这一行的时候就知道这个数来自哪个字段，
+    # 所以"文本里的数字"和"ref"不可能不一致——它们不是各算一遍。
+    doc = {
+        "conclusion": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。",
+        "claims": claims,
+        "advice": [],
+    }
+    trace.emit("lookup", device_ids=ids, blocks=len(blocks), steps=steps,
+               claims=len(claims))
+    return {"final": json.dumps(doc, ensure_ascii=False),
+            "final_text": body + tail,
+            "evidence": evidence, "tool_names": names, "steps": steps}
 
 
 KNOWLEDGE_PROMPT = """你在回答视觉检测设备的规则/标准/含义类问题。

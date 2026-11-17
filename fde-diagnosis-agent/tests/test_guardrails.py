@@ -1005,6 +1005,50 @@ class EvidenceNumberingTest(unittest.TestCase):
         self.assertEqual(len(out["evidence"]), 3)
 
 
+class LookupClaimsTest(unittest.TestCase):
+    """lookup 的每个数字都要有 claim，且 ref 必须和取值出自同一处。
+
+    lookup 没有模型介入，所以这里防的不是"模型编造"，而是
+    **"拼接代码抄错字段"**——把 false_positive_rate 当成 rate 不会有任何报错：
+    表格照常好看，数字照常是个数字，用户照常信。
+    """
+
+    PROF = {"device_id": "CX-104", "maintenance_cycle_days": 90, "log_count": 200,
+            "camera_model": "CV-X450"}
+    LOG = {"total": 107, "false_positive_count": 56, "false_positive_rate": 0.5234,
+           "groups": [{"key": "1号工位", "count": 62, "false_positive": 29,
+                       "rate": 0.4677}]}
+
+    def _evidence(self):
+        return [
+            {"ev_no": 4, "tool": "query_device_profile",
+             "result": json.dumps(self.PROF, ensure_ascii=False)},
+            {"ev_no": 5, "tool": "query_defect_log",
+             "result": json.dumps(self.LOG, ensure_ascii=False)},
+        ]
+
+    def test_every_claim_verifies(self):
+        text, claims = nodes._data_block(self.PROF, self.LOG, 4, 5)
+        stats, blocked, misquoted = nodes._new_stats(), [], []
+        nodes._verify_claims({"claims": claims}, self._evidence(),
+                             stats, blocked, misquoted)
+        self.assertEqual(misquoted, [],
+                         f"lookup 自己的 claim 过不了自己的校验：{misquoted}")
+        self.assertEqual(stats["cited_ok"], len(claims))
+        self.assertTrue("90 天" in text)       # 表格里的数字和 claim 是同一个值
+
+    def test_wrong_ref_is_caught(self):
+        # 反向断言：把 ref 指向同一条证据里的另一个字段，必须判失败。
+        # 少了这条，"所有 ref 都指向证据根"也能让上一条通过。
+        _, claims = nodes._data_block(self.PROF, self.LOG, 4, 5)
+        bad = [dict(c) for c in claims]
+        bad[0]["ref"] = "4#log_count"        # 90 天 指向 200
+        stats, blocked, misquoted = nodes._new_stats(), [], []
+        nodes._verify_claims({"claims": bad}, self._evidence(),
+                             stats, blocked, misquoted)
+        self.assertTrue(misquoted, "ref 指向了字段、但值对不上，必须判失败")
+
+
 class ResultEventContractTest(unittest.TestCase):
     """result 事件的两个出口（CLI/评测 与 Web 流式）必须写同样的字段。
 

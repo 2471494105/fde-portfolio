@@ -6,7 +6,15 @@
 - 终局正确率：结论关键词命中率
 - fc 失败率：工具调用参数解析失败 / 未知工具的次数
 
-语义正确 = 工具命中、维度命中、终局命中、未越禁用工具、步数在区间、无未溯源数字、无 fc 失败。
+语义正确 = 工具命中、维度命中、终局命中、未越禁用工具、步数在区间、
+无伪引用、无 fc 失败、幂等成立（或环境不可达标灰）、意图判对、该反问时反问、
+无禁用表述、结论落点齐全、多轮引用成立。
+
+注意三个"标灰不判死"的口径，它们都不是失败：
+- `ref` 写 null（有未溯源数字）——区分不了"我算的"和"我编的"
+- 建单工具连不上（幂等未验证）——那是环境没起，不是模型没做
+- 证据超长被截断（cite_cut）——返回体装不下，无从核验
+标灰的意思是"这项判不了"，不是"这项通过了"，所以报告里各有独立一行。
 """
 
 import hashlib
@@ -58,6 +66,51 @@ def _norm(text):
     return re.sub(r"\s+", "", text or "")
 
 
+def _retry_after(text):
+    """从 429 消息里抠出服务端建议的等待秒数。
+
+    中转站会明说「请求太频繁，请 11 秒后再试」，中英两版都出现过。
+    照它说的等，比拍一个固定值稳：拍短了刚睡醒又撞，拍长了整份评测白等。
+    抠不到就退 12 秒——比常见的最小间隔略长。上限 60 秒，
+    避免一次异常的报错把整轮评测卡住。
+    """
+    pats = (r"(\d+(?:\.\d+)?)\s*秒后再试", r"retry in (\d+(?:\.\d+)?)\s*second")
+    for p in pats:
+        m = re.search(p, text or "", re.I)
+        if m:
+            return min(float(m.group(1)) + 2.0, 60.0)
+    return 12.0
+
+
+def _result_dict(raw):
+    """把 evidence 里那条压缩文本还原成 dict。
+
+    为什么不能直接当 dict 用：act 存进 evidence 的是 _payload 压过的**文本**
+    （"[query_work_order{device_id=CX-101}] {json...}"），不是工具的原始返回对象。
+
+    原来的幂等判据写的是 `isinstance(e["result"], dict)`，对每一条都不成立——
+    `orders` 永远为空、`deduped_ok` 永远 False。W2 从这条判据写下那天起就注定 FAIL，
+    与模型做没做幂等无关。这比"模型做错了"更隐蔽：报告上它长得像一个稳定的失败用例。
+
+    再往下，`fc_fail` 也用了同一个 dict 判断，所以"工具调用格式错"这个指标
+    也一次都没真正生效过——一直显示 0 不代表没发生，代表没测。
+    """
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    # 前缀是 "[工具名]" 或 "[工具名{参数指纹}]"，返回体在最后一段花括号里。
+    # 指纹本身也带花括号，所以从右往左试，第一个能解析成功的才是返回体。
+    for i in reversed([i for i, ch in enumerate(raw) if ch == "{"]):
+        try:
+            obj = json.loads(raw[i:])
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
 def judge(traj, state):
     tools = state.get("tool_names", [])
     final = state.get("final", "") or ""
@@ -106,26 +159,58 @@ def judge(traj, state):
     lo, hi = traj["steps_range"]
     steps_ok = lo <= steps <= hi
 
+    # evidence 里存的是文本不是 dict，原来那个 isinstance 判断让它永远不成立，
+    # 于是"工具调用格式错"这个指标一直是 0——不是没发生，是没测。
     fc_fail = any(
-        isinstance(e.get("result"), dict) and ("参数 JSON 解析失败" in str(e["result"])
-                                               or "未知工具" in str(e["result"]))
+        ("参数 JSON 解析失败" in str(e.get("result"))
+         or "未知工具" in str(e.get("result")))
         for e in state.get("evidence", [])
     )
 
-    # 幂等验证：直接看建单工具返回的 deduped 字段，比查结论关键词准
+    # 幂等验证：直接看建单工具返回的 deduped 字段，比查结论关键词准。
+    # 但"建单没成功"有两种原因，判据不能只认一个好结果：
+    #   环境不可达（mock QMS 没起）—— 评测环境的问题，判不了模型对错
+    #   连上了但没去重         —— 这才是模型/业务的问题
+    # 只找 order_id + deduped 的话，第一种会被报成"未命中幂等"，
+    # 而 W2 的实际情形正是这样：模型发现 QMS 挂了、如实报告、
+    # 还指出"已有两张同类工单不必重复新建"，行为完全正确却被判失败。
     deduped_ok = True
+    deduped_env = ""
     if traj.get("expect_deduped"):
-        orders = [
-            e["result"] for e in state.get("evidence", [])
-            if isinstance(e.get("result"), dict) and e["result"].get("order_id")
+        results = [
+            _result_dict(e.get("result")) for e in state.get("evidence", [])
+            if (_result_dict(e.get("result")) or {}).get("order_id")
         ]
-        deduped_ok = bool(orders) and orders[-1].get("deduped") is True
+        errs = [
+            (_result_dict(e.get("result")) or {}).get("error")
+            for e in state.get("evidence", [])
+            if (_result_dict(e.get("result")) or {}).get("error")
+        ]
+        if not results and errs:
+            # 一次都没连上：幂等这项无从验证。标灰——不计失败，也不冒充通过。
+            deduped_env = str(errs[-1])[:120]
+        else:
+            deduped_ok = bool(results) and results[-1].get("deduped") is True
 
     # 意图层：考的是"有没有听懂用户在问什么"，不是"诊断得对不对"
     intent_expect = traj.get("expect_intent")
     intent_ok = True
     if intent_expect:
         intent_ok = state.get("intent") == intent_expect
+
+    # 「该不该反问」也得判，不能只写在用例里。
+    # `expect_ask` 27 条用例全都有这个字段、judge 却从来没读过——
+    # 于是 I1/I4/I7 三条"信息不全"用例是**碰巧过**的：它们不期望工具、
+    # 也没有关键词，模型哪怕自己猜一台设备去查，照样判 OK。
+    # 假绿灯就是这样长出来的：期望写下了，但没有任何一行代码去兑现它。
+    # 判据用意图而不是字面：该反问时 intent 必须落到 clarify。
+    ask_expect = traj.get("expect_ask")
+    ask_ok = True
+    ask_detail = ""
+    if ask_expect:
+        ask_ok = state.get("intent") == "clarify"
+        if not ask_ok:
+            ask_detail = f"该反问却直接作答(intent={state.get('intent') or '空'})"
 
     forbid_words = [w for w in traj.get("forbid_words", []) if _norm(w) in flat]
 
@@ -162,6 +247,7 @@ def judge(traj, state):
         and not fc_fail
         and deduped_ok
         and intent_ok
+        and ask_ok
         and not forbid_words
         and not req_miss
         and round_ok
@@ -171,6 +257,8 @@ def judge(traj, state):
     reasons = []
     if not intent_ok:
         reasons.append(f"意图判错({state.get('intent') or '空'}，应为{intent_expect})")
+    if not ask_ok:
+        reasons.append(ask_detail)
     if forbid_words:
         reasons.append(f"出现禁用表述({','.join(forbid_words)})")
     if tool_rate < 1.0:
@@ -199,6 +287,13 @@ def judge(traj, state):
         "type": traj["type"],
         "intent": state.get("intent", ""),
         "intent_ok": intent_ok,
+        # 该反问时有没有反问。和 intent_ok 分开记：意图判对但懒得追问，
+        # 和意图就判错，是两种不同的毛病。
+        "ask_ok": ask_ok,
+        # 建单工具连不上时这里会填上错误原文，表示"幂等这项没验证"。
+        # 空字符串 = 真的验证过（通过或没通过）。混在一起就分不出
+        # "没去重"和"没连上"，而这两种要修的东西完全不同。
+        "deduped_env": deduped_env,
         # 低置信不是判错：它是模型主动报的"我不确定"，用户会看到一行
         # "按「X」理解"或被改成追问。判错看 intent_ok，两个口径别混——
         # 混在一起会让"模型诚实"和"模型判错"变成同一个数字。
@@ -273,32 +368,43 @@ def main():
     got = {}
 
     def one(traj):
-        try:
-            turns = traj.get("turns")
-            if turns:
-                # 多轮必须共用 checkpointer：use_checkpoint=False 时 build_graph
-                # 每轮都新建一张图，上一轮的 messages / device_ids 全丢，
-                # 第 2 轮等于从零开始——那样"多轮用例"实际测的还是单轮，
-                # 而这正是它要防的那个假绿灯。
-                tid = f"eval-{traj['id']}-{int(time.time() * 1000)}"
-                state = None
-                for t in turns:
-                    state = run(t, thread_id=tid, trace_run=False,
-                                use_checkpoint=True)
-            else:
-                state = run(traj["input"], trace_run=False, use_checkpoint=use_ckpt)
-        except Exception as exc:
-            return traj, None, {
-                "id": traj["id"], "type": traj["type"], "semantic_ok": False,
-                "reasons": [f"运行异常:{type(exc).__name__}: {exc}"],
-                "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
-                "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
-                "trace_ok": False, "fc_fail": True,
-                "cite_stats": {}, "round_ok": False, "round_detail": "",
-                "turns": len(traj.get("turns") or []),
-                "final_head": "",
-            }
-        return traj, state, judge(traj, state)
+        # 429 是中转站限流，不是模型的问题，直接判失败会把"跑法"记成"能力"。
+        # I2/T2 就被这样冤枉过一次：同一份代码，串行补跑就对了。
+        # 只重试这一类错误、且只重试一次——超时、JSON 错该判就判，
+        # 无上限重试会让"平均耗时"这个数变成假的。
+        for attempt in (0, 1):
+            try:
+                turns = traj.get("turns")
+                if turns:
+                    # 多轮必须共用 checkpointer：use_checkpoint=False 时 build_graph
+                    # 每轮都新建一张图，上一轮的 messages / device_ids 全丢，
+                    # 第 2 轮等于从零开始——那样"多轮用例"实际测的还是单轮，
+                    # 而这正是它要防的那个假绿灯。
+                    tid = f"eval-{traj['id']}-{int(time.time() * 1000)}"
+                    state = None
+                    for t in turns:
+                        state = run(t, thread_id=tid, trace_run=False,
+                                    use_checkpoint=True)
+                else:
+                    state = run(traj["input"], trace_run=False, use_checkpoint=use_ckpt)
+                return traj, state, judge(traj, state)
+            except Exception as exc:
+                name, msg = type(exc).__name__, str(exc)
+                is_429 = "RateLimitError" in name or "429" in msg
+                if attempt == 0 and is_429:
+                    time.sleep(_retry_after(msg))
+                    continue
+                return traj, None, {
+                    "id": traj["id"], "type": traj["type"], "semantic_ok": False,
+                    "intent_ok": True, "ask_ok": True, "deduped_env": "",
+                    "reasons": [f"运行异常:{name}: {msg}"],
+                    "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
+                    "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
+                    "trace_ok": False, "fc_fail": True,
+                    "cite_stats": {}, "round_ok": False, "round_detail": "",
+                    "turns": len(traj.get("turns") or []),
+                    "final_head": "",
+                }
 
     def record(traj, state, r):
         with lock:
@@ -432,6 +538,14 @@ def main():
                    if (r.get("intent_conf") if r.get("intent_conf") is not None else 1.0) < CONF_OK)
     print(f"意图低置信    {conf_low}/{n}   （带'按X理解'或改成追问，不是判错）")
     print(f"fc 失败       {fc}/{n}")
+    # 该反问却没反问：信息不全时直接作答，用户会以为它真知道了。
+    # 和"意图判错"分开——意图判对了但懒得追问，是另一种毛病。
+    ask_bad = sum(1 for r in results if r.get("ask_ok") is False)
+    # 幂等"没验证"和"没通过"必须分开报：前者是环境没起，
+    # 后者是业务真的没去重。混成一个数，修错地方都不知道。
+    dedup_grey = sum(1 for r in results if r.get("deduped_env"))
+    print(f"该反问未反问  {ask_bad}/{n}   （信息不全时该追问，直接作答等于假装知道）")
+    print(f"幂等未验证    {dedup_grey}/{n}   （建单工具连不上，这项判不了，标灰放行）")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     print(f"服务失败      {svc_n}/{n}   （整理答案时模型调用失败，结论是半成品，不计入引用写错）")
@@ -465,6 +579,8 @@ def main():
         "enough": enough_n,
         "check_rounds_n": check_n,
         "intent_bad": intent_bad,
+        "ask_bad": ask_bad,
+        "deduped_grey": dedup_grey,
         "intent_conf_low_n": conf_low,
         "fc_fail": fc,
         "blocked_n": blocked_n,

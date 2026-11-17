@@ -229,7 +229,11 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": [],
         "final_keywords": ["冲突", "不一致", "确认"],
-        "expect_ask": True,
+        # 这条不该反问：用户问的就是"该设多少"，缺的是**手册里的数**，
+        # 不是"你要查哪台设备"。正确路径是查手册 → 发现口径冲突 → 报冲突并请确认。
+        # 把 expect_ask 写成 True 会把"直接回答"判成错，
+        # 而直接回答恰恰是这里唯一正确的动作。
+        "expect_ask": False,
         "steps_range": (2, 10),
     },
     {

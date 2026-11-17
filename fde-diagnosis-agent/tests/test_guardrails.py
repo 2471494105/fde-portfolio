@@ -310,10 +310,12 @@ class ClaimContractTest(unittest.TestCase):
     GROUPS = ('{"false_positive_rate": 0.1541, "groups": ['
               '{"key": "1号工位", "count": 34, "rate": 0.5882}]}')
 
-    def _verify(self, doc, *payloads, truncated=False, tool="query_defect_log"):
+    def _verify(self, doc, *payloads, truncated=False, tool="query_defect_log",
+                sigs=None):
         final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
         ev = [{"result": p, "tool": tool, "turn": 1,
-               "truncated": truncated, "ev_no": i + 1}
+               "truncated": truncated, "ev_no": i + 1,
+               "sig": (sigs[i] if sigs else None)}
               for i, p in enumerate(payloads)]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
@@ -389,6 +391,55 @@ class ClaimContractTest(unittest.TestCase):
         self.assertGreaterEqual(res["cite_stats"]["ref_bad"], 1)
         self.assertEqual(res["cite_stats"]["cited_ok"], 0)
         self.assertTrue(any("工具名#字段路径" in m for m in res["misquoted"]))
+
+    def test_multi_call_without_fingerprint_reports_ambiguity(self):
+        """同一工具按两种参数各调一次、ref 又没写指纹 → 报"歧义"，不报"值不符"。
+
+        A2 的真实形状：4 次 query_defect_log，模型说"2号工位 36.36%"，
+        ref 只写 groups[0].rate。判据取到 defect_type 那次的 0.6481，
+        报出来是"字段值 0.6481 ≠ 36.36%"，读起来像模型算错。
+        实际该说的是"你没写指哪一次"——两种修法完全不同（改 prompt vs 补指纹）。
+        """
+        res = self._verify(
+            {"conclusion": "x", "claims": [
+                {"text": "2号工位误判率 36.36%", "value": 36.36, "unit": "%",
+                 "ref": "query_defect_log#groups[0].rate"}]},
+            '{"groups": [{"key": "划痕", "count": 54, "rate": 0.6481}]}',
+            '{"groups": [{"key": "2号工位", "count": 32, "rate": 0.3438}]}',
+            sigs=["group_by=defect_type", "group_by=station"])
+        self.assertGreaterEqual(res["cite_stats"]["ref_ambiguous"], 1)
+        self.assertEqual(res["cite_stats"]["path_bad"], 0)
+        self.assertTrue(any("引用歧义" in m for m in res["misquoted"]))
+        self.assertTrue(any("参数指纹" in m for m in res["misquoted"]))
+
+    def test_multi_call_with_fingerprint_still_reports_value_mismatch(self):
+        """反向断言：写了指纹就不该被"歧义"兜住。
+
+        指纹把候选收窄到一组，判据确实知道它指哪次——这时值还对不上，
+        就是真编造，必须报"字段值 ≠"而不是"歧义"。否则给模型留了条后路：
+        写个命中不了的指纹，就能把编造洗成"指不清"。
+        """
+        res = self._verify(
+            {"conclusion": "x", "claims": [
+                {"text": "2号工位误判率 99%", "value": 99, "unit": "%",
+                 "ref": "query_defect_log{group_by=station}#groups[0].rate"}]},
+            '{"groups": [{"key": "划痕", "count": 54, "rate": 0.6481}]}',
+            '{"groups": [{"key": "2号工位", "count": 32, "rate": 0.3438}]}',
+            sigs=["group_by=defect_type", "group_by=station"])
+        self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertEqual(res["cite_stats"]["ref_ambiguous"], 0)
+        self.assertTrue(any("≠ 99%" in m for m in res["misquoted"]))
+
+    def test_single_call_without_fingerprint_is_not_ambiguous(self):
+        """只有一次调用时不存在歧义，仍按值判——别把单次的不符也洗成"指不清"。"""
+        res = self._verify(
+            {"conclusion": "x", "claims": [
+                {"text": "判定 99 条", "value": 99, "unit": "条",
+                 "ref": "query_defect_log#groups[0].count"}]},
+            '{"groups": [{"key": "划痕", "count": 54, "rate": 0.6481}]}',
+            sigs=["group_by=defect_type"])
+        self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertEqual(res["cite_stats"]["ref_ambiguous"], 0)
 
     def test_no_json_is_failure_not_silent_pass(self):
         # 旧文本解析路径已删。模型不按契约输出时判失败，不再静默退回——

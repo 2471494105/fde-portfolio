@@ -1278,6 +1278,12 @@ def _new_stats():
             # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
             # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
             "range_ok": 0, "range_bad": 0,
+            # ref_ambiguous  同一工具本轮按多种参数各调过，ref 又没写参数指纹，
+            #                模型引的可能是另一组的同一个字段——判据不知道指哪次。
+            #                这类仍计入失败（伪引用不能放行），但和"值对不上"分开计，
+            #                否则报出来的数字会指向错误的地方（实测 A2：报 0.0667≠36.36%，
+            #                看着像模型算错，实际是拿 defect_type 那次的候选去比 station）
+            "ref_ambiguous": 0,
             # quote_ok   引文型 claim：模型抄的原文确实在 ref 指向的那段里
             # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
             # bare_conclusion  结论里写了数字、claims 为空 → 没有一个数字可核验
@@ -1557,8 +1563,27 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             stats["cited_path"] += 1
             stats["cited_ok"] += 1
         else:
-            stats["path_bad"] += 1
-            misquoted.append(f"{text}（字段值 {hits[0]} ≠ {v}{unit}）")
+            # "值对不上"有两种成因，修法完全不同：
+            #   ① 模型真编了数               → 改 prompt / 换模型
+            #   ② 它引的是另一组的同一个字段 → 让它补参数指纹
+            # 判据拿得到多个候选却不知道指哪次时，报出来的是"字段值 0.0667 ≠ 36.36%"，
+            # 读起来像①，实际是②。A2 就栽在这：模型查过 group_by=station 却把
+            # defect_type 那次的 rate 拿去比，人得翻三个脚本才知道该改哪。
+            # 条件只认"没写指纹 + 候选来自多种参数"，两种情况都不占时仍按值判。
+            sigs = {cand.get("sig") for cand in cands if cand.get("sig")}
+            if not sig and len(sigs) > 1:
+                stats["ref_ambiguous"] += 1
+                shown = ", ".join(str(g) for g in hits[:3])
+                if len(hits) > 3:
+                    shown += f" 等 {len(hits)} 个"
+                misquoted.append(
+                    f"{text}（引用歧义：{tool} 本轮按 {len(sigs)} 组参数各调过一次，"
+                    f"ref 没写参数指纹，候选值 {shown} 都不是 {v}{unit}。"
+                    f"要么补指纹指清那一次，要么这个数确实不在任何一次返回里）"
+                )
+            else:
+                stats["path_bad"] += 1
+                misquoted.append(f"{text}（字段值 {hits[0]} ≠ {v}{unit}）")
 
     stats["cited"] = stats["cited_ok"]
     stats["ev"] = len(ev)

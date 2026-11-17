@@ -548,6 +548,11 @@ def main():
     print(f"幂等未验证    {dedup_grey}/{n}   （建单工具连不上，这项判不了，标灰放行）")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
+    # "引用歧义"是"引用写错"的子集：同一工具按多种参数各调过、ref 又没写参数指纹，
+    # 判据不知道它指哪一次。仍计入失败，单独一行是为了让读报告的人先看到"该补指纹"，
+    # 而不是"模型算错了"——两种修法完全不同（改 prompt vs 改引用格式）。
+    amb_n = sum((r.get("cite_stats") or {}).get("ref_ambiguous", 0) for r in results)
+    print(f"引用歧义      {amb_n} 条引用   （同一工具多次调用且未写指纹，判据无法确定指哪次；已计入引用写错）")
     print(f"服务失败      {svc_n}/{n}   （整理答案时模型调用失败，结论是半成品，不计入引用写错）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")

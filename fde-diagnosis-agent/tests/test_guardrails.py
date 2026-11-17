@@ -1049,6 +1049,58 @@ class LookupClaimsTest(unittest.TestCase):
         self.assertTrue(misquoted, "ref 指向了字段、但值对不上，必须判失败")
 
 
+class KnowledgeQuoteTest(unittest.TestCase):
+    """knowledge 的结论是「手册规定 X」，风险不是数字编了，是**出处编了**。
+
+    引文型 claim 让模型抄一段原文，程序回原文核对：
+    Anthropic 的 `cited_text` 靠"模型给位置、程序去文档里切"来保证正确，
+    我们让模型自己抄，就只能靠"抄完再查一遍"来保证。
+    """
+
+    CHUNK = ("当光源亮度设定低于 70 时，暗色工件边缘对比度下降约 15%，"
+             "此时边缘类缺陷的过杀率会明显上升。")
+
+    def _ev(self):
+        return [{"ev_no": 7, "tool": "search_manual",
+                 "result": json.dumps(
+                     {"chunks": [{"text": self.CHUNK, "source_doc": "CV-X 手册",
+                                  "section": "3.2"}]}, ensure_ascii=False)}]
+
+    def _run(self, claims):
+        stats, blocked, misquoted = nodes._new_stats(), [], []
+        nodes._verify_claims({"claims": claims}, self._ev(), stats, blocked, misquoted)
+        return stats, blocked, misquoted
+
+    def test_quote_in_source_passes(self):
+        # 允许引多段：两段都是原文，用省略号缝起来也算过
+        claims = [{"text": "亮度低于 70 时对比度下降 15%",
+                   "quote": "光源亮度设定低于 70 时……对比度下降约 15%",
+                   "ref": "7#chunks[0].text"}]
+        stats, blocked, misquoted = self._run(claims)
+        self.assertEqual(misquoted, [], f"真原文被当成假的：{misquoted}")
+        self.assertEqual(stats["quote_ok"], 1)
+
+    def test_drifted_quote_is_caught(self):
+        # 反向断言：把原文的 70 写成 65，这句话在片段里就不存在了
+        claims = [{"text": "亮度低于 65 时对比度下降",
+                   "quote": "光源亮度设定低于 65 时", "ref": "7#chunks[0].text"}]
+        stats, blocked, misquoted = self._run(claims)
+        self.assertTrue(misquoted, "引文被改了一个数字，必须判失败")
+        self.assertEqual(stats["quote_bad"], 1)
+
+    def test_ref_to_number_cannot_back_quote(self):
+        # 反向断言：ref 指向一个数值，那里没有"原文"可引。
+        # 少了这条，"引文随便挂到任何字段上"也能让前两条里的一条通过。
+        claims = [{"text": "亮度低于 70 时对比度下降",
+                   "quote": "光源亮度设定低于 70 时",
+                   "ref": "7#chunks[0].source_doc"}]
+        stats, blocked, misquoted = self._run(claims)
+        # source_doc 也是字符串，这里换成真正的数值字段再测一次
+        claims[0]["ref"] = "7#chunks[0].value"
+        stats, blocked, misquoted = self._run(claims)
+        self.assertTrue(misquoted, "ref 指向数值字段，撑不住一句引文")
+
+
 class ResultEventContractTest(unittest.TestCase):
     """result 事件的两个出口（CLI/评测 与 Web 流式）必须写同样的字段。
 

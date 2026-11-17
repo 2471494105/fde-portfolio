@@ -328,6 +328,11 @@ def main():
     cite_hit = sum((r.get("cite_stats") or {}).get("cited_ok", 0) for r in results)
     cite_qty = sum((r.get("cite_stats") or {}).get("qty", 0) for r in results)
     cite_rate = (cite_hit / cite_qty) if cite_qty else 0.0
+    # 引文型 claim（knowledge）：模型抄的那句原文，回原文核对的结果。
+    # 单独一行、不和"明确出处率"混：那一行的分母是"带数字的事实"，
+    # 而 knowledge 的结论多数压根没有数字——混在一起会让两条路径都读不准。
+    quote_ok = sum((r.get("cite_stats") or {}).get("quote_ok", 0) for r in results)
+    quote_bad = sum((r.get("cite_stats") or {}).get("quote_bad", 0) for r in results)
     # 证据超长被压缩、字段没送进去：这类引用无法核验，但不是模型写错。
     # 单独计数，否则它会躲在"引用写错"里，把证据问题报成模型问题。
     cite_cut = sum((r.get("cite_stats") or {}).get("cite_cut", 0) for r in results)
@@ -358,6 +363,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
     print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
+    print(f"引文核对      {quote_ok} 成 / {quote_bad} 败   （模型抄的原文能否在片段里逐字找到）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
     print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")

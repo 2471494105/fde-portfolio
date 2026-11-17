@@ -1148,7 +1148,16 @@ def _render_claims(doc):
         t = str(c.get("text") or "").strip()
         if not t:
             continue
-        mark = "" if c.get("ref") else "[无出处]"
+        # 编号要跟着这句话走。只记在报告里，用户看到的就是一个没有出处的数字——
+        # 而"看得到出处"才是这套契约对用户的全部意义。
+        ref = str(c.get("ref") or "")
+        m = re.match(r"^\s*(\d{1,3})#", ref)
+        if m:
+            mark = f"[{m.group(1)}]"
+        elif not ref:
+            mark = "[无出处]"
+        else:
+            mark = "[出处格式错]"
         parts.append(f"- {t}{mark}")
     for a in doc.get("advice") or []:
         a = str(a).strip()
@@ -1178,7 +1187,81 @@ def _new_stats():
             "json_fixed": 0,
             # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
             # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
-            "range_ok": 0, "range_bad": 0}
+            "range_ok": 0, "range_bad": 0,
+            # quote_ok   引文型 claim：模型抄的原文确实在 ref 指向的那段里
+            # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
+            "quote_ok": 0, "quote_bad": 0}
+
+
+def _norm_quote(s):
+    """比对引文时抹掉排版差异，不抹内容。
+
+    抹空白和全角半角是必须的：模型抄中文原文时，空格和标点全半角最容易漂，
+    这类漂移不代表"这句话不在原文里"。但只到这一步——连用词、语序都能抹的话，
+    那就不叫核对了。
+    """
+    s = re.sub(r"\s+", "", str(s))
+    for a, b in (("，", ","), ("。", "."), ("；", ";"), ("：", ":"),
+                 ("（", "("), ("）", ")"), ("“", '"'), ("”", '"'),
+                 ("【", "["), ("】", "]")):
+        s = s.replace(a, b)
+    return s
+
+
+def _verify_quote(c, text, quote, by_no, stats, blocked, misquoted):
+    """引文型 claim：模型说"这段原文在这个片段里"，程序回原文核对。
+
+    数字型 claim 问的是"这个数在不在这个字段"，引文型问的是"这句话在不在这份原文"。
+    后者才是 knowledge 类结论的主要风险：不是数字编了，而是「手册规定 X」这句话
+    手册根本没写——它连数字都可能是对的，只是出处是假的。
+
+    允许引多段：Anthropic 的做法是模型只给位置、程序去文档里切，所以 cited_text
+    永远正确；我们让模型自己抄，就必须接受它引两处的情况。按省略号/换行拆开，
+    每一段都必须真是原文——引多段可以，编一段不行。
+    """
+    ref = c.get("ref")
+    if not ref:
+        stats["unsourced"] += 1
+        blocked.append(text or quote[:40])
+        return
+    m = re.match(r"^\s*(\d{1,3})#(.+?)\s*$", str(ref))
+    if not m:
+        stats["ref_bad"] += 1
+        misquoted.append(f"{text}（出处格式错:{ref}）")
+        return
+    k, path = int(m.group(1)), m.group(2)
+    e = by_no.get(k)
+    if e is None:
+        stats["cite_oob"] += 1
+        blocked.append(f"{text}（证据 {k} 不在本轮可见范围）")
+        return
+    obj = _load_obj(e)
+    if obj is _MISS:
+        stats["ref_bad"] += 1
+        misquoted.append(f"{text}（证据 {k} 不是结构化返回）")
+        return
+    got = _get_path(obj, path)
+    if got is _MISS:
+        if e.get("truncated"):
+            stats["cite_cut"] += 1
+            blocked.append(f"{text}（证据 {k} 返回体过大已压缩，该字段未保留）")
+        else:
+            stats["path_miss"] += 1
+            misquoted.append(
+                f"{text}（证据 {k} 是 {e.get('tool', '?')}，其中没有字段 {path}）")
+        return
+    if not isinstance(got, str):
+        # 引文必须有原文可核。ref 指到一个数值，就没有"原文"这东西可引。
+        stats["quote_bad"] += 1
+        misquoted.append(f"{text}（ref 指向的不是原文，撑不住一句引文）")
+        return
+    segs = [s for s in re.split(r"…+|\.{3,}|\n", quote) if s.strip()]
+    bad = [s for s in segs if _norm_quote(s) not in _norm_quote(got)]
+    if bad:
+        stats["quote_bad"] += 1
+        misquoted.append(f"{text}（引文在 {k}#{path} 里找不到：{bad[0][:28]}）")
+    else:
+        stats["quote_ok"] += 1
 
 
 def _verify_claims(doc, ev, stats, blocked, misquoted):
@@ -1204,8 +1287,13 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         text = str(c.get("text") or "").strip()
         unit = str(c.get("unit") or "").strip()
         v = c.get("value")
+        quote = str(c.get("quote") or "").strip()
+        if v is None and quote:
+            # 引文型：没有数字，但有它声称抄来的原文，回原文核对
+            _verify_quote(c, text, quote, by_no, stats, blocked, misquoted)
+            continue
         if v is None:
-            continue          # 纯论述型 claim，没有数字就不用溯源
+            continue          # 纯论述型 claim，既没数字也没引文，无从核对
         stats["qty"] += 1
         if unit == "%":
             stats["pct"] += 1
@@ -1553,13 +1641,35 @@ def lookup(state):
             "evidence": evidence, "tool_names": names, "steps": steps}
 
 
+def _prose_doc(text):
+    """程序自己写的声明也走同一个结论结构。
+
+    "服务不可用 / 检索失败 / 手册没收录"这三条是程序的诚实声明，不是模型结论。
+    让它们也长成 {"conclusion", "claims": []} 不是为了让校验放行：
+    空 claims 本身是有含义的——"这条结论里没有可引用的具体事实"，
+    报告上 qty=0 看得见。豁免才是把这件事藏起来。
+    """
+    return json.dumps({"conclusion": text, "claims": [], "advice": []},
+                      ensure_ascii=False)
+
+
 KNOWLEDGE_PROMPT = """你在回答视觉检测设备的规则/标准/含义类问题。
 
-只能使用用户给出的手册片段回答：
-1. 每处结论后面用 [编号] 标注出处，编号对应片段编号
-2. 片段里没有的内容不要补，宁可说"手册中未收录"
-3. 如果不同片段对同一参数给出不同数值，必须指出这是冲突并列出各出处，不要自己挑一个
-4. 不要编造任何数字"""
+只能使用用户给出的手册片段回答，且只能输出一个 JSON 对象，不要输出任何 JSON 以外的文字：
+
+{"conclusion": "结论正文，可以分段，段间用 \\n",
+ "claims": [{"text": "这条结论里的一个具体事实", "quote": "它对应的原文，逐字抄", "ref": "片段编号"}]}
+
+规则：
+1. 结论里每一个来自手册的具体事实（数值、阈值、规则、含义、条件、步骤）都单独写成一条 claim。
+   一条只讲一件事：一句话里有三个事实就写三条，不要合并成一条。
+2. quote 必须从对应片段里逐字复制，不要改写、不要概括、不要缩写。
+   一句话要引用两个地方就写两条 claim，不要用省略号把两段缝成一条引文。
+3. ref 只写片段编号（如 "2"），且必须是你收到的片段编号。
+   引不出原文的内容不要写进 claims，也不要写进 conclusion。
+4. 片段里没有的不要补。确实没有时，conclusion 写"手册中未收录"，claims 给空数组。
+5. 不同片段对同一参数给出不同数值时，必须在 conclusion 里指出这是冲突并列出各出处，不要自己挑一个。
+6. 不要编造任何数字。"""
 
 
 def knowledge(state):
@@ -1578,7 +1688,7 @@ def knowledge(state):
     except Exception as exc:
         trace.emit("knowledge", status="service_unavailable",
                    error=f"{type(exc).__name__}: {exc}")
-        return {"final": (
+        return {"final": _prose_doc(
             f"手册检索服务当前不可用（{type(exc).__name__}: {exc}）。\n\n"
             "注意：这不是「手册里没有」，而是检索本身没跑起来——不要据此推断标准值。"
             "可以稍后重试，或直接查阅 SOP 原文。"
@@ -1586,21 +1696,23 @@ def knowledge(state):
 
     names.append("search_manual")
     steps += 1
+    search_no = base + len(evidence) + 1
     evidence.append({"tool": "search_manual", "args": {"query": q}, "result": res,
-                     "turn": int(state.get("turn") or 1),
-                     "ev_no": base + len(evidence) + 1})
+                     "turn": int(state.get("turn") or 1), "ev_no": search_no})
 
     if isinstance(res, dict) and "error" in res:
         trace.emit("knowledge", status="tool_error", error=str(res["error"])[:120])
-        return {"final": f"检索失败：{res['error']}\n\n这是检索问题，不代表手册里没有这条内容。",
-                "evidence": evidence, "tool_names": names, "steps": steps}
+        return {"final": _prose_doc(
+            f"检索失败：{res['error']}\n\n这是检索问题，不代表手册里没有这条内容。"
+        ), "evidence": evidence, "tool_names": names, "steps": steps}
 
     chunks = (res or {}).get("chunks") or []
     if not chunks:
         trace.emit("knowledge", status="empty", chunks=0)
-        return {"final": ("手册里没有检索到相关内容。可能是这个说法在文档中不存在，"
-                          "换个说法再问；也可能这条规则确实没有写进手册。"),
-                "evidence": evidence, "tool_names": names, "steps": steps}
+        return {"final": _prose_doc(
+            "手册里没有检索到相关内容。可能是这个说法在文档中不存在，"
+            "换个说法再问；也可能这条规则确实没有写进手册。"
+        ), "evidence": evidence, "tool_names": names, "steps": steps}
 
     # 问的是参数取值 → 必须查跨文档冲突（L3 的核心，不能只读检索第一条就照抄）
     conflicts = []
@@ -1654,8 +1766,32 @@ def knowledge(state):
         answer = (f"（整理答案时调用失败：{type(exc).__name__}）\n\n"
                   f"原始手册片段如下，供人工核对：\n\n{ctx}")
 
-    trace.emit("knowledge", status="ok", chunks=len(chunks), answer_len=len(answer))
-    return {"final": answer, "evidence": evidence, "tool_names": names, "steps": steps}
+    doc = _parse_claims(answer)
+    if doc is None:
+        # 模型没按契约输出，原样交给 verify 判 json_bad。
+        # 这里不补一个空 claims 的壳——替模型把格式修好，下次它还是不会写。
+        trace.emit("knowledge", status="prose", chunks=len(chunks),
+                   answer_len=len(answer))
+        return {"final": answer, "evidence": evidence,
+                "tool_names": names, "steps": steps}
+
+    # ref 是片段编号（模型只看得见 [1]..[5]），要换成校验层认的绝对号 + 字段路径。
+    # 纯机械映射，不改模型说了什么：它说"片段 3"，程序翻成"证据 7 的 chunks[2].text"。
+    # 越界编号原样留着不修——校验层会记 ref_bad；替它改成"正确"的编号就是合伙作弊。
+    for c in (doc.get("claims") or []):
+        if not isinstance(c, dict):
+            continue
+        r = str(c.get("ref") or "").strip()
+        if r.isdigit():
+            i = int(r) - 1
+            if 0 <= i < len(chunks):
+                c["ref"] = f"{search_no}#chunks[{i}].text"
+
+    trace.emit("knowledge", status="ok", chunks=len(chunks),
+               claims=len(doc.get("claims") or []))
+    return {"final": json.dumps(doc, ensure_ascii=False),
+            "final_text": _render_claims(doc),
+            "evidence": evidence, "tool_names": names, "steps": steps}
 
 
 def finalize(state):

@@ -88,6 +88,15 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
      `query_defect_log{group_by=station}#groups[0].rate`。
      不抄也能过校验，但两条返回的字段路径长得一模一样（都有 groups[0].rate），
      分不出你指的是哪一次——抄上去才是明确指认。
+   - 一个数值要挂到数组里的某条记录上（比如"11-10 亮度 85、11-11 降到 80"，
+     或者四次标定各自的漂移量），把这条 claim 写成 items 数组：
+     {"text": "亮度逐次下调", "ref": "query_light_usage#brightness_history",
+      "items": [{"key": "2025-03-12", "field": "value", "value": 85},
+                {"key": "2026-09-15", "field": "value", "value": 80}]}
+     key 写那条记录里的标识（日期、批次、工位名都行，写日期写日期部分就够），
+     field 是那条记录里装着这个数的字段名，不确定可以省略。
+     不要写成一条 value 然后 ref 指整个数组——那样判据只能确认数字出现过，
+     确认不了它属于哪条记录。
    - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，并在 text 里写算式：
      {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null}
    - 自己定的验收目标、假设值，ref 也写 null。
@@ -1284,6 +1293,9 @@ def _new_stats():
             #                否则报出来的数字会指向错误的地方（实测 A2：报 0.0667≠36.36%，
             #                看着像模型算错，实际是拿 defect_type 那次的候选去比 station）
             "ref_ambiguous": 0,
+            # multi_ok   多值 claim（items 数组）：每条「标识+数值」都在返回里找到了对应记录
+            # multi_bad  多值 claim 但至少一条配不上：值不在那条记录里，或记录里没这个 key
+            "multi_ok": 0, "multi_bad": 0,
             # quote_ok   引文型 claim：模型抄的原文确实在 ref 指向的那段里
             # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
             # bare_conclusion  结论里写了数字、claims 为空 → 没有一个数字可核验
@@ -1390,6 +1402,41 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
     misquoted.append(f"{text}（引文在 {tool}#{path} 里找不到：{bad[0][:28]}）")
 
 
+def _match_item(item, arr, unit):
+    """一条「标识 + 数值」是否能在数组的某条记录里对上。
+
+    这不是"值在数组里出现过"，是"这个值属于这条记录"。差别在 H1 那种形状下是决定性的：
+    三个日期三个亮度值 —— 85/80/65 可能各自都在数组里，但配错日期就说明模型没在读数据，
+    只是在凑数字。子串匹配 key 是因为模型通常只写日期（"2025-03-12"），
+    而 ts 是完整时间（"2025-03-12 09:00:00"）。
+
+    field 省略时，在记录里找任一数值字段等于 value——用于模型不确定字段名的场景；
+    指定了 field 就只比那一个，避免"漂移 0.064 对上了 px 也 0.064 的另一条"这种串位。
+    """
+    if not isinstance(item, dict):
+        return False
+    val = item.get("value")
+    if val is None:
+        return False
+    key = str(item.get("key") or "").strip()
+    field = str(item.get("field") or "").strip()
+
+    for e in arr:
+        if not isinstance(e, dict):
+            continue
+        if key and not any(isinstance(v, str) and key in v for v in e.values()):
+            continue
+        if field:
+            g = e.get(field)
+            if g is not None and _value_match(val, g, unit):
+                return True
+            continue
+        if any(isinstance(v, (int, float)) and not isinstance(v, bool)
+               and _value_match(val, v, unit) for v in e.values()):
+            return True
+    return False
+
+
 def _verify_claims(doc, ev, stats, blocked, misquoted):
     """按 claim 逐条校验：一个数字一条，各自带 ref。
 
@@ -1433,7 +1480,10 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             # 引文型：没有数字，但有它声称抄来的原文，回原文核对
             _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted)
             continue
-        if v is None:
+        # 多值型：`value` 为空但有 items，交给下面的 items 分支逐条配对
+        items = c.get("items")
+        has_items = isinstance(items, list) and bool(items)
+        if v is None and not has_items:
             continue          # 纯论述型 claim，既没数字也没引文，无从核对
         stats["qty"] += 1
         if unit == "%":
@@ -1516,6 +1566,37 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 misquoted.append(
                     f"{text}（{tool} 的返回里没有字段 {path}）"
                 )
+            continue
+
+        # ---- 多值 claim：一条 claim 装 N 个「标识 + 数值」对 ----
+        # H1/H3 的形状：三个日期三个亮度值、四次标定四个漂移值，塞进一条 claim，
+        # ref 指整个数组。旧结构只能装一个 value，模型只好把数组当 ref、把值写在文本里，
+        # 判据拿 list 跟 float 比，一律 path_bad——可模型并不总是编数，
+        # 它只是没有地方放"这个值属于哪条记录"。
+        #
+        # 这里要求的是**配对成立**，不是"值在数组里出现过"。区别在 H1 上很具体：
+        # 85/80/65 可能都在数组里，但配错日期就说明没在读数据，只是在凑数字。
+        if has_items:
+            arr = next((g for g in hits if isinstance(g, list)), None)
+            if arr is None:
+                stats["multi_bad"] += 1
+                misquoted.append(
+                    f"{text}（items 要求 ref 指向数组，实际指向 {hits[0]}，不是多值字段）")
+                continue
+            bad = [it for it in items if not _match_item(it, arr, unit)]
+            if not bad:
+                stats["multi_ok"] += 1
+                stats["path_ok"] += 1
+                stats["cited_path"] += 1
+                stats["cited_ok"] += 1
+            else:
+                stats["multi_bad"] += 1
+                first = bad[0]
+                k = first.get("key") if isinstance(first, dict) else first
+                vv = first.get("value") if isinstance(first, dict) else None
+                misquoted.append(
+                    f"{text}（items 有 {len(bad)}/{len(items)} 条对不上："
+                    f"{k} 对应的值不是 {vv}{unit}，或返回里没有这条记录）")
             continue
 
         vmax = c.get("value_max")

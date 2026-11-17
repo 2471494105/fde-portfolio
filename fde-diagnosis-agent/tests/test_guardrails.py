@@ -260,6 +260,97 @@ class LightLifeFieldsTest(unittest.TestCase):
                              f"文案复述了寿命数字 {banned}，又造出第二个数据源")
 
 
+class MultiValueClaimTest(unittest.TestCase):
+    """多值 claim：一条 claim 里装 N 个「标识 + 数值」对。
+
+    H1/H3 的形状：三个日期三个亮度值、四次标定四个漂移值，塞进一条 claim，
+    ref 指整个数组。旧结构只能装一个 value，模型只好把值写在文本里、
+    把数组当 ref，判据拿 list 跟 float 比一律失败——可模型并不总是编数，
+    它只是没有地方放"这个值属于哪条记录"。
+
+    这一类的分界线是：**值在数组里出现过** vs **这个值属于这条记录**。
+    H1 里 85/80/65 三个数都在数组里，但把 85 配到 09-15 就是没在读数据。
+    """
+
+    BRIGHT = ('{"brightness_history": ['
+              '{"ts": "2025-03-12 09:00:00", "value": 85},'
+              '{"ts": "2026-09-15 14:20:00", "value": 80},'
+              '{"ts": "2026-10-20 10:05:00", "value": 65}]}')
+
+    CALIB = ('{"records": ['
+             '{"ts": "2026-11-02 11:00:00", "drift_px": 0.369, "drift_mm": 0.064},'
+             '{"ts": "2026-10-14 12:00:00", "drift_px": 0.654, "drift_mm": 0.115}]}')
+
+    def _verify(self, doc, payload, tool):
+        final = json.dumps(doc, ensure_ascii=False)
+        ev = [{"result": payload, "tool": tool, "turn": 1,
+               "truncated": False, "ev_no": 1, "sig": None}]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("multi", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_items_all_paired_passes(self):
+        res = self._verify({"conclusion": "亮度逐次下调", "claims": [
+            {"text": "亮度从 85 降到 80 再降到 65",
+             "ref": "query_light_usage#brightness_history",
+             "items": [{"key": "2025-03-12", "field": "value", "value": 85},
+                       {"key": "2026-09-15", "field": "value", "value": 80},
+                       {"key": "2026-10-20", "field": "value", "value": 65}]}]},
+            self.BRIGHT, "query_light_usage")
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["multi_ok"], 1)
+
+    def test_items_wrong_pairing_fails(self):
+        """反向断言：值都在数组里，但配错了日期 → 必须判失败。
+
+        85 确实出现在返回里（2025-03-12 那条），可模型把它挂到 2026-09-15 上，
+        那条实际是 80。这正是 H1 的病根：不是编数，是没在读数据。
+        只要判据能拦住这一步，"值出现过就算过"的宽松做法就不需要了。
+        """
+        res = self._verify({"conclusion": "亮度逐次下调", "claims": [
+            {"text": "2026-09-15 亮度 85",
+             "ref": "query_light_usage#brightness_history",
+             "items": [{"key": "2026-09-15", "field": "value", "value": 85}]}]},
+            self.BRIGHT, "query_light_usage")
+        self.assertGreaterEqual(res["cite_stats"]["multi_bad"], 1)
+        self.assertTrue(any("对不上" in m for m in res["misquoted"]))
+
+    def test_items_require_array_ref(self):
+        """反向断言：ref 指数值字段时 items 无处可放，必须判失败。
+
+        否则模型可以写 ref=cumulative_hours（一个数）+ items 三条，
+        三条都不校验，等于给多值开了一条免检通道。
+        """
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "三次亮度",
+             "ref": "query_light_usage#cumulative_hours",
+             "items": [{"key": "2025-03-12", "value": 85}]}]},
+            '{"cumulative_hours": 8620}', "query_light_usage")
+        self.assertGreaterEqual(res["cite_stats"]["multi_bad"], 1)
+        self.assertTrue(any("要求 ref 指向数组" in m for m in res["misquoted"]))
+
+    def test_items_field_pins_the_column(self):
+        """H3 的形状：一条记录里有 drift_px 和 drift_mm 两个数。
+
+        指定 field 就不能串到另一列去——0.064 在 drift_mm 里，
+        而 drift_px 也有接近的值，不锁字段就会"错列也对上"。
+        """
+        res = self._verify({"conclusion": "漂移平稳", "claims": [
+            {"text": "11-02 漂移 0.064mm、10-14 漂移 0.115mm",
+             "ref": "query_calibration#records",
+             "items": [{"key": "2026-11-02", "field": "drift_mm", "value": 0.064},
+                       {"key": "2026-10-14", "field": "drift_mm", "value": 0.115}]}]},
+            self.CALIB, "query_calibration")
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["multi_ok"], 1)
+
+
 class ParamResolveTest(unittest.TestCase):
     """check_doc_conflict 的参数名归一：唯一候选才自动改名，多候选一律不猜。
 

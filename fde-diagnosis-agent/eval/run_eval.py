@@ -553,6 +553,11 @@ def main():
     # 而不是"模型算错了"——两种修法完全不同（改 prompt vs 改引用格式）。
     amb_n = sum((r.get("cite_stats") or {}).get("ref_ambiguous", 0) for r in results)
     print(f"引用歧义      {amb_n} 条引用   （同一工具多次调用且未写指纹，判据无法确定指哪次；已计入引用写错）")
+    # 多值 claim（items）的两种结局。只报失败数会让人以为"没人用这个字段"，
+    # 只报成立数又会让人以为"多值引用没问题"——两行必须一起看。
+    multi_ok = sum((r.get("cite_stats") or {}).get("multi_ok", 0) for r in results)
+    multi_bad = sum((r.get("cite_stats") or {}).get("multi_bad", 0) for r in results)
+    print(f"多值引用      {multi_ok} 成 / {multi_bad} 败   （items 数组：每条「标识+数值」都要在返回里配上对）")
     print(f"服务失败      {svc_n}/{n}   （整理答案时模型调用失败，结论是半成品，不计入引用写错）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")

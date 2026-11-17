@@ -1101,6 +1101,71 @@ class KnowledgeQuoteTest(unittest.TestCase):
         self.assertTrue(misquoted, "ref 指向数值字段，撑不住一句引文")
 
 
+class BareConclusionTest(unittest.TestCase):
+    """结论里写了数字、claims 给空数组——这是刚发现的一条通道。
+
+    它和"撤掉的那条豁免"是同一类洞的两侧：豁免是我们主动不检查，
+    这个是模型把内容挪到了检查看不到的地方。两者都会让报告既不红也不绿。
+    """
+
+    def _run(self, doc):
+        stats, blocked, misquoted = nodes._new_stats(), [], []
+        nodes._verify_claims(doc, [], stats, blocked, misquoted)
+        return stats, blocked, misquoted
+
+    def test_numbers_without_claims_is_caught(self):
+        doc = {"conclusion": "根因是光源衰减，误判率 52.34%，1 号工位 46.77%",
+               "claims": []}
+        stats, blocked, misquoted = self._run(doc)
+        self.assertTrue(misquoted, "结论里的数字没有任何 claim 认领，必须判失败")
+        self.assertEqual(stats["bare_conclusion"], 1)
+        self.assertEqual(stats["qty"], 0)
+
+    def test_clean_conclusion_without_claims_passes(self):
+        # 反向断言：空 claims 本身不是罪。lookup 那句"不做根因判断"、
+        # knowledge 那句"手册中未收录"，都是没有具体事实可引的结论，
+        # 一律判失败会把它们误伤。
+        doc = {"conclusion": "手册中未收录这条规则。", "claims": []}
+        stats, blocked, misquoted = self._run(doc)
+        self.assertEqual(misquoted, [])
+        self.assertEqual(stats["bare_conclusion"], 0)
+
+    def test_claims_present_does_not_trigger(self):
+        # 反向断言：有 claims 时 conclusion 里出现数字不算违规——
+        # 正常的结论会复述一句关键数字，认领它的 claim 在那摆着。
+        doc = {"conclusion": "误判率 52.34%，根因偏硬件",
+               "claims": [{"text": "整体误判率 52.34%", "value": 52.34,
+                           "unit": "%", "ref": "5#false_positive_rate"}]}
+        log = {"false_positive_rate": 0.5234}
+        stats, blocked, misquoted = nodes._new_stats(), [], []
+        nodes._verify_claims(doc,
+                             [{"ev_no": 5, "tool": "query_defect_log",
+                               "result": json.dumps(log)}],
+                             stats, blocked, misquoted)
+        self.assertEqual(stats["bare_conclusion"], 0)
+        self.assertEqual(stats["cited_ok"], 1)
+
+
+    def test_svc_fail_is_judged_as_half_result(self):
+        # 兜底文案的形状是合法结论（claims 空、conclusion 无数字），
+        # 只看形状会静默通过。但那段话里没有任何被整理出来的内容，
+        # 拿它当"通过"就是把一次超时记成了成功。
+        state = {"final": nodes._prose_doc("（整理答案时调用失败：APITimeoutError）未整理"),
+                 "svc_fail": "APITimeoutError", "evidence": [], "turn": 1}
+        out = nodes.verify(state)
+        self.assertTrue(out["misquoted"], "服务失败必须判失败，否则这条废结论会被当成通过")
+        self.assertEqual(out["cite_stats"]["svc_fail"], 1)
+        # 而且不能被记成"引用写错"：那是模型的责任，这条是基础设施的责任
+        self.assertFalse(out["cite_stats"]["json_bad"])
+
+    def test_clean_run_has_no_svc_fail(self):
+        state = {"final": nodes._prose_doc("手册中未收录这条规则。"),
+                 "svc_fail": "", "evidence": [], "turn": 1}
+        out = nodes.verify(state)
+        self.assertEqual(out["misquoted"], [])
+        self.assertEqual(out["cite_stats"]["svc_fail"], 0)
+
+
 class ResultEventContractTest(unittest.TestCase):
     """result 事件的两个出口（CLI/评测 与 Web 流式）必须写同样的字段。
 

@@ -105,6 +105,9 @@ def intake(state):
         "turn": turn,
         "plan_retry": 0,
         "stop_reason": "",
+        # 和 stop_reason 同理：这一轮要是走了 lookup 或 clarify（不碰 knowledge），
+        # 上一轮留下的 svc_fail 会被 verify 当成本轮的失败，凭空多一条半成品。
+        "svc_fail": "",
     }
 
 
@@ -1190,7 +1193,10 @@ def _new_stats():
             "range_ok": 0, "range_bad": 0,
             # quote_ok   引文型 claim：模型抄的原文确实在 ref 指向的那段里
             # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
-            "quote_ok": 0, "quote_bad": 0}
+            # bare_conclusion  结论里写了数字、claims 为空 → 没有一个数字可核验
+            # svc_fail   整理答案那步模型调用失败：形状合法但内容是半成品
+            "quote_ok": 0, "quote_bad": 0, "bare_conclusion": 0,
+            "svc_fail": 0}
 
 
 def _norm_quote(s):
@@ -1281,7 +1287,21 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         if no is not None:
             by_no[int(no)] = e
 
-    for c in doc.get("claims") or []:
+    # 把数字全塞进 conclusion、claims 给空数组——这条通道刚被发现。
+    # 后果不是判错，是"什么都不判"：qty=0，报告上既不红也不绿，和刚撤掉的豁免
+    # 属于同一类洞，只是这次是从另一侧开的。结论里写了数字，就必须有一条 claim
+    # 去认领它；claims 为空而 conclusion 干净（如 lookup 的"不做根因判断"）不算。
+    claims = doc.get("claims") or []
+    if not claims:
+        bare = re.findall(r"\d+(?:\.\d+)?",
+                          str(doc.get("conclusion") or ""))
+        if bare:
+            stats["bare_conclusion"] = 1
+            misquoted.append(
+                f"结论里写了数字（{'、'.join(bare[:5])}）但 claims 为空，没有一个能被核验"
+            )
+
+    for c in claims:
         if not isinstance(c, dict):
             continue
         text = str(c.get("text") or "").strip()
@@ -1461,6 +1481,16 @@ def verify(state):
         if doc.pop("_repaired", False):
             stats["json_fixed"] = 1
         _verify_claims(doc, ev, stats, blocked, misquoted)
+        # 兜底文案形状上是合法结论（claims 空、conclusion 无数字），
+        # 光看形状会静默通过；但那段话里没有任何被整理出来的内容，
+        # 拿它当"通过"就是把一次基础设施故障记成了成功。
+        # 判失败，但原因写明是"半成品"，不和"引用写错"混为一类。
+        svc = str(state.get("svc_fail") or "").strip()
+        if svc:
+            stats["svc_fail"] = 1
+            misquoted.append(
+                f"整理答案的模型调用失败（{svc}），这一条是半成品，不能当结论用"
+            )
         final_text = preset_text or _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,
                    final_len=len(final), **stats)
@@ -1746,6 +1776,7 @@ def knowledge(state):
     ) + conflict_note
 
     try:
+        svc_fail = ""
         resp = get_client().chat.completions.create(
             model=MODEL,
             messages=[
@@ -1763,8 +1794,16 @@ def knowledge(state):
                 + (getattr(usage, "completion_tokens", 0) or 0)
             )
     except Exception as exc:
-        answer = (f"（整理答案时调用失败：{type(exc).__name__}）\n\n"
-                  f"原始手册片段如下，供人工核对：\n\n{ctx}")
+        # 整理答案这一步失败（多为中转站排队超时），不是模型不守契约。
+        # 兜底也必须长成同一个形状：原来这里输出的是纯文本，verify 只能判
+        # json_bad，报告上就成了"结论未按 claims 契约输出"——把基础设施故障
+        # 报成模型违规，又一次归因错人。
+        # 但也不能只改成 prose doc 就算完：那会让它静默通过（qty=0、claims 空、
+        # conclusion 里没数字），而这条结论其实是废的。所以单独打一个标记，
+        # 由 verify 判失败并写明"半成品"，和引用问题分开记。
+        svc_fail = type(exc).__name__
+        answer = _prose_doc(f"（整理答案时调用失败：{svc_fail}）"
+                            f"手册片段已取到，但未能整理成结论，请人工核对原文")
 
     doc = _parse_claims(answer)
     if doc is None:
@@ -1789,8 +1828,10 @@ def knowledge(state):
 
     trace.emit("knowledge", status="ok", chunks=len(chunks),
                claims=len(doc.get("claims") or []))
+    # svc_fail 一路传到 verify：兜底文案长得像正常结论（claims 空、conclusion 无数字），
+    # 只靠形状分不出来，必须由节点自己说"这一条没跑成"。
     return {"final": json.dumps(doc, ensure_ascii=False),
-            "final_text": _render_claims(doc),
+            "final_text": _render_claims(doc), "svc_fail": svc_fail,
             "evidence": evidence, "tool_names": names, "steps": steps}
 
 

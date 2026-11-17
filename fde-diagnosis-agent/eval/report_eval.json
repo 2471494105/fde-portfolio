@@ -1,20 +1,20 @@
 {
  "meta": {
-  "ts": "2026-11-17 13:28:20",
-  "commit": "809a0b5",
+  "ts": "2026-11-17 13:54:43",
+  "commit": "6b6ba1b",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "126e1e61f74d",
+  "code_hash": "a8041b82c468",
   "cases_total": 25,
-  "evaluated": 3,
-  "workers": 3,
-  "use_checkpoint": false
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
  },
  "summary": {
-  "n": 3,
-  "semantic_ok": 3,
+  "n": 1,
+  "semantic_ok": 1,
   "semantic_rate": 1.0,
   "tool_rate": 1.0,
   "gb_rate": 1.0,
@@ -27,17 +27,17 @@
   "intent_conf_low_n": 0,
   "fc_fail": 0,
   "blocked_n": 0,
-  "trace_ok_n": 3,
+  "trace_ok_n": 1,
   "trace_rate": 1.0,
-  "cite_hit": 27,
-  "cite_qty": 27,
-  "cite_rate": 1.0,
+  "cite_hit": 0,
+  "cite_qty": 0,
+  "cite_rate": 0.0,
   "cite_cut": 0,
   "json_fixed": 0,
   "misquote_n": 0,
   "range_ok": 0,
   "range_bad": 0,
-  "elapsed_s": 143.1
+  "elapsed_s": 18.7
  },
  "results": [
   {
@@ -80,114 +80,14 @@
     "json_fixed": 0,
     "range_ok": 0,
     "range_bad": 0,
-    "quote_ok": 11,
+    "quote_ok": 10,
     "quote_bad": 0,
+    "bare_conclusion": 0,
+    "svc_fail": 0,
     "cited": 0,
     "ev": 1
    },
-   "final_head": "E-101 表示相机未连接或通讯中断，等级为 critical。它属于图像采集类第 1 号告警。常见原因包括网线松脱、相机掉电。处置时需检查相机供电与网线连接，并确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。该告警期间设备无法成像，所有判定结果均不可信。 - E-101 的含义是相机未连接或通"
-  },
-  {
-   "id": "I6",
-   "type": "意图",
-   "intent": "lookup",
-   "intent_ok": true,
-   "intent_conf": 0.86,
-   "tools": [
-    "query_device_profile",
-    "query_defect_log",
-    "query_work_order"
-   ],
-   "steps": 3,
-   "stop_reason": "",
-   "check_rounds": 0,
-   "tool_rate": 1.0,
-   "gb_rate": 1.0,
-   "kw_rate": 1.0,
-   "kw_hit": [
-    "误判率"
-   ],
-   "req_miss": [],
-   "steps_ok": true,
-   "blocked": [],
-   "misquoted": [],
-   "trace_ok": true,
-   "fc_fail": false,
-   "semantic_ok": true,
-   "reasons": [],
-   "cite_stats": {
-    "qty": 12,
-    "pct": 3,
-    "cited_ok": 12,
-    "cited_path": 12,
-    "cite_oob": 0,
-    "path_ok": 12,
-    "path_bad": 0,
-    "path_miss": 0,
-    "json_bad": 0,
-    "unsourced": 0,
-    "ref_bad": 0,
-    "cite_cut": 0,
-    "json_fixed": 0,
-    "range_ok": 0,
-    "range_bad": 0,
-    "quote_ok": 0,
-    "quote_bad": 0,
-    "cited": 12,
-    "ev": 3
-   },
-   "final_head": "### CX-104（4号线 / 1-2号工位）  | 项 | 值 | |---|---| | 相机 | CV-X450 + CA-H200CX | | 镜头 | 16mm | | 光源 | CA-DC21E | | 安装日期 | 2024-08-15 00:00:00 | | 保养周期 | 90 天 | | 日志条数"
-  },
-  {
-   "id": "I9",
-   "type": "意图",
-   "intent": "lookup",
-   "intent_ok": true,
-   "intent_conf": 0.86,
-   "tools": [
-    "query_device_profile",
-    "query_defect_log",
-    "query_work_order"
-   ],
-   "steps": 3,
-   "stop_reason": "",
-   "check_rounds": 0,
-   "tool_rate": 1.0,
-   "gb_rate": 1.0,
-   "kw_rate": 1.0,
-   "kw_hit": [
-    "WO-"
-   ],
-   "req_miss": [],
-   "steps_ok": true,
-   "blocked": [],
-   "misquoted": [],
-   "trace_ok": true,
-   "fc_fail": false,
-   "semantic_ok": true,
-   "reasons": [],
-   "cite_stats": {
-    "qty": 15,
-    "pct": 4,
-    "cited_ok": 15,
-    "cited_path": 15,
-    "cite_oob": 0,
-    "path_ok": 15,
-    "path_bad": 0,
-    "path_miss": 0,
-    "json_bad": 0,
-    "unsourced": 0,
-    "ref_bad": 0,
-    "cite_cut": 0,
-    "json_fixed": 0,
-    "range_ok": 0,
-    "range_bad": 0,
-    "quote_ok": 0,
-    "quote_bad": 0,
-    "cited": 15,
-    "ev": 3
-   },
-   "final_head": "### CX-101（3号线 / 1-3号工位）  | 项 | 值 | |---|---| | 相机 | In-Sight 2801 | | 镜头 | 16mm | | 光源 | CA-DC21E | | 安装日期 | 2025-03-12 00:00:00 | | 保养周期 | 90 天 | | 日志条数 | 200"
+   "final_head": "E-101 表示相机未连接或通讯中断，告警等级为 critical。按编码规则，E 开头表示设备自身异常，三位数字第一位 1 表示图像采集与通讯，因此 E-101 属于图像采集类第 1 号告警。critical 需立即停机处理。该告警期间设备无法成像，所有判定结果均不可信。 常见原因：网线松脱、相机掉电。处置：检查相机"
   }
  ]
 }

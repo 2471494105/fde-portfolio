@@ -321,7 +321,14 @@ def main():
     ok = sum(1 for r in results if r["semantic_ok"])
     fc = sum(1 for r in results if r["fc_fail"])
     blocked_n = sum(1 for r in results if r["blocked"])
-    misquote_n = sum(1 for r in results if r.get("misquoted"))
+    # 有 misquoted、但那条是"整理答案的模型调用失败"的，不算引用写错：
+    # 之前这条兜底输出的是纯文本，于是被判 json_bad，报告上就成了
+    # "结论未按 claims 契约输出"——把中转站超时报成模型违规，归因错人。
+    # 现在单独一类，两行分开计数，谁出问题一眼看得出。
+    svc_n = sum(1 for r in results
+                if (r.get("cite_stats") or {}).get("svc_fail"))
+    misquote_n = sum(1 for r in results
+                     if r.get("misquoted") and not (r.get("cite_stats") or {}).get("svc_fail"))
     trace_ok_n = sum(1 for r in results if r.get("trace_ok"))
     # blocked 为空不等于溯源干净：没标角标、但"全证据池里恰好有这个数"也算放行，
     # 这类值占了大多数。真正该看的是明确出处率 = cited_ok / qty。
@@ -359,11 +366,17 @@ def main():
     # 模型本来就没写错，或者 check 根本没生效——后者看 misquote_n 和
     # "区间引用"那一行是否都为 0 也判断不出来，只能靠 at_check 的实测样本区分。
     check_n = sum(1 for r in results if r.get("check_rounds"))
+    # 结论里写了数字、claims 却给空数组的条数。
+    # 它不是"引用写错"，是"压根没有可核验的对象"——qty 会是 0，两行汇总都看不见它。
+    # 必须单独一行，否则这种通过方式是隐形的。
+    bare_n = sum(1 for r in results
+                 if (r.get("cite_stats") or {}).get("bare_conclusion"))
 
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
     print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
     print(f"引文核对      {quote_ok} 成 / {quote_bad} 败   （模型抄的原文能否在片段里逐字找到）")
+    print(f"结论空 claims {bare_n}/{n}   （结论写数字但不给 claims，等于把内容挪到检查外）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
     print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")
@@ -382,6 +395,7 @@ def main():
     print(f"fc 失败       {fc}/{n}")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
+    print(f"服务失败      {svc_n}/{n}   （整理答案时模型调用失败，结论是半成品，不计入引用写错）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")
     print(f"区间引用      {range_ok} 成 / {range_bad} 败   （ref 指文本字段且两端都在原文 = 成；"

@@ -77,3 +77,7 @@ class State(TypedDict, total=False):
     # 和 steps 必须同时存在——steps 只说"用了几次"，说不出"是额度用完了，还是判断够了"。
     # 这两件事一个字都不能混：前者是半成品结论，后者是可交付结论，可信度差着量级。
     stop_reason: str
+    # 整理答案那步的模型调用失败（异常类名）。只由 knowledge 写入、verify 读取。
+    # 不写在 cite_stats 里，是因为它根本不是引用问题：它的形状和正常结论一样
+    # （claims 空、conclusion 无数字），只有产出它的节点知道"这一条没跑成"。
+    svc_fail: str

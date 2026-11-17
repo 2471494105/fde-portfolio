@@ -1,0 +1,101 @@
+{
+ "meta": {
+  "ts": "2026-11-17 11:27:27",
+  "commit": "fd9fa07",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "https://minekuai.cn/v1",
+  "cases_hash": "b125ea215ed5",
+  "code_hash": "a0cdb9e98eb7",
+  "cases_total": 25,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
+ },
+ "summary": {
+  "n": 1,
+  "semantic_ok": 0,
+  "semantic_rate": 0.0,
+  "tool_rate": 1.0,
+  "gb_rate": 1.0,
+  "kw_rate": 1.0,
+  "steps_bad": 0,
+  "budget_exhausted": 0,
+  "enough": 1,
+  "intent_bad": 0,
+  "fc_fail": 0,
+  "blocked_n": 1,
+  "trace_ok_n": 0,
+  "trace_rate": 0.0,
+  "cite_hit": 14,
+  "cite_qty": 17,
+  "cite_rate": 0.8235,
+  "cite_cut": 0,
+  "json_fixed": 0,
+  "misquote_n": 1,
+  "elapsed_s": 155.0
+ },
+ "results": [
+  {
+   "id": "H1",
+   "type": "硬件",
+   "intent": "diagnose",
+   "intent_ok": true,
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_defect_log",
+    "query_defect_log",
+    "query_light_usage",
+    "query_calibration",
+    "search_manual",
+    "check_doc_conflict"
+   ],
+   "steps": 8,
+   "stop_reason": "enough",
+   "tool_rate": 1.0,
+   "gb_rate": 1.0,
+   "kw_rate": 1.0,
+   "kw_hit": [
+    "光源",
+    "寿命",
+    "1号工位"
+   ],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [
+    "设备整体误判率 23%（=46/200）"
+   ],
+   "misquoted": [
+    "2 号工位误判率仅 4.84%（字段值 0.1139 ≠ 4.84%）",
+    "3 号工位误判率 11.39%（字段值 0.0484 ≠ 11.39%）"
+   ],
+   "trace_ok": false,
+   "fc_fail": false,
+   "semantic_ok": false,
+   "reasons": [
+    "引用写错(2 号工位误判率仅 4.84%（字段值 0.1139 ≠ 4.84%）,3 号工位误判率 11.39%（字段值 0.0484 ≠ 11.39%）)"
+   ],
+   "cite_stats": {
+    "qty": 17,
+    "pct": 6,
+    "cited_ok": 14,
+    "cited_path": 14,
+    "cite_oob": 0,
+    "path_ok": 14,
+    "path_bad": 2,
+    "path_miss": 0,
+    "json_bad": 0,
+    "unsourced": 1,
+    "ref_bad": 0,
+    "cite_cut": 0,
+    "json_fixed": 0,
+    "range_ok": 1,
+    "range_bad": 0,
+    "cited": 14,
+    "ev": 8
+   },
+   "final_head": "1 号工位的镜头/光源是独立部件，误判高度集中在 1 号工位，且光源已超额定寿命、亮度被两次下调，夜间环境光更弱时对比度进一步不足；标定记录全部通过、漂移平稳，可排除标定漂移。 - 1 号工位误判率 57.63%（34/59） - 2 号工位误判率仅 4.84% - 3 号工位误判率 11.39% - 设备整体误判率 "
+  }
+ ]
+}

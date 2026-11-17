@@ -293,6 +293,77 @@ class ClaimContractTest(unittest.TestCase):
         self.assertTrue(any("契约" in m for m in res["misquoted"]))
 
 
+class RangeClaimTest(unittest.TestCase):
+    """区间 claim（`6%~11%`、`2–4 条`）：用一个 value 塞不下，得写 value_max。
+
+    改之前 value 只能装下界，上界根本不参与校验——
+    "预计降到 6%~99%" 配 value=6 能全过。
+
+    这条设计的核心不是"加了个字段"，是**合法性取决于 ref 指向什么**：
+      ref 指整段文字（原文里就写着「上升 10%-25%」）→ 两端都能在原文找到，合法
+      ref 指数值字段（如 0.1541）→ 这个位置只担保一个精确值，撑不住区间，判失败
+      ref 为 null → 模型自己归纳的区间，标灰放行
+    """
+
+    RANGE_TEXT = '{"assessment": "已超额定寿命 620 小时，上升 10%-25%", "rate": 0.1541}'
+
+    def _verify(self, doc, *payloads):
+        final = json.dumps(doc, ensure_ascii=False)
+        ev = [{"result": p, "turn": 1, "truncated": False} for p in payloads]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("range", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_range_from_text_field_is_cited(self):
+        # 原文里本来就写着「上升 10%-25%」，两端都能找到 → 合法引用
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "上升 10%~25%", "value": 10, "value_max": 25, "unit": "%",
+             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["range_ok"], 1)
+        self.assertEqual(res["cite_stats"]["range_bad"], 0)
+
+    def test_range_on_numeric_field_is_misquoted(self):
+        # 反向断言：ref 指着一个精确数值（0.1541 = 15.41%），
+        # 却用它担保 10%~25%——那个上界不是这个位置给的。必须判失败。
+        # 只要实现里少了"数值字段禁 value_max"这条，这一行就会挂。
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "误判率 10%~25%", "value": 10, "value_max": 25, "unit": "%",
+             "ref": "1#rate"}]}, self.RANGE_TEXT)
+        self.assertTrue(any("撑不住区间" in m for m in res["misquoted"]))
+        self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
+
+    def test_range_missing_one_endpoint_is_misquoted(self):
+        # 只找到一端不算：另一端是模型自己加的，不是原文里的
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "上升 10%~40%", "value": 10, "value_max": 40, "unit": "%",
+             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+        self.assertTrue(any("字段原文对不上" in m for m in res["misquoted"]))
+        self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
+
+    def test_range_with_null_ref_is_grey_not_fatal(self):
+        # 自己归纳的区间（不是从原文抄的）：标灰放行，不计失败
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "预计降到 6%~11%", "value": 6, "value_max": 11, "unit": "%",
+             "ref": None}]}, self.RANGE_TEXT)
+        self.assertEqual(res["misquoted"], [])
+        self.assertEqual(len(res["blocked"]), 1)
+        self.assertIn("[无出处]", res["final_text"])
+
+    def test_reversed_bounds_is_misquoted(self):
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "上升 25%~10%", "value": 25, "value_max": 10, "unit": "%",
+             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+        self.assertTrue(any("上下界写反" in m for m in res["misquoted"]))
+        self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
+
+
 class PayloadBudgetTest(unittest.TestCase):
     """证据体积：任何返回都必须压成**合法 JSON**，且不超上限。
 

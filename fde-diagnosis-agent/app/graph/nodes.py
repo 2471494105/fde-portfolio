@@ -53,7 +53,7 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
   "claims": [
     {"text": "含数字的原话", "value": 90, "unit": "天", "ref": "1#maintenance_cycle_days"},
     {"text": "误判率 58.82%", "value": 58.82, "unit": "%", "ref": "3#groups[0].rate"},
-    {"text": "复位后预计降到 6%~11%", "value": 6, "unit": "%", "ref": null}
+    {"text": "复位后预计降到 6%~11%", "value": 6, "value_max": 11, "unit": "%", "ref": null}
   ],
   "advice": ["先重新标定再复测", "把 11-07 前后的标定记录调出来"]
 }
@@ -61,6 +61,12 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
    - 结论里每出现一个数字，就单独占一条 claim。三个数字要写三条，
      不许挤在一句话里共用一个 ref——这是最关键的一条。
    - value 只写数字本身：58.82% 写成 58.82，unit 写 "%"；90 天写成 90，unit 写 "天"。
+   - 结论里出现区间（「6%~11%」「2–4 条」）时写成 value + value_max 两个数，
+     value 是下界、value_max 是上界。
+     ref 指着某个具体数值字段时禁止写 value_max：那个位置只担保一个精确值，
+     你要说区间就说明这个区间不是它给的，ref 必须写 null。
+     ref 指着整段文字字段（原文里本来就写着「上升 10%-25%」）时可以写，
+     但两个端点都必须能在那段原文里找到。
    - ref 写这个数的出处：第 k 条工具返回的字段路径，k 按你实际看到的顺序从 1 数。
      字段路径照工具返回的 JSON 原样写，顶层 "2#maintenance_cycle_days"、
      数组下标 "3#groups[0].count"、嵌套 "6#records[0].drift_px"。
@@ -1000,6 +1006,44 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 misquoted.append(f"{text}（字段不存在:{path}）")
             continue
 
+        vmax = c.get("value_max")
+        if vmax is not None:
+            # ---- 区间 claim：合法性完全取决于 ref 指向什么 ----
+            # 这是"引用单位"那条设计在代码里的落点：
+            #   ref 指文本字段（原文里就有「上升 10%-25%」）→ 这是一段可引的原文，
+            #     两端都能在里面找到，属于合法引用
+            #   ref 指数值字段（如 0.15）→ 这个位置只担保一个精确值。拿它担保
+            #     一个区间，等于让精确位置为不精确断言背书，判失败
+            # 改之前没有 value_max 这个字段，区间只能把下界塞进 value，
+            # 上界根本不参与校验——"预计降到 6%~99%" 配 value=6 能全过。
+            try:
+                lo = float(v)
+                hi = float(vmax)
+            except (TypeError, ValueError):
+                stats["ref_bad"] += 1
+                misquoted.append(f"{text}（区间端点不是数字:{v}/{vmax}）")
+                continue
+            if hi < lo:
+                stats["range_bad"] += 1
+                misquoted.append(f"{text}（区间上下界写反:{lo}>{hi}）")
+                continue
+            if not isinstance(got, str):
+                stats["range_bad"] += 1
+                misquoted.append(
+                    f"{text}（ref 指向数值字段 {got}，撑不住区间 {lo}~{hi}）")
+                continue
+            # 文本字段：两端必须同时出现。只找到一端不算——
+            # 那说明另一端是模型自己补的，不是原文里的。
+            if _value_match(lo, got, unit) and _value_match(hi, got, unit):
+                stats["path_ok"] += 1
+                stats["cited_path"] += 1
+                stats["cited_ok"] += 1
+                stats["range_ok"] += 1
+            else:
+                stats["range_bad"] += 1
+                misquoted.append(f"{text}（区间 {lo}~{hi} 与该字段原文对不上）")
+            continue
+
         if _value_match(v, got, unit):
             stats["path_ok"] += 1
             stats["cited_path"] += 1
@@ -1069,7 +1113,10 @@ def verify(state):
              # cite_cut  那条证据返回体过大被压缩，字段没保留 → 放行标灰
              # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
              "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
-             "json_fixed": 0}
+             "json_fixed": 0,
+             # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
+             # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
+             "range_ok": 0, "range_bad": 0}
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。

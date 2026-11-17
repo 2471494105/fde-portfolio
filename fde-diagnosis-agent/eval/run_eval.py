@@ -322,6 +322,12 @@ def main():
     # 证据超长被压缩、字段没送进去：这类引用无法核验，但不是模型写错。
     # 单独计数，否则它会躲在"引用写错"里，把证据问题报成模型问题。
     cite_cut = sum((r.get("cite_stats") or {}).get("cite_cut", 0) for r in results)
+    # 区间 claim（`6%~11%`）的两种结局必须分开报：
+    #   range_ok   两端都在 ref 指向的那段原文里，引用成立
+    #   range_bad  撑不住——ref 指着数值字段，或某个端点不在原文里
+    # 只报成立数会让人以为"区间没问题"；只报失败数又看不出模型到底用没用区间。
+    range_ok = sum((r.get("cite_stats") or {}).get("range_ok", 0) for r in results)
+    range_bad = sum((r.get("cite_stats") or {}).get("range_bad", 0) for r in results)
     # 结论 JSON 里值内裸引号被自动修好才解析成功的条数。
     # 这个必须看得见：修复是静默的，不单独计数就等于"模型越不守契约越没人知道"。
     json_fixed = sum(1 for r in results
@@ -352,6 +358,8 @@ def main():
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")
+    print(f"区间引用      {range_ok} 成 / {range_bad} 败   （ref 指文本字段且两端都在原文 = 成；"
+          f"ref 指数值字段 = 败）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
@@ -379,6 +387,8 @@ def main():
         "cite_cut": cite_cut,
         "json_fixed": json_fixed,
         "misquote_n": misquote_n,
+        "range_ok": range_ok,
+        "range_bad": range_bad,
         "elapsed_s": round(elapsed, 1),
     }
     report = {"meta": meta, "summary": summary, "results": results}

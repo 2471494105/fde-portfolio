@@ -25,7 +25,7 @@ from app.graph.build import run  # noqa: E402
 from app.graph.llm import BASE_URL, MODEL, PROVIDER  # noqa: E402
 # 停止原因的取值只此一份，评测这里直接引用常量，不再手抄字符串。
 # 手抄一次就多一份可以各自漂移的副本——这正是"同一份事实存两份"最常见的起手式。
-from app.graph.nodes import STOP_BUDGET_EXHAUSTED  # noqa: E402
+from app.graph.nodes import CONF_OK, STOP_BUDGET_EXHAUSTED  # noqa: E402
 from app.meta import code_hash as _code_hash, git_commit as _git_commit  # noqa: E402
 from eval.trajectories import TRAJECTORIES  # noqa: E402
 
@@ -179,6 +179,10 @@ def judge(traj, state):
         "type": traj["type"],
         "intent": state.get("intent", ""),
         "intent_ok": intent_ok,
+        # 低置信不是判错：它是模型主动报的"我不确定"，用户会看到一行
+        # "按「X」理解"或被改成追问。判错看 intent_ok，两个口径别混——
+        # 混在一起会让"模型诚实"和"模型判错"变成同一个数字。
+        "intent_conf": state.get("intent_conf"),
         "tools": tools,
         "steps": steps,
         "stop_reason": stop_reason,
@@ -363,6 +367,12 @@ def main():
     print(f"引用自查回环  {check_n}/{n}   （被 check 拦下、把原因回喂后重出才通过的条数）")
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
+    # 低置信 != 判错。这一行统计的是"有多少条结论是带不确定交付的"——
+    # 用户会在结论里看到"按「X」理解"，或者干脆被改成追问。
+    # 把它和 intent_bad 分开，才能看出模型是在诚实报不确定，还是在判错。
+    conf_low = sum(1 for r in results
+                   if (r.get("intent_conf") if r.get("intent_conf") is not None else 1.0) < CONF_OK)
+    print(f"意图低置信    {conf_low}/{n}   （带'按X理解'或改成追问，不是判错）")
     print(f"fc 失败       {fc}/{n}")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
@@ -388,6 +398,7 @@ def main():
         "enough": enough_n,
         "check_rounds_n": check_n,
         "intent_bad": intent_bad,
+        "intent_conf_low_n": conf_low,
         "fc_fail": fc,
         "blocked_n": blocked_n,
         "trace_ok_n": trace_ok_n,

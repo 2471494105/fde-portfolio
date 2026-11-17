@@ -21,6 +21,15 @@ from app.tools.workorder import query_work_order
 MAX_STEPS = 12
 
 DEVICE_RE = re.compile(r"CX-\d{3}", re.IGNORECASE)
+# 判"结论里有没有数字"之前，先把标识符剥掉。
+# 第一次真实触发就踩到：手册答"没有 CX-104 这个型号"，结论被判成
+# "写了数字但 claims 为空"——104 是型号编号，不是量。
+# 这和 verify 早先定的口径一致：设备号 / 告警码 / 日期属于标识符，刻意排除。
+_IDENT_RE = re.compile(
+    r"[A-Za-z]{1,8}-\d{2,8}(?:-\d{2,8})*"                    # CX-104 / E-101 / WO-20261116-004
+    r"|\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?"     # 2026-11-14 23:14:56
+    r"|\d{2}-\d{2}"                                          # 11-07
+)
 SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
 
 你的工作：
@@ -100,6 +109,13 @@ def intake(state):
         "messages": [{"role": "user", "content": msg}],
         "steps": 0,
         "final": "",
+        # final_text 也必须清。它是"给人看的那份结论"，verify 里
+        # final_text = preset_text or _render_claims(doc) —— 只要上一轮留了值，
+        # 这一轮就会被上一轮的文本盖掉，而 final（claims）是本轮的。
+        # 三轮探针里就撞上了：轮2 走 knowledge 留了文本，轮3 走 diagnose，
+        # 结果 UI 上是"问诊断、答手册"，claims 却全是本轮的、校验还是 ok。
+        # 这种错最难发现：指标全绿，只有人看文本才知道答的不是同一件事。
+        "final_text": "",
         "blocked": [],
         "tool_names": [],
         "turn": turn,
@@ -108,6 +124,15 @@ def intake(state):
         # 和 stop_reason 同理：这一轮要是走了 lookup 或 clarify（不碰 knowledge），
         # 上一轮留下的 svc_fail 会被 verify 当成本轮的失败，凭空多一条半成品。
         "svc_fail": "",
+        # check 的三个字段同样是本轮状态，不是会话状态：
+        # check_notes 会被 verify 并进 misquoted（"回环后用 null 换通过"那条），
+        # 不清就会让第 1 轮的回环问题在第 2 轮再判一次失败。
+        "misquoted": [],
+        "cite_stats": {},
+        "check_notes": [],
+        "check_retry": 0,
+        "check_action": "",
+        "check_unsourced0": 0,
     }
 
 
@@ -1294,7 +1319,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
     claims = doc.get("claims") or []
     if not claims:
         bare = re.findall(r"\d+(?:\.\d+)?",
-                          str(doc.get("conclusion") or ""))
+                          _IDENT_RE.sub(" ", str(doc.get("conclusion") or "")))
         if bare:
             stats["bare_conclusion"] = 1
             misquoted.append(

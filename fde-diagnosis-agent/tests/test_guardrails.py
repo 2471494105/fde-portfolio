@@ -1130,6 +1130,25 @@ class BareConclusionTest(unittest.TestCase):
         self.assertEqual(misquoted, [])
         self.assertEqual(stats["bare_conclusion"], 0)
 
+    def test_identifiers_are_not_numbers(self):
+        # 真实撞到的误伤：手册答"没有 CX-104 这个型号"，104 被当成一个量，
+        # 于是这句诚实的"未收录"被判成"写了数字却不给 claims"。
+        # 设备号/告警码/日期都是标识符，和 verify 早先的口径一致，先剥掉再数。
+        doc = {"conclusion": "手册中未收录 CX-104，也没有「标定漂移」的定义；"
+                             "最接近的是 E-301，WO-20261116-004 与 11-07 的记录另见工单。",
+               "claims": []}
+        stats, blocked, misquoted = self._run(doc)
+        self.assertEqual(misquoted, [], "纯标识符被当成量了")
+        self.assertEqual(stats["bare_conclusion"], 0)
+
+    def test_real_numbers_still_caught_after_stripping(self):
+        # 反向断言：剥标识符不能顺手把真数字也剥掉。
+        doc = {"conclusion": "CX-104 在 11-07 那天误判率 52.34%，超阈值 2 倍",
+               "claims": []}
+        stats, blocked, misquoted = self._run(doc)
+        self.assertTrue(misquoted, "剥掉标识符之后，52.34% 和 2 倍必须还在")
+        self.assertEqual(stats["bare_conclusion"], 1)
+
     def test_claims_present_does_not_trigger(self):
         # 反向断言：有 claims 时 conclusion 里出现数字不算违规——
         # 正常的结论会复述一句关键数字，认领它的 claim 在那摆着。
@@ -1164,6 +1183,52 @@ class BareConclusionTest(unittest.TestCase):
         out = nodes.verify(state)
         self.assertEqual(out["misquoted"], [])
         self.assertEqual(out["cite_stats"]["svc_fail"], 0)
+
+
+class TurnResetTest(unittest.TestCase):
+    """intake 每轮必须把"本轮字段"清干净。
+
+    三轮探针撞上过一次：轮 2 走 knowledge 留下 final_text，轮 3 走 diagnose，
+    verify 用 preset_text 优先，于是 UI 上显示的是**上一轮的结论**，
+    而 final（claims）是本轮的、校验还全绿。指标全绿，人一看文本才知道答错了题。
+
+    check_notes 是同一个坑的另一半：它会被 verify 并进 misquoted，
+    不清就会让上一轮的回环问题在这一轮再判一次失败。
+    """
+
+    def test_intake_clears_turn_fields(self):
+        prev = {
+            "final": "上一轮的结论", "final_text": "上一轮的可读文本",
+            "misquoted": ["上一轮的伪引用"], "cite_stats": {"qty": 3},
+            "check_notes": ["上一轮回环把 ref 改成 null"],
+            "check_retry": 1, "check_action": "retry",
+            "check_unsourced0": 2, "svc_fail": "APITimeoutError",
+            "stop_reason": "budget_exhausted", "blocked": ["旧"],
+            "tool_names": ["query_calibration"], "steps": 9, "plan_retry": 2,
+            "turn": 1, "device_id": "CX-104",
+        }
+        out = nodes.intake(prev)
+        for key in ("final", "final_text", "check_action", "svc_fail", "stop_reason"):
+            self.assertEqual(out.get(key), "", f"{key} 没被清空")
+        for key in ("misquoted", "check_notes", "blocked"):
+            self.assertEqual(out.get(key), [], f"{key} 没被清空")
+        for key in ("cite_stats",):
+            self.assertEqual(out.get(key), {}, f"{key} 没被清空")
+        for key in ("check_retry", "check_unsourced0", "steps", "plan_retry"):
+            self.assertEqual(out.get(key), 0, f"{key} 没被清零")
+
+    def test_stale_final_text_does_not_override_this_turn(self):
+        # 本条走一轮 diagnose 形态的结论，没有 preset_text，
+        # 必须按本轮 doc 渲染，而不是沿用上一轮的字符串。
+        doc = {"conclusion": "标定漂移超阈值", "claims": [], "advice": []}
+        state = {"final_text": "上一轮：手册里没有 CX-104", "turn": 1}
+        # 真实节点顺序：intake 先清 -> 节点写 final -> verify
+        # 所以要先清、再塞本轮的 final，不能反过来。
+        state.update(nodes.intake(state))
+        state["final"] = json.dumps(doc, ensure_ascii=False)
+        out = nodes.verify(state)
+        self.assertNotIn("手册里没有 CX-104", out["final_text"])
+        self.assertIn("标定漂移", out["final_text"])
 
 
 class ResultEventContractTest(unittest.TestCase):

@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from app import trace
 from app.graph import build, nodes
 from app.tools import workorder
+from mock_qms import server
 
 
 class OwnershipGuardTest(unittest.TestCase):
@@ -179,6 +180,40 @@ class WorkOrderGuardTest(unittest.TestCase):
         self.assertIn("error", res)
         self.assertEqual(res.get("state"), "system_unavailable")
         self.assertEqual(self.posts, [])
+
+
+class IdemKeyTest(unittest.TestCase):
+    """幂等键的稳定性：同一件还没处理完的事，必须永远算出同一个键。
+
+    这条测的是"跨天重复建单"的根。旧实现把 day 塞进 hash，于是同一件
+    还没办完的事，第二天算出来就是一个新键，再建一张单。现场表现是
+    CX-101 一个坏光源连着三天三张"待处理"，设备科不知道该处理哪张。
+    """
+
+    def test_signature_has_no_date(self):
+        """反向断言：键函数的参数里不能出现任何日期维度。
+
+        有人为了"每天允许建一张"再把 day 加回去，这条直接挂。
+        """
+        import inspect
+        params = list(inspect.signature(server._idem_key).parameters)
+        self.assertEqual(params, ["device_id", "root_cause_code"],
+                         "幂等键不能依赖日期：工单的生命周期不是一天")
+
+    def test_same_device_same_code_is_stable(self):
+        a = server._idem_key("CX-101", "light_degradation")
+        b = server._idem_key("CX-101", "light_degradation")
+        self.assertEqual(a, b)
+        self.assertEqual(len(a), 32)
+
+    def test_code_changes_key(self):
+        """不同故障不能互相吞掉：光源老化和标定漂移是两件事。"""
+        self.assertNotEqual(server._idem_key("CX-101", "light_degradation"),
+                            server._idem_key("CX-101", "calibration_drift"))
+
+    def test_device_changes_key(self):
+        self.assertNotEqual(server._idem_key("CX-101", "light_degradation"),
+                            server._idem_key("CX-102", "light_degradation"))
 
 
 class TracerIsolationTest(unittest.TestCase):

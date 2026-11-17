@@ -142,7 +142,7 @@ def create_work_order(device_id: str, root_cause: str, root_cause_code: str, sev
         "deduped": data.get("deduped", False),
         "assignee_group": data.get("assignee_group"),
         "message": (
-            "同一设备、同一根因、同一天已建过单，返回已有工单"
+            "该设备这类故障已有一张未关闭的工单，本次未新建，返回原来那张"
             if data.get("deduped")
             else f"已建单，分派至{data.get('assignee_group')}"
         ),

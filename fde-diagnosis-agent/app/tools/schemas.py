@@ -187,7 +187,8 @@ TOOL_SCHEMAS = [
             "name": "create_work_order",
             "description": (
                 "创建维修工单并分派。只有在根因已确认、且已给出处置动作时才创建。"
-                "同一设备、同一根因、同一天重复调用会返回已存在的工单（deduped=true），不会重复建单。"
+                "同一设备同一故障分类如果已经有未关闭的工单，调用会返回那张已有单"
+                "（deduped=true），不会重复建单；工单关闭之后再报同类故障，会正常建新单。"
                 "建单前必须先完成取证，不能凭猜测建单。"
             ),
             "parameters": {
@@ -206,7 +207,8 @@ TOOL_SCHEMAS = [
                             "other",
                         ],
                         "description": (
-                            "根因分类，用于幂等去重：同一台设备同一天同一分类只建一张单。"
+                            "根因分类，用于幂等去重：同一台设备同一分类，"
+                            "同时只允许一张未关闭的工单（关闭后可再建）。"
                             "light_degradation 光源衰减/超寿命；lens_contamination 镜头污染；"
                             "calibration_drift 标定漂移；batch_drift 物料批次漂移；"
                             "threshold_misconfig 判定阈值不当；other 其他"

@@ -45,13 +45,20 @@ class WorkOrderIn(BaseModel):
     idempotency_key: str | None = None
 
 
-def _idem_key(device_id: str, root_cause_code: str, day: str) -> str:
-    """幂等键基于枚举分类，不基于自由文本。
+def _idem_key(device_id: str, root_cause_code: str) -> str:
+    """幂等键 = f(设备, 故障分类)，**与日期无关**。
 
-    用自然语言根因做 hash，措辞一变键就变——"光源超额定寿命导致亮度衰减" 与
-    "光源超寿命"是同一件事，却会各建一张单。所以键里只放分类码。
+    两个刻意的取舍：
+
+    1. 不含自然语言根因。用措辞做 hash，键就跟着措辞漂——"光源超额定寿命导致
+       亮度衰减" 和 "光源超寿命" 是同一件事却各建一张单。分类码是枚举，稳定。
+    2. 不含日期。工单的生命周期是「待处理 → 处理中 → 已完成」，不是"一天"。
+       键里带日期，就等于宣布"昨天的同一件事今天可以再建一张"——
+       现场表现是同一个坏光源连着三天三张待处理单，设备科不知道该处理哪张，
+       而数据库认为三张都合法。去重的语义是"这件事还挂着没办完"，
+       这件事挂多久跟日历无关。
     """
-    raw = f"{device_id}|{day}|{root_cause_code}".encode("utf-8")
+    raw = f"{device_id}|{root_cause_code}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:32]
 
 
@@ -70,10 +77,18 @@ def create_work_order(body: WorkOrderIn):
         return _resp(4002, "处置动作不能为空")
 
     day = datetime.now().strftime("%Y-%m-%d")
-    key = body.idempotency_key or _idem_key(body.device_id, body.root_cause_code, day)
+    # day 只用来给单号打日期戳，不进幂等键
+    key = body.idempotency_key or _idem_key(body.device_id, body.root_cause_code)
 
     with _conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM work_orders WHERE idempotency_key = %s", (key,))
+        # 只跟"还没关闭"的单去重：处理完的单不再占位，同一问题再坏可以重新建单。
+        # 关闭状态用黑名单列出，与 work_orders_open_key 索引的 WHERE 条件必须一致——
+        # 两处不一致就会出现"查询说不存在、插入却撞唯一约束"的鬼故事。
+        cur.execute(
+            "SELECT * FROM work_orders WHERE idempotency_key = %s "
+            "AND status NOT IN ('已完成', '已合并', '已取消')",
+            (key,),
+        )
         existed = cur.fetchone()
         if existed:
             return _resp(0, "ok", {
@@ -89,11 +104,11 @@ def create_work_order(body: WorkOrderIn):
 
         cur.execute("""
             INSERT INTO work_orders
-              (order_id, device_id, root_cause, severity, actions,
+              (order_id, device_id, root_cause, root_cause_code, severity, actions,
                evidence_refs, idempotency_key, status, assignee_group)
-            VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
         """, (
-            order_id, body.device_id, body.root_cause, body.severity,
+            order_id, body.device_id, body.root_cause, body.root_cause_code, body.severity,
             __import__("json").dumps(body.actions, ensure_ascii=False),
             __import__("json").dumps(body.evidence_refs, ensure_ascii=False),
             key, "待处理", SEVERITY_GROUP[body.severity],

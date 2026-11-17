@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 16:19:47",
-  "commit": "35dc329",
+  "ts": "2026-11-17 16:48:35",
+  "commit": "60c6b85",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "caa4d49aaeb3",
-  "code_hash": "2f0ccf968cc3",
+  "code_hash": "a36fe3133dfa",
   "cases_total": 27,
   "evaluated": 1,
   "workers": 1,
@@ -28,18 +28,18 @@
   "deduped_grey": 0,
   "intent_conf_low_n": 0,
   "fc_fail": 0,
-  "blocked_n": 1,
-  "trace_ok_n": 1,
-  "trace_rate": 1.0,
-  "cite_hit": 6,
-  "cite_qty": 9,
-  "cite_rate": 0.6667,
+  "blocked_n": 0,
+  "trace_ok_n": 0,
+  "trace_rate": 0.0,
+  "cite_hit": 11,
+  "cite_qty": 12,
+  "cite_rate": 0.9167,
   "cite_cut": 0,
   "json_fixed": 0,
-  "misquote_n": 0,
-  "range_ok": 0,
+  "misquote_n": 1,
+  "range_ok": 1,
   "range_bad": 0,
-  "elapsed_s": 108.1
+  "elapsed_s": 121.5
  },
  "results": [
   {
@@ -49,13 +49,13 @@
    "intent_ok": true,
    "ask_ok": true,
    "deduped_env": "",
-   "intent_conf": 0.92,
+   "intent_conf": 0.95,
    "tools": [
     "query_device_profile",
     "query_work_order",
     "query_light_usage",
-    "create_work_order",
-    "query_work_order"
+    "query_defect_log",
+    "create_work_order"
    ],
    "steps": 5,
    "stop_reason": "enough",
@@ -66,45 +66,43 @@
    "kw_hit": [],
    "req_miss": [],
    "steps_ok": true,
-   "blocked": [
-    "本次新建工单是 WO-20261117-007，状态为「待处理」",
-    "已存在的同根因工单为 WO-20261115-001（11-15 04:30 建）",
-    "已存在的同根因工单为 WO-20261116-002（11-16 10:20 建）"
+   "blocked": [],
+   "misquoted": [
+    "亮度设定历史为 85→80→65，两次下调（字段值 [{'ts': '2025-03-12 09:00:00', 'value': 85}, {'ts': '2026-09-15 14:20:00', 'value': 80}, {'ts': '2026-10-20 10:05:00', 'value': 65}] ≠ 2次）"
    ],
-   "misquoted": [],
-   "trace_ok": true,
+   "trace_ok": false,
    "fc_fail": false,
    "semantic_ok": false,
    "round_ok": true,
    "round_detail": "",
    "turns": 0,
    "reasons": [
-    "未命中幂等（应返回已存在工单）"
+    "引用写错(亮度设定历史为 85→80→65，两次下调（字段值 [{'ts': '2025-03-12 09:00:00', 'value': 85}, {'ts': '2026-09-15 14:20:00', 'value': 80}, {'ts': '2026-10-20 10:05:00', 'value': 65}] ≠ 2次）)"
    ],
    "cite_stats": {
-    "qty": 9,
-    "pct": 0,
-    "cited_ok": 6,
-    "cited_path": 6,
+    "qty": 12,
+    "pct": 5,
+    "cited_ok": 11,
+    "cited_path": 11,
     "cite_oob": 0,
-    "path_ok": 6,
-    "path_bad": 0,
+    "path_ok": 11,
+    "path_bad": 1,
     "path_miss": 0,
     "json_bad": 0,
-    "unsourced": 3,
+    "unsourced": 0,
     "ref_bad": 0,
     "cite_cut": 0,
     "json_fixed": 0,
-    "range_ok": 0,
+    "range_ok": 1,
     "range_bad": 0,
     "quote_ok": 0,
     "quote_bad": 0,
     "bare_conclusion": 0,
     "svc_fail": 0,
-    "cited": 6,
+    "cited": 11,
     "ev": 5
    },
-   "final_head": "换光源的工单已经建好了，但这次建单并没有被去重挡住：CX-101 现在有 3 张「光源超寿命、待更换」的待处理工单，根因相同，建议合并处理，不要再各自重复派工 - 光源 CA-DC21E 累计点亮 8620h[query_light_usage] - 额定寿命只有 8000h[query_light_usage] - "
+   "final_head": "根因是光源 CA-DC21E 超额定寿命后亮度衰减，误判集中在 1 号工位；本次建单被去重，未生成新单，返回的是原有未关闭工单 - 光源累计点亮 8620h[query_light_usage] - 额定寿命 8000h[query_light_usage] - 已超额定寿命 620h[query_light_usag"
   }
  ]
 }

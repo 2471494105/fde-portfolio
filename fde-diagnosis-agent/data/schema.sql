@@ -101,16 +101,35 @@ CREATE TABLE IF NOT EXISTS work_orders (
     order_id        TEXT PRIMARY KEY,
     device_id       TEXT NOT NULL,
     root_cause      TEXT NOT NULL,
+    root_cause_code TEXT NOT NULL DEFAULT 'other',
     severity        TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high')),
     actions         TEXT NOT NULL,
     evidence_refs   TEXT NOT NULL,
-    idempotency_key TEXT UNIQUE NOT NULL,
+    idempotency_key TEXT NOT NULL,
     status          TEXT NOT NULL,
     assignee_group  TEXT NOT NULL,
     created_at      TIMESTAMP NOT NULL DEFAULT now()
 );
 
-COMMENT ON COLUMN work_orders.idempotency_key IS 'hash(device_id + 故障日 + root_cause)，重复建单返回已存在';
+COMMENT ON COLUMN work_orders.idempotency_key IS 'hash(device_id + root_cause_code)，**不含日期**：跨天的重复建单也要挡';
+
+-- 已有表的结构变迁（CREATE TABLE IF NOT EXISTS 不会改旧表）。
+-- 顺序有讲究：旧的"全表唯一"必须**先拆**，否则新约束建了也没用——
+-- 旧约束还在，已完成过的键依然占位，同一问题处理完再坏永远建不了新单。
+ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS root_cause_code TEXT NOT NULL DEFAULT 'other';
+ALTER TABLE work_orders DROP CONSTRAINT IF EXISTS work_orders_idempotency_key_key;
+
+-- 幂等的正确约束是"同一件事同时只有一张未关闭的单"，不是"同一个键全表只能有一条"。
+-- 用部分唯一索引表达：已关闭的单不占位，同一问题处理完之后再坏，还能建新单。
+-- 条件用**黑名单**（排除已关闭状态）而不是白名单（只收待处理）：
+-- 将来新增任何状态，默认仍算"还挂着"、仍参与去重——宁可多挡，不会漏挡。
+-- 早先这么写：
+--   idempotency_key TEXT UNIQUE + 键里带 day
+-- 结果是"每天的同一件事各建一张"——CX-101 一个坏光源连着三天三张待处理单，
+-- 设备科不知道该处理哪张，而数据库认为这三张都合法。
+CREATE UNIQUE INDEX IF NOT EXISTS work_orders_open_key
+    ON work_orders (idempotency_key)
+    WHERE status NOT IN ('已完成', '已合并', '已取消');
 
 -- ---------- 设备手册片段（与项目一 IQC 文档库分离） ----------
 -- 项目一 doc_chunks 装的是 IQC 检验标准/安全规范，不含设备参数，

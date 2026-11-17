@@ -978,6 +978,32 @@ class EvidenceNumberingTest(unittest.TestCase):
         self.assertEqual(out["evidence"][0]["ev_no"], 6)
         self.assertTrue(out["messages"][0]["content"].startswith("[证据 6] "))
 
+    def test_lookup_evidence_carries_numbers(self):
+        # lookup 走的是模板拼文本，不经 act——它的 evidence 当初完全没有编号，
+        # 于是同一份 evidence 里并存"有号"和"没号"两种条目。
+        # 后果：多轮里 by_no 只收了诊断那半边的号，lookup 给出的数字
+        # 永远指不回去，报告上却看不出是"没编号"还是"引错了"。
+        def fake_prof(device_id):
+            return {"device_id": device_id, "maintenance_cycle_days": 90}
+
+        def fake_log(device_id, group_by="station"):
+            return {"total": 10,
+                    "groups": [{"key": "1号工位", "count": 10,
+                                "false_positive": 2, "rate": 0.2}]}
+
+        def fake_wo(device_id):
+            return {"state": "empty", "note": "没有工单记录"}
+
+        state = {"device_ids": ["CX-104"], "turn": 2,
+                 "evidence": [{"ev_no": i} for i in range(1, 4)]}
+        with mock.patch.object(nodes, "query_device_profile", fake_prof), \
+                mock.patch.object(nodes, "query_defect_log", fake_log), \
+                mock.patch.object(nodes, "query_work_order", fake_wo):
+            out = nodes.lookup(state)
+        # 上一轮已有 3 条，所以新的必须从 4 起，不能自己从 1 重数。
+        self.assertEqual([e["ev_no"] for e in out["evidence"]], [4, 5, 6])
+        self.assertEqual(len(out["evidence"]), 3)
+
 
 class ResultEventContractTest(unittest.TestCase):
     """result 事件的两个出口（CLI/评测 与 Web 流式）必须写同样的字段。

@@ -149,6 +149,12 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 # 模型判为诊断/查询但输出字段不自洽时的降级说明
 _INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "clarify"}
 
+# 只有这两类走 claims 契约：它们的结论由模型写，一个数字一个 ref。
+# lookup 的结论是程序按模板拼的（数字直接来自工具返回），knowledge 是自由文本，
+# 两者都没承诺过 claims 契约。拿契约去判它们，会把"程序拼的文本"记成
+# "模型不按契约输出"——归因错人，还会让 lookup 类用例恒 FAIL。
+CLAIMS_INTENTS = ("diagnose", "action")
+
 # 意图置信闸的两条线。
 #
 # 低线以下不猜了，直接追问——带着错的理解跑满 8 步是这里最贵的错。
@@ -1363,7 +1369,11 @@ def verify(state):
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。
     doc = _parse_claims(final)
-    if doc is not None:
+    raw_intent = str(state.get("intent") or "").strip()
+    # 没有 intent（老数据、单测直接构造 state）时按 claims 判：
+    # 跳过校验比误判更危险——"没校验的结论被当成通过"正是下面那段要防的事。
+    claims_path = raw_intent in CLAIMS_INTENTS or not raw_intent
+    if claims_path and doc is not None:
         # 引号修复救回来的要计数：修复是静默的，不记就看不见模型多不守规矩。
         if doc.pop("_repaired", False):
             stats["json_fixed"] = 1
@@ -1373,6 +1383,15 @@ def verify(state):
                    final_len=len(final), **stats)
         return {"final": final, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
+
+    # 非 claims 路径（lookup / knowledge）：结论不是模型按契约写的，
+    # 判它"未按契约输出"是归因错人。这里直接放行，但把 cite_stats 照常交出去，
+    # 让报告能看见"这条路径本来就没有引用统计"，而不是看见一个假的 json_bad。
+    if not claims_path:
+        trace.emit("verify", path="no_claims", intent=state.get("intent"),
+                   final_len=len(final), **stats)
+        return {"final": final, "final_text": final, "blocked": blocked,
+                "misquoted": misquoted, "cite_stats": stats}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
     # 而没校验的结论被当成通过，才是真正危险的地方。
@@ -1433,10 +1452,15 @@ def lookup(state):
     blocks, evidence, names, steps = [], [], [], 0
 
     turn = int(state.get("turn") or 1)
+    # 编号沿用 act 那套绝对号（跨轮递增）。lookup 的证据也得有号：
+    # 否则同一份 evidence 里并存"有号"和"没号"两种条目，多轮下必然打架，
+    # 而且模型在 lookup 结论里看到的数字，事后没有任何编号可以指回去。
+    base = len(state.get("evidence") or [])
     for d in ids:
         prof = query_device_profile(d)
         evidence.append({"tool": "query_device_profile", "args": {"device_id": d},
-                         "result": prof, "turn": turn})
+                         "result": prof, "turn": turn,
+                         "ev_no": base + len(evidence) + 1})
         names.append("query_device_profile")
         steps += 1
         if isinstance(prof, dict) and "error" in prof:
@@ -1446,7 +1470,8 @@ def lookup(state):
         log = query_defect_log(d, group_by="station")
         evidence.append({"tool": "query_defect_log",
                          "args": {"device_id": d, "group_by": "station"},
-                         "result": log, "turn": turn})
+                         "result": log, "turn": turn,
+                         "ev_no": base + len(evidence) + 1})
         names.append("query_defect_log")
         steps += 1
         blocks.append(_data_block(prof, log))
@@ -1459,7 +1484,8 @@ def lookup(state):
         # 把根因描述摆进给用户的文本里，等于变相给了结论。
         wo = query_work_order(device_id=d)
         evidence.append({"tool": "query_work_order",
-                         "args": {"device_id": d}, "result": wo, "turn": turn})
+                         "args": {"device_id": d}, "result": wo, "turn": turn,
+                         "ev_no": base + len(evidence) + 1})
         names.append("query_work_order")
         steps += 1
         if wo.get("state") == "found":
@@ -1498,6 +1524,8 @@ def knowledge(state):
     """
     q = state.get("user_msg", "")
     names, evidence, steps = [], [], 0
+    # 同 lookup：证据必须带绝对号。knowledge 的答案里的数字事后要靠它指回去。
+    base = len(state.get("evidence") or [])
 
     try:
         res = search_manual(q, top_k=5)
@@ -1513,7 +1541,8 @@ def knowledge(state):
     names.append("search_manual")
     steps += 1
     evidence.append({"tool": "search_manual", "args": {"query": q}, "result": res,
-                     "turn": int(state.get("turn") or 1)})
+                     "turn": int(state.get("turn") or 1),
+                     "ev_no": base + len(evidence) + 1})
 
     if isinstance(res, dict) and "error" in res:
         trace.emit("knowledge", status="tool_error", error=str(res["error"])[:120])
@@ -1537,7 +1566,8 @@ def knowledge(state):
         names.append("check_doc_conflict")
         steps += 1
         evidence.append({"tool": "check_doc_conflict", "args": {"param_name": p},
-                         "result": c, "turn": int(state.get("turn") or 1)})
+                         "result": c, "turn": int(state.get("turn") or 1),
+                         "ev_no": base + len(evidence) + 1})
         if isinstance(c, dict) and c.get("has_conflict"):
             conflicts.append(c)
 

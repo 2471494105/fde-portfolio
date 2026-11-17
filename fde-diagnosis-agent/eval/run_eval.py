@@ -23,6 +23,9 @@ sys.path.insert(0, str(ROOT))
 
 from app.graph.build import run  # noqa: E402
 from app.graph.llm import BASE_URL, MODEL, PROVIDER  # noqa: E402
+# 停止原因的取值只此一份，评测这里直接引用常量，不再手抄字符串。
+# 手抄一次就多一份可以各自漂移的副本——这正是"同一份事实存两份"最常见的起手式。
+from app.graph.nodes import STOP_BUDGET_EXHAUSTED  # noqa: E402
 from app.meta import code_hash as _code_hash, git_commit as _git_commit  # noqa: E402
 from eval.trajectories import TRAJECTORIES  # noqa: E402
 
@@ -75,6 +78,10 @@ def judge(traj, state):
     # 想知道"路径锚点写对了几次"就得拿 evidence 离线重算一遍，
     # 等于每次复盘都要临时写脚本——这一层留档就断了。
     cite_stats = state.get("cite_stats") or {}
+    # 结束原因：need_more / enough / budget_exhausted。
+    # 只看 steps 分不出"扫满 12 步还是没结论"和"12 步里自己判断够了"——
+    # 前者是半成品，后者是可交付结论，可信度差着量级。
+    stop_reason = state.get("stop_reason", "")
 
     expect = traj["expect_tools"]
     hit = [t for t in expect if t in tools]
@@ -170,6 +177,7 @@ def judge(traj, state):
         "intent_ok": intent_ok,
         "tools": tools,
         "steps": steps,
+        "stop_reason": stop_reason,
         "tool_rate": round(tool_rate, 3),
         "gb_rate": round(gb_rate, 3),
         "kw_rate": round(kw_rate, 3),
@@ -319,6 +327,14 @@ def main():
     json_fixed = sum(1 for r in results
                      if (r.get("cite_stats") or {}).get("json_fixed"))
     steps_bad = sum(1 for r in results if not r["steps_ok"])
+    # 被预算掐断的条数。这个值非零就说明"12 步上限"在替模型做判断，
+    # 那几条的结论是半成品。以前它们混在步数里、和正常收工长得一样，
+    # 既看不见次数，也拿不到归因。
+    budget_n = sum(1 for r in results
+                   if r.get("stop_reason") == STOP_BUDGET_EXHAUSTED)
+    # 正常收工（模型自己判断够了）的条数，和上面那个数成对出现：
+    # 只看一个数分不出"没发生过预算耗尽"和"根本没统计"。
+    enough_n = sum(1 for r in results if r.get("stop_reason") == "enough")
 
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
@@ -326,7 +342,9 @@ def main():
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
     print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")
-    print(f"步数越界      {steps_bad}/{n}")
+    print(f"步数越界      {steps_bad}/{n}   （按用例期望区间判）")
+    print(f"预算耗尽      {budget_n}/{n}   （还想查但额度已尽，这几条结论是半成品）")
+    print(f"判断够了收工  {enough_n}/{n}   （模型自己判断证据够了，正常结束）")
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
     print(f"fc 失败       {fc}/{n}")
@@ -348,6 +366,8 @@ def main():
         "gb_rate": round(sum(r["gb_rate"] for r in results) / n, 4) if n else 0.0,
         "kw_rate": round(sum(r["kw_rate"] for r in results) / n, 4) if n else 0.0,
         "steps_bad": steps_bad,
+        "budget_exhausted": budget_n,
+        "enough": enough_n,
         "intent_bad": intent_bad,
         "fc_fail": fc,
         "blocked_n": blocked_n,

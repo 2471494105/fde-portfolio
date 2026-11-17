@@ -548,7 +548,7 @@ class ResultEventContractTest(unittest.TestCase):
     那时重跑的结果已经不一定一样了。
     """
 
-    REQUIRED = {"turn", "intent", "steps", "tools", "blocked", "misquoted",
+    REQUIRED = {"turn", "intent", "steps", "stop_reason", "tools", "blocked", "misquoted",
                 "device_ids", "slots", "final", "final_head", "final_text", "cite"}
 
     def test_all_audit_fields_present(self):
@@ -577,6 +577,80 @@ class ResultEventContractTest(unittest.TestCase):
         for name, line_no, line in hits:
             self.assertIn("result_event", line,
                           f"{name}:{line_no} 又手写了一份 result 字段：{line}")
+
+
+class StopReasonTest(unittest.TestCase):
+    """结束原因必须能把三件事分开：还要查 / 够了 / 被预算掐断。
+
+    改之前"这次运行结束了"有三条来路（步数满 12、模型不再调工具、plan_retry 退一次），
+    全部汇进同一个出口，报告上长得一模一样：一次 12 步仍没结论、被预算掐断的运行，
+    和一次 3 步数据够了、干净收工，都是 OK / 步数 12 / 语义 1/1，
+    但两者可信度差着量级，事后也没法归因。
+
+    取值对齐 Anthropic Messages API 的 stop_reason：
+    need_more~tool_use、enough~end_turn、budget_exhausted~max_tokens。
+    关键一条：budget_exhausted 只在"还想继续 + 额度已尽"时成立，
+    不是"步数满"就成立——这正是 Anthropic 把 end_turn 和 max_tokens
+    分成两个值的理由：一个是被截断，一个是被完成。
+    """
+
+    def test_budget_exhausted_only_when_still_wanting_more(self):
+        self.assertEqual(nodes._classify_stop(True, 12), nodes.STOP_BUDGET_EXHAUSTED)
+        # 反向断言：步数满、但模型自己说够了，仍然是正常收工。
+        # 把两者写成同一个值的实现会正好挂在这一行。
+        self.assertEqual(nodes._classify_stop(False, 12), nodes.STOP_ENOUGH)
+
+    def test_under_budget_stays_need_more(self):
+        # 边界：11/12 还想查，还剩一次额度，不能提前报预算耗尽
+        self.assertEqual(nodes._classify_stop(True, 11), nodes.STOP_NEED_MORE)
+
+    def test_short_run_is_enough(self):
+        self.assertEqual(nodes._classify_stop(False, 3), nodes.STOP_ENOUGH)
+
+    def test_route_sends_budget_case_to_finalize(self):
+        st = {"stop_reason": nodes.STOP_BUDGET_EXHAUSTED,
+              "messages": [{"role": "assistant", "content": "",
+                            "tool_calls": [{"id": "1"}]}],
+              "steps": 12}
+        self.assertEqual(nodes.route_after_plan(st), "finalize")
+
+    def test_route_sends_enough_to_verify(self):
+        st = {"stop_reason": nodes.STOP_ENOUGH,
+              "messages": [{"role": "assistant", "content": '{"conclusion": "x"}'}],
+              "steps": 3}
+        self.assertEqual(nodes.route_after_plan(st), "verify")
+
+    def test_missing_stop_reason_falls_back_to_same_rule(self):
+        # 多轮会话从旧 checkpoint 恢复时，state 里还没有这个字段。
+        # 缺字段就静默走错分支，是这类改动最容易留下的坑。
+        st = {"messages": [{"role": "assistant", "content": "",
+                            "tool_calls": [{"id": "1"}]}],
+              "steps": 12}
+        self.assertEqual(nodes.route_after_plan(st), "finalize")
+
+    def test_intake_clears_stop_reason_between_turns(self):
+        # lookup / knowledge 根本不跑 plan，不清就会把上一轮诊断留下的
+        # 结束原因当成本轮结论报出去。
+        out = nodes.intake({"user_msg": "CX-104 参数是多少", "turn": 1,
+                            "stop_reason": nodes.STOP_BUDGET_EXHAUSTED})
+        self.assertEqual(out.get("stop_reason"), "")
+
+    def test_missing_reaches_plan_notes(self):
+        # 这条是本轮的实质修复：understand 抽出的缺口，plan 必须真的送给模型。
+        # 改之前 missing 写了没人读，只在代码里"存在"，不在决策里生效。
+        notes, gaps, _ = nodes._plan_notes(
+            {"missing": ["该工位的历史标定记录", "光源已用时长"]}, 4)
+        joined = "\n".join(notes)
+        self.assertIn("该工位的历史标定记录", joined)
+        self.assertIn("光源已用时长", joined)
+        self.assertEqual(gaps, ["该工位的历史标定记录", "光源已用时长"])
+
+    def test_empty_missing_adds_no_blank_section(self):
+        # 没缺口时不能塞一个空标题——那会让模型以为"缺口是空的"，
+        # 而事实是"这一轮没判断出缺口"，两者不是一回事。
+        notes, gaps, _ = nodes._plan_notes({"missing": []}, 4)
+        self.assertEqual(gaps, [])
+        self.assertFalse(any("还缺的信息" in n for n in notes))
 
 
 if __name__ == "__main__":

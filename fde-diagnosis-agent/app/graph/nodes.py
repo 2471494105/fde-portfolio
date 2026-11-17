@@ -85,8 +85,10 @@ def intake(state):
     device_id = m.group(0).upper() if m else ""
     turn = int(state.get("turn") or 0) + 1
     trace.emit("intake", device_id=device_id, matched=bool(m), msg_len=len(msg), turn=turn)
-    # 这四个每轮重写：不清的话上一轮的结论/告警/步数会污染本轮判断。
+    # 这几个每轮重写：不清的话上一轮的结论/告警/步数会污染本轮判断。
     # messages 和 evidence 相反，靠 reducer 累积——多轮必须保留。
+    # stop_reason 也必须清：lookup/knowledge 这类路径根本不跑 plan，
+    # 不清就会把上一轮诊断留下的停止原因，当成本轮的结论报出去。
     return {
         "device_id": device_id,
         "messages": [{"role": "user", "content": msg}],
@@ -96,6 +98,7 @@ def intake(state):
         "tool_names": [],
         "turn": turn,
         "plan_retry": 0,
+        "stop_reason": "",
     }
 
 
@@ -410,17 +413,70 @@ def _pending_call(content):
     return any(w in tail for w in _PENDING_WORDS)
 
 
-def plan(state):
-    used = state.get("steps", 0)
+# 停止原因：本轮"为什么继续/为什么停"的唯一表达。
+#
+# 为什么要有这个字段：改之前，"这次运行结束了"在代码里有三条来路——
+#   步数到 12 强制 finalize、模型没发 tool_calls、plan_retry 触发退一次。
+# 三条都汇进同一个出口，产生的报告长得一模一样。于是一次「12 步没结论、
+# 被预算掐断」的运行，和一次「3 步数据够了、干净收工」的运行，在报告上
+# 都是 OK / 步数 12 / 语义 1/1，可信度却完全不同，事后无法归因。
+#
+# 取值对齐 Anthropic Messages API 的 stop_reason 语义：
+#   need_more        ~ "tool_use"   模型还要调工具，循环继续
+#   enough           ~ "end_turn"   模型不再调工具，正常收工
+#   budget_exhausted ~ "max_tokens" 还想继续但额度已尽，结论是半成品
+#
+# 关键一条：budget_exhausted 只在「模型还想继续 + 额度已尽」时成立，
+# 不是「步数满 12」就成立。步数满了但模型自己说够了，仍然是 enough——
+# 这正是 Anthropic 把 end_turn 和 max_tokens 分成两个值的理由：
+# 一个是被截断，一个是被完成，混成一个值就再也分不出来。
+#
+# 这个值从响应结构推导，不额外让模型声明，也不多花一次调用：
+# Anthropic 服务端的 stop_reason 同样是从响应里有没有 tool_use 块读出来的，
+# 不是模型自己写一句"我要停了"。
+STOP_NEED_MORE = "need_more"
+STOP_ENOUGH = "enough"
+STOP_BUDGET_EXHAUSTED = "budget_exhausted"
+
+
+def _classify_stop(has_tool_calls, steps, max_steps=MAX_STEPS):
+    """本轮停止原因。纯推导，不调模型、不花 token。"""
+    if has_tool_calls:
+        return STOP_BUDGET_EXHAUSTED if steps >= max_steps else STOP_NEED_MORE
+    return STOP_ENOUGH
+
+
+def _plan_notes(state, used):
+    """本轮追加到 messages 末尾的动态提示，外加要写回的 retry 位。
+
+    为什么单独抽成纯函数：这几行文字决定了模型这一轮看到什么，
+    是它判断"继续查还是收工"的全部依据。原来内联在 plan 里，
+    写错、漏传都只有真跑一次模型才看得出来——而模型不遵从是静默的，
+    事后翻轨迹也找不到"到底把哪几条缺口送进去了"。
+    抽出来就能用单测直接断言，不用花钱调模型。
+
+    返回 (notes, gaps, retry)。
+    """
     # system prompt 必须逐字恒定，才能命中前缀缓存。
     # 会变的内容（工具预算、跨轮摘要、重试提醒）一律追加到 messages 末尾——
     # 之前把预算拼在 system 开头，步数一涨第一句就变，后面 2000+ token 全部按未命中计费，
     # 实测一条 8 步的用例 5 次 plan 缓存命中率是 0/2265、0/3203、0/4591、0/5265、0/5513。
-    sys_prompt = SYSTEM_PROMPT
     notes = [
-        f"[工具预算] 已用 {used}/{MAX_STEPS} 次。剩余 3 次及以下时请停止取证、直接给结论；"
+        f"[工具预算] 已用 {used}/{MAX_STEPS} 次。"
+        "判断标准不是「还剩几次」，而是「够不够」：能给出根因和处置就停，不够才继续。"
         "如果用户本轮已明确要求某个动作（例如建单），在根因已明确时优先完成该动作。"
     ]
+    # 把 understand 第一轮写下的缺口带回来。
+    # 改之前这个字段只写不读：UNDERSTAND_PROMPT 里要求模型填 missing，
+    # understand 把它写进 state，ask_user 拿它拼追问文案，trace 记了一笔，
+    # 然后 plan 完全不看它。等于模型每轮决策时只知道"用了几次"，不知道"还缺什么"，
+    # 停止这件事在 3–9 步这段最贵的区间里没有任何判断依据。
+    gaps = [str(g).strip() for g in (state.get("missing") or []) if str(g).strip()]
+    if gaps:
+        notes.append(
+            "[你一开始判断还缺的信息]\n- " + "\n- ".join(gaps)
+            + "\n对照上面这些：已经补齐就停止取证、直接给结论；没补齐就只查还缺的那一条。"
+        )
     summary = (state.get("session_summary") or "").strip()
     if summary:
         # 裁掉的历史靠这段一句话摘要保留，不然模型不知道前面查过什么
@@ -434,6 +490,13 @@ def plan(state):
             "这一次要么直接发起 tool_calls，要么给出最终结论。"
         )
         retry = 1
+    return notes, gaps, retry
+
+
+def plan(state):
+    used = state.get("steps", 0)
+    sys_prompt = SYSTEM_PROMPT
+    notes, gaps, retry = _plan_notes(state, used)
 
     msgs = [{"role": "system", "content": sys_prompt}] + _context_messages(state)
     msgs.append({"role": "user", "content": "\n\n".join(notes)})
@@ -469,6 +532,7 @@ def plan(state):
             for tc in m.tool_calls
         ]
 
+    stop = _classify_stop(bool(m.tool_calls), used)
     trace.emit(
         "plan",
         ms=ms,
@@ -479,16 +543,35 @@ def plan(state):
         calls=[tc.function.name for tc in (m.tool_calls or [])],
         content_head=(m.content or "")[:300],
         steps_before=used,
+        # 停止原因进轨迹：事后复盘"这次为什么停了、是不是被预算掐断的"，
+        # 不用再靠步数去猜。
+        stop_reason=stop,
+        # 这一轮到底把哪几条缺口送给了模型。
+        # 不记这一笔，"missing 已经接线"就只是代码里看起来接了——
+        # 它有没有真的进到 prompt、模型看没看到，事后无法证明。
+        gaps=gaps,
     )
-    return {"messages": [out], "plan_retry": retry}
+    return {"messages": [out], "plan_retry": retry, "stop_reason": stop}
 
 
 def route_after_plan(state):
     last = state["messages"][-1]
-    if last.get("tool_calls"):
-        if state.get("steps", 0) >= MAX_STEPS:
-            return "finalize"
+    has_calls = bool(last.get("tool_calls"))
+    # 优先用 plan 刚刚写下的停止原因。plan 是同时返回 messages 和 stop_reason 的，
+    # 两者不可能不一致；只有从旧 checkpoint 恢复（state 里还没有这个字段）时才现推导一次。
+    stop = state.get("stop_reason") or _classify_stop(has_calls, state.get("steps", 0))
+
+    # 两条结束路径分开走，不再汇进同一个出口：
+    #   budget_exhausted → finalize，结论是"预算掐断的半成品"
+    #   enough           → verify，结论是"模型判断够了"
+    # 之前两者都走 verify→finalize，报告上无法区分，一次 12 步没结论的运行
+    # 和一次 3 步干净收工的运行长得一模一样。
+    if stop == STOP_BUDGET_EXHAUSTED and has_calls:
+        return "finalize"
+    if stop == STOP_NEED_MORE and has_calls:
         return "act"
+    # 剩下的都当"模型不再调工具"。这里仍然按实际消息判断，不信字段：
+    # 消息是 act 真正会执行的东西，不能让一个字段把图路由进空转节点。
     # 正文写了"接下来调用 X"但 tool_calls 为空：不认它是结论，退回 plan 一次。
     # plan_retry 已经在 plan 里置位，所以最多退一次，不会死循环。
     if int(state.get("plan_retry") or 0) == 0 and _pending_call(last.get("content")):
@@ -1220,6 +1303,11 @@ def finalize(state):
     tools = ",".join(state.get("tool_names") or []) or "无"
     user_head = (state.get("user_msg") or "").replace("\n", " ")[:50]
     final_head = (state.get("final") or "").replace("\n", " ")[:80]
+    # 结束原因写进跨轮摘要：下一轮模型能看到"上一轮是被预算掐断的"，
+    # 就不会把一份半成品结论当成已经查实的事实继续往下推。
+    # lookup / knowledge 不走 plan，自然没有这个值，写成"未跑循环"而不是空——
+    # 空字符串和"没跑过"在事后统计里长得一样，又是一份分不出来的事实。
+    stop = state.get("stop_reason") or "未跑循环"
     line = (f"\n[{turn}] 用户「{user_head}」→ {state.get('intent') or '?'}；"
-            f"工具 {tools}；结论「{final_head}」")
+            f"工具 {tools}；结束={stop}；结论「{final_head}」")
     return {"final": state.get("final", ""), "session_summary": line}

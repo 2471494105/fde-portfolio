@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 00:59:10",
-  "commit": "6540030",
+  "ts": "2026-11-17 11:11:13",
+  "commit": "cc9fbf5",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "02a9568bf083",
+  "code_hash": "0e435040d921",
   "cases_total": 25,
   "evaluated": 1,
   "workers": 1,
@@ -20,18 +20,20 @@
   "gb_rate": 1.0,
   "kw_rate": 1.0,
   "steps_bad": 0,
+  "budget_exhausted": 0,
+  "enough": 1,
   "intent_bad": 0,
   "fc_fail": 0,
   "blocked_n": 1,
   "trace_ok_n": 1,
   "trace_rate": 1.0,
-  "cite_hit": 17,
-  "cite_qty": 21,
-  "cite_rate": 0.8095,
+  "cite_hit": 16,
+  "cite_qty": 17,
+  "cite_rate": 0.9412,
   "cite_cut": 0,
   "json_fixed": 0,
   "misquote_n": 0,
-  "elapsed_s": 42.2
+  "elapsed_s": 154.6
  },
  "results": [
   {
@@ -43,15 +45,14 @@
     "query_device_profile",
     "query_defect_log",
     "query_defect_log",
-    "query_light_usage",
+    "query_defect_log",
     "query_calibration",
-    "query_defect_log",
-    "query_defect_log",
-    "query_defect_log",
+    "query_light_usage",
     "search_manual",
     "check_doc_conflict"
    ],
-   "steps": 10,
+   "steps": 8,
+   "stop_reason": "enough",
    "tool_rate": 1.0,
    "gb_rate": 1.0,
    "kw_rate": 1.0,
@@ -63,10 +64,7 @@
    "req_miss": [],
    "steps_ok": true,
    "blocked": [
-    "近7天整体误判 27 件，误判率 23.89%（=27/113）",
-    "1号工位误判率 58.82%（=20/34）",
-    "3号工位误判率 10.64%（=5/47）",
-    "2号工位误判率 6.25%（=2/32）"
+    "1号工位误判占比 74%（=20/27）"
    ],
    "misquoted": [],
    "trace_ok": true,
@@ -74,23 +72,23 @@
    "semantic_ok": true,
    "reasons": [],
    "cite_stats": {
-    "qty": 21,
+    "qty": 17,
     "pct": 6,
-    "cited_ok": 17,
-    "cited_path": 17,
+    "cited_ok": 16,
+    "cited_path": 16,
     "cite_oob": 0,
-    "path_ok": 17,
+    "path_ok": 16,
     "path_bad": 0,
     "path_miss": 0,
     "json_bad": 0,
-    "unsourced": 4,
+    "unsourced": 1,
     "ref_bad": 0,
     "cite_cut": 0,
     "json_fixed": 0,
-    "cited": 17,
-    "ev": 10
+    "cited": 16,
+    "ev": 8
    },
-   "final_head": "误判集中在1号工位（该工位的镜头、光源、标定是独立部件，属于硬件方向），而光源累计点亮时长已超额定寿命、亮度被两次下调，标定本身平稳正常，因此根因锁定在1号工位光源衰减：夜班环境光弱，边缘对比度进一步下降，导致该工位过杀集中上升。另有一处文档冲突需要你确认光源亮度设定口径。 - 近7天整体误判 27 件，误判率 23."
+   "final_head": "误判集中在1号工位，原因基本可归为该工位光源老化衰减；标定正常，基本可排除标定漂移。同时发现「光源亮度设定」在厂商手册与厂内SOP之间取值冲突，需要人工确认按哪个标准执行 - 1号工位误判率 58.82% - 1号工位误判 20 件 - 3号工位误判率 10.64% - 2号工位误判率 6.25% - 整机近7天误判率"
   }
  ]
 }

@@ -84,6 +84,10 @@ def result_event(state):
         "turn": state.get("turn", 1),
         "intent": state.get("intent", ""),
         "steps": state.get("steps", 0),
+        # 结束原因必须单列：steps=12 有两种完全不同的含义
+        # （budget_exhausted = 被预算掐断的半成品；enough = 12 步内自己判断够了）。
+        # 只报步数等于把这两件事合并，事后拿不到任何归因线索。
+        "stop_reason": state.get("stop_reason", ""),
         "tools": state.get("tool_names", []),
         "blocked": state.get("blocked", []),
         "misquoted": state.get("misquoted", []),

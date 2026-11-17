@@ -62,3 +62,7 @@ class State(TypedDict, total=False):
     final_text: str
     # 因"只写了计划没真调用"而退回重试的次数，防止死循环
     plan_retry: int
+    # 本轮为什么停：need_more / enough / budget_exhausted，由 plan 写入（纯推导，不花 token）。
+    # 和 steps 必须同时存在——steps 只说"用了几次"，说不出"是额度用完了，还是判断够了"。
+    # 这两件事一个字都不能混：前者是半成品结论，后者是可交付结论，可信度差着量级。
+    stop_reason: str

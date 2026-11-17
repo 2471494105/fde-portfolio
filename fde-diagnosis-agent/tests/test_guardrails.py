@@ -1024,12 +1024,71 @@ class EvidenceNumberingTest(unittest.TestCase):
         }
         with mock.patch.dict(nodes.TOOL_IMPLS, {"query_device_profile": fake}):
             out = nodes.act(state)
-        self.assertEqual(out["messages"][0]["content"],
-                         '[query_device_profile] ' +
-                         out["messages"][0]["content"][len("[query_device_profile] "):])
-        self.assertTrue(out["messages"][0]["content"].startswith("[query_device_profile] "))
+        # 标签 = 工具名 + 参数指纹。指纹必须出现，否则同一工具两次调用分不出哪次
+        self.assertEqual(
+            out["messages"][0]["content"].split("] ", 1)[0] + "] ",
+            "[query_device_profile{device_id=CX-101}] ")
+        # 剥掉前缀仍要能解析回原结构
+        self.assertEqual(nodes._load_obj({"result": out["messages"][0]["content"]}),
+                         {"device_id": "CX-101", "line": "4号线"})
         # ev_no 仍要按累计数续，它是审计用的，不是引用用的
         self.assertEqual(out["evidence"][0]["ev_no"], 6)
+        self.assertEqual(out["evidence"][0]["sig"], "device_id=CX-101")
+
+    def test_payload_carries_arg_fingerprint(self):
+        # 指纹取自参数、键排序、跳空值：同一组参数必须永远得到同一个字符串，
+        # 校验端要靠它做等值比较。
+        text, _ = nodes._payload({"a": 1}, tool="query_defect_log",
+                                 sig=nodes._call_sig({"group_by": "defect",
+                                                      "device_id": "CX-104",
+                                                      "window_days": None}))
+        self.assertTrue(text.startswith("[query_defect_log{device_id=CX-104,group_by=defect}] "))
+        self.assertEqual(nodes._call_sig({}), "")
+        # 没有指纹就不打花括号，保持旧形状
+        plain, _ = nodes._payload({"a": 1}, tool="query_defect_log")
+        self.assertTrue(plain.startswith("[query_defect_log] "))
+
+    def test_ref_with_signature_picks_the_right_call(self):
+        # 两次返回都有 groups[0].rate，但值不同。带指纹能明确指出是哪一次——
+        # 这正是档 C 之后剩下的那个盲点。
+        ev = [
+            {"ev_no": 9, "tool": "query_defect_log",
+             "sig": "device_id=CX-104,group_by=station", "truncated": False,
+             "result": json.dumps({"device_id": "CX-104",
+                                   "groups": [{"rate": 0.4677, "key": "1号工位"}]})},
+            {"ev_no": 10, "tool": "query_defect_log",
+             "sig": "device_id=CX-104,group_by=defect", "truncated": False,
+             "result": json.dumps({"device_id": "CX-104",
+                                   "groups": [{"rate": 0.3469, "key": "划痕"}]})},
+        ]
+        doc = {"conclusion": "x", "claims": [
+            {"text": "划痕类误判率 34.69%", "value": 34.69, "unit": "%",
+             "ref": "query_defect_log{device_id=CX-104,group_by=defect}#groups[0].rate"}]}
+        res = self._verify(doc, ev)
+        self.assertEqual(res["misquoted"], [])
+        self.assertEqual(res["cite_stats"]["cited_ok"], 1)
+
+    def test_signature_mismatch_falls_back_instead_of_judging_dead(self):
+        # 反向断言：指纹抄错（或那次调用被裁）时不能直接判 cite_oob，
+        # 否则"参数抄错"会被当成"上下文裁剪"放过——那是开新口子。
+        # 只在全部候选里按值继续判，值对不上才判失败。
+        ev = [
+            {"ev_no": 9, "tool": "query_defect_log",
+             "sig": "device_id=CX-104,group_by=station", "truncated": False,
+             "result": json.dumps({"groups": [{"rate": 0.4677}]})},
+        ]
+        doc = {"conclusion": "x", "claims": [
+            {"text": "1号工位误判率 46.77%", "value": 46.77, "unit": "%",
+             "ref": "query_defect_log{group_by=typo}#groups[0].rate"}]}
+        res = self._verify(doc, ev)
+        self.assertEqual(res["misquoted"], [], "指纹对不上但值对得上，不该判死")
+        self.assertEqual(res["cite_stats"]["cited_ok"], 1)
+        self.assertEqual(res["cite_stats"]["cite_oob"], 0)
+
+        # 真错的（值也对不上）仍然要被抓住，不能因为指纹不匹配就放过
+        doc["claims"][0]["value"] = 11.39
+        res = self._verify(doc, ev)
+        self.assertTrue(res["misquoted"], "值对不上必须判失败")
 
     def test_lookup_claims_use_tool_names(self):
         # lookup 走模板拼文本、不经 act，但它自产的 claims 必须和模型用同一套

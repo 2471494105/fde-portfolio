@@ -82,6 +82,12 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
      不要写"第几条"或数字编号——位置会随对话变，工具名不会。
      字段路径照工具返回的 JSON 原样写：顶层 query_device_profile#maintenance_cycle_days、
      数组下标 query_defect_log#groups[0].count、嵌套 query_calibration#records[0].drift_px。
+   - 同一个工具你调了不止一次（比如先按工位查、再按缺陷类型查），
+     工具返回的最前面会印 `[query_defect_log{group_by=station}]` 这样的标签。
+     这时 ref 要**把花括号那一截照抄进去**：
+     `query_defect_log{group_by=station}#groups[0].rate`。
+     不抄也能过校验，但两条返回的字段路径长得一模一样（都有 groups[0].rate），
+     分不出你指的是哪一次——抄上去才是明确指认。
    - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，并在 text 里写算式：
      {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null}
    - 自己定的验收目标、假设值，ref 也写 null。
@@ -822,21 +828,51 @@ def _slim_result(obj, depth=0, arr=8, strlen=300):
     return obj
 
 
-# 证据标签："[query_calibration] {...}"。_payload 写到最前面，_load_obj 负责剥掉。
+# 证据标签："[query_calibration] {...}" 或 "[query_defect_log{group_by=defect}] {...}"。
+# _payload 写到最前面，_load_obj 负责剥掉。
 # 用文本前缀而不是往 JSON 里加 "_ev" 字段，是因为工具返回可能是 list 或标量，
 # 加字段要么改结构（模型引用的路径全变）、要么加不进去；前缀对所有类型都成立，
 # 且完全不影响 JSON 内部的字段路径。
 #
 # 这里必须是工具名，不能是编号：编号是位置、会随上下文裁剪漂移，工具名是身份。
-_TOOL_TAG = re.compile(r"^\[([a-z][a-z0-9_]*)\] ")
+# `{参数指纹}` 是第二层身份：同一工具一轮里调两次（换 group_by 再查一遍），
+# 光有工具名分不出是哪一次。指纹写的是"这次查的是什么"，不是"这是第几次"——
+# 序号会漂，参数不会：模型记得住"按缺陷分组的那次"，记不住"第二次调用"。
+_TOOL_TAG = re.compile(r"^\[([a-z][a-z0-9_]{2,40})(\{[^{}]*\})?\] ")
 
-# 引用格式：工具名#字段路径。工具名是身份，不随轮次/裁剪漂移。
+# 引用格式：工具名#字段路径，可选带参数指纹 → 工具名{device_id=CX-104}#字段路径。
+# 工具名是身份，不随轮次/裁剪漂移；指纹再把它精确到"哪一次调用"。
 # 开头必须是字母且有 3 个字符以上：这样 "1#path" 这种编号写法会直接判格式错，
 # 而不是被当成"工具名是 1"再滑到别的分支里。
-_REF_PAT = re.compile(r"^\s*([a-z][a-z0-9_]{2,40})#(.+?)\s*$")
+_REF_PAT = re.compile(r"^\s*([a-z][a-z0-9_]{2,40})(\{[^{}]*\})?#(.+?)\s*$")
 
 
-def _payload(res, limit=1600, tool=None):
+def _call_sig(args):
+    """这次调用的参数指纹：`device_id=CX-104,group_by=defect`。
+
+    为什么要它：工具名能定"哪个工具"，定不到"哪一次调用"。同一工具换个
+    group_by 再查一遍，两次返回都含 `groups[0].rate`，路径完全一样——
+    模型写 `query_defect_log#groups[0].rate` 时，到底是按工位的还是按缺陷的？
+
+    指纹取自**参数**而不是序号，是因为参数是语义（模型记得住"按缺陷分组的
+    那次"），序号是位置（跨轮必漂）。空值和 None 跳过，键排序，保证同一组
+    参数永远得到同一个字符串——校验端要靠它做等值比较。
+    """
+    if not isinstance(args, dict):
+        return ""
+    parts = []
+    for k in sorted(args):
+        v = args[k]
+        if v is None or v == "":
+            continue
+        parts.append(f"{k}={v}")
+    sig = ",".join(parts)
+    # 超长指纹会挤掉 payload 预算，又没人真能抄下来。截断并留省略号，
+    # 两边（payload 与校验）用同一条规则，所以仍能等值比较。
+    return sig if len(sig) <= 80 else sig[:79] + "…"
+
+
+def _payload(res, limit=1600, tool=None, sig=""):
     """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。
 
     返回 (text, truncated)。text 永远是**合法 JSON**——这是硬约束，因为
@@ -859,7 +895,7 @@ def _payload(res, limit=1600, tool=None):
     数字（_value_match 支持字符串内抽数），校验层也能据此判是"证据截断"
     而不是"模型写错"。
     """
-    head = f"[{tool}] " if tool else ""
+    head = f"[{tool}{{{sig}}}] " if (tool and sig) else (f"[{tool}] " if tool else "")
     budget = limit - len(head)
     for arr, strlen in _SLIM_LEVELS:
         text = json.dumps(_slim_result(res, 0, arr, strlen),
@@ -969,7 +1005,10 @@ def act(state):
         # ev_no 仍然留一份，只给审计和报告看，不再参与校验：
         # 引用契约已经改成工具名（见 _REF_PAT），模型看不到编号。
         ev_no = base + len(evidence) + 1
-        slim, cut = _payload(res, tool=name)
+        # 参数指纹和工具名一起印在 payload 头部：同一工具换个参数再查一遍时，
+        # 模型只有看到这个才能明确"我要引的是哪一次"。
+        sig = _call_sig(args)
+        slim, cut = _payload(res, tool=name, sig=sig)
         out_msgs.append({
             "role": "tool",
             "tool_call_id": tc["id"],
@@ -980,7 +1019,7 @@ def act(state):
         # 存原样会让"模型没读到的数字"也能通过溯源，等于给校验层开后门。
         # truncated 记下来：这条证据被压到装不下，字段可能根本不在里面，
         # 校验时必须把这种情况和"模型引用写错"分开。
-        evidence.append({"tool": name, "args": args, "result": slim,
+        evidence.append({"tool": name, "args": args, "sig": sig, "result": slim,
                          "truncated": cut, "ev_no": ev_no,
                          "turn": int(state.get("turn") or 1)})
         names.append(name)
@@ -1197,7 +1236,9 @@ def _render_claims(doc):
         ref = str(c.get("ref") or "")
         m = _REF_PAT.match(ref)
         if m:
-            mark = f"[{m.group(1)}]"
+            # 带指纹的连指纹一起显示：同一工具查了两次，光写工具名
+            # 用户还是分不出这句话出自按工位那次还是按缺陷那次。
+            mark = f"[{m.group(1)}{m.group(2) or ''}]"
         elif not ref:
             mark = "[无出处]"
         else:
@@ -1276,7 +1317,8 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
         stats["ref_bad"] += 1
         misquoted.append(f"{text}（出处格式错:{ref}，应写 工具名#字段路径）")
         return
-    tool, path = m.group(1), m.group(2)
+    tool, sig_g, path = m.group(1), (m.group(2) or ""), m.group(3)
+    sig = sig_g[1:-1] if sig_g else ""
     cands = by_tool.get(tool)
     if not cands:
         if tool in TOOL_IMPLS:
@@ -1286,6 +1328,13 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
             stats["ref_bad"] += 1
             misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
         return
+
+    # 指纹只收窄不排除，理由同 _verify_claims：匹配不上可能是被裁，可能是抄错参数，
+    # 两种情况都不该在这里判死；抄错参数的那条，下面的"原文必须在里面"会抓住它。
+    if sig:
+        narrowed = [c for c in cands if c.get("sig") == sig]
+        if narrowed:
+            cands = narrowed
 
     # 引文可以在该工具的任一条返回里出现——同一工具多次调用时，
     # 模型记不住"是第几次"，但它抄的那段原文只可能来自其中一次。
@@ -1391,7 +1440,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             misquoted.append(
                 f"{text}（出处格式错:{ref}，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）")
             continue
-        tool, path = m.group(1), m.group(2)
+        tool, sig_g, path = m.group(1), (m.group(2) or ""), m.group(3)
+        sig = sig_g[1:-1] if sig_g else ""
 
         # 按工具名找，不按编号找。编号是位置：_ctx_window 裁掉前几轮之后，
         # 同一份证据的编号不变，但模型看不见它了——然后它会自己补一个"第 1 条"。
@@ -1407,6 +1457,18 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 stats["ref_bad"] += 1
                 misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
             continue
+
+        # 参数指纹优先：模型写了 `query_defect_log{group_by=defect}#...`，
+        # 就只在"按缺陷分组那次"的返回里找，不再和"按工位那次"混着比。
+        #
+        # 注意这里**只收窄、不排除**：指纹匹配不上时退回全部候选，按值继续判。
+        # 因为匹配不上有两种可能——那次调用被裁出窗口（不该判死），
+        # 或者模型把参数抄错了（真错，但值对不上照样会被下面的值比较抓住）。
+        # 若在这里直接判 cite_oob，第二种会被当成第一种放过，反而开了条新口子。
+        if sig:
+            narrowed = [c for c in cands if c.get("sig") == sig]
+            if narrowed:
+                cands = narrowed
 
         # 同一工具多次调用：把所有取得到该字段的返回都收集起来，
         # **再逐个比 value**。只在"取得到"这一步 break，等于拿第一条返回的值

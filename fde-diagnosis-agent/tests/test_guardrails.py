@@ -350,6 +350,98 @@ class MultiValueClaimTest(unittest.TestCase):
         self.assertEqual(res["misquoted"], [])
         self.assertGreaterEqual(res["cite_stats"]["multi_ok"], 1)
 
+    # ---- 2026-11-17：全量 27 条暴露的两处判据自伤，各配一条正例 + 一条反向 ----
+
+    def _verify_many(self, doc, payloads, sigs=None):
+        """同一工具按不同参数多次调用时的 verify。逐个传 payload 和它对应的指纹。"""
+        final = json.dumps(doc, ensure_ascii=False)
+        ev = [{"result": p, "tool": "query_defect_log", "turn": 1,
+               "truncated": False, "ev_no": i + 1,
+               "sig": (sigs[i] if sigs else None)}
+              for i, p in enumerate(payloads)]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("multi", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_items_percent_matches_decimal_without_unit(self):
+        """H2：证据存 rate=0.0476，模型在 items 里写 4.76。
+
+        items 的每个元素没有 unit 字段可放（unit 挂在 claim 上），
+        旧判据拿到 unit="" 就不做百分数换算，4.76 硬比 0.0476，差 100 倍，
+        于是"11-06 全期最低"这条正确结论被判成引用写错。
+        这只认 ×100 一个方向：证据惯用小数、模型惯写百分数。
+        """
+        res = self._verify_many(
+            {"conclusion": "11-06 是统计期内最低点", "claims": [
+                {"text": "11-06 当日误判率 4.76%",
+                 "ref": "query_defect_log{group_by=day}#groups",
+                 "items": [{"key": "2026-11-06", "field": "rate", "value": 4.76}]}]},
+            ['{"groups": [{"key": "2026-11-06 00:00:00", "count": 21, "rate": 0.0476},'
+             ' {"key": "2026-11-07 00:00:00", "count": 13, "rate": 0.1538}]}'],
+            sigs=["group_by=day"])
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["multi_ok"], 1)
+
+    def test_items_percent_does_not_rescue_wrong_number(self):
+        """反向断言：换算只救"同一量纲写两种"，救不了数真写错。
+
+        47.6 与 0.4483 也对不上（换算后是 44.83），必须继续判失败，
+        否则把百分数归一化就等于给"数量级差一档"开了免检。
+        """
+        res = self._verify_many(
+            {"conclusion": "x", "claims": [
+                {"text": "1 号工位 47.6%",
+                 "ref": "query_defect_log{group_by=station}#groups",
+                 "items": [{"key": "1号工位", "field": "rate", "value": 47.6}]}]},
+            ['{"groups": [{"key": "1号工位", "count": 29, "rate": 0.4483}]}'],
+            sigs=["group_by=station"])
+        self.assertGreaterEqual(res["cite_stats"]["multi_bad"], 1)
+
+    def test_items_scan_all_candidate_arrays(self):
+        """A3：同一工具按 station / batch 各调一次，模型引的是 batch 那次的数组。
+
+        指纹只写了 group_by=batch，实际指纹还带着 device_id 和 time_from。
+        旧判据整串精确相等 → 收窄不到任何一条 → 退回全部候选 →
+        next() 取第一个数组（station）→ 拿工位表去查批次号，
+        11 条 pairing 全部"对不上"，报出来却是"模型编数"。
+        模型引的是"那次返回里的这条记录"，判据分不清是哪次属于判据的缺陷。
+        """
+        res = self._verify_many(
+            {"conclusion": "批次过杀率无单一异常集中", "claims": [
+                {"text": "B20261107 批次过杀率 20%",
+                 "ref": "query_defect_log{group_by=batch,time_from=2026-09-01}#groups",
+                 "items": [{"key": "B20261107", "field": "rate", "value": 0.2}]}]},
+            ['{"groups": [{"key": "2号工位", "count": 29, "rate": 0.3103},'
+             ' {"key": "1号工位", "count": 27, "rate": 0.1481}]}',
+             '{"groups": [{"key": "B20261105", "count": 81, "rate": 0.5062},'
+             ' {"key": "B20261107", "count": 15, "rate": 0.2}]}'],
+            sigs=["group_by=station",
+                  "device_id=CX-102,group_by=batch,time_from=2026-09-01"])
+        self.assertEqual(res["misquoted"], [])
+        self.assertGreaterEqual(res["cite_stats"]["multi_ok"], 1)
+
+    def test_items_still_fail_when_no_candidate_array_matches(self):
+        """反向断言：逐数组尝试不是"总有一个放过"。
+
+        两个候选数组都配不上这条记录时仍然判失败——放宽的只是"指哪一次"，
+        不是"这个值到底在不在"。
+        """
+        res = self._verify_many(
+            {"conclusion": "x", "claims": [
+                {"text": "B20261107 批次过杀率 90%",
+                 "ref": "query_defect_log{group_by=batch}#groups",
+                 "items": [{"key": "B20261107", "field": "rate", "value": 0.9}]}]},
+            ['{"groups": [{"key": "2号工位", "count": 29, "rate": 0.3103}]}',
+             '{"groups": [{"key": "B20261107", "count": 15, "rate": 0.2}]}'],
+            sigs=["group_by=station", "group_by=batch"])
+        self.assertGreaterEqual(res["cite_stats"]["multi_bad"], 1)
+
 
 class ParamResolveTest(unittest.TestCase):
     """check_doc_conflict 的参数名归一：唯一候选才自动改名，多候选一律不猜。
@@ -581,7 +673,9 @@ class ClaimContractTest(unittest.TestCase):
             sigs=["group_by=defect_type", "group_by=station"])
         self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
         self.assertEqual(res["cite_stats"]["ref_ambiguous"], 0)
-        self.assertTrue(any("≠ 99%" in m for m in res["misquoted"]))
+        # 报错要同时说清"哪个数"和"候选里没有它"。旧文案只写 `字段值 {hits[0]} ≠ v`，
+        # 当候选有多个数组时 hits[0] 可能来自模型根本没引的那一组，读者会当成编数。
+        self.assertTrue(any("都不是 99%" in m for m in res["misquoted"]))
 
     def test_single_call_without_fingerprint_is_not_ambiguous(self):
         """只有一次调用时不存在歧义，仍按值判——别把单次的不符也洗成"指不清"。"""

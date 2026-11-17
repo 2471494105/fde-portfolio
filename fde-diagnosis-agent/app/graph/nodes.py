@@ -1223,6 +1223,12 @@ def _value_match(v, got, unit, tol=0.02):
         return False
     if unit == "%" and 0 < g <= 1:
         g *= 100
+    elif 0 < g <= 1 < t:
+        # 单值 claim 会写 unit:"%"，多值 items 的元素没有这个位置，unit 是空的。
+        # 于是同一个数两种写法被判成两个数：证据 rate=0.0476，模型写 4.76。
+        # 只认 ×100 这一个方向：反方向会把「模型写 0.0476、证据是 4.76」
+        # 也救回来，而那种错模型不犯（它抄的是百分数）。
+        g *= 100
     return abs(g - t) <= max(tol, abs(t) * 0.01)
 
 
@@ -1527,9 +1533,19 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         # 或者模型把参数抄错了（真错，但值对不上照样会被下面的值比较抓住）。
         # 若在这里直接判 cite_oob，第二种会被当成第一种放过，反而开了条新口子。
         if sig:
-            narrowed = [c for c in cands if c.get("sig") == sig]
-            if narrowed:
-                cands = narrowed
+            # 按 kv 集合比，不比整串。模型只抄它关心的那一两个（group_by=batch），
+            # 实际指纹还带着它没抄的（device_id=...,time_from=...）。
+            # 整串精确相等会让这种"写法不全"一条都收窄不到，于是退回全部候选；
+            # 而候选数组又只取第一个，最后拿工位表去查批次号——A3/A4 就是这么红的。
+            # 收窄的语义不变：模型写出来的 kv 必须全部对上，多写反而更严。
+            want = {p.strip() for p in sig.split(",") if p.strip()}
+            keep = []
+            for c in cands:
+                cp = {p.strip() for p in str(c.get("sig") or "").split(",") if p.strip()}
+                if want and want <= cp:
+                    keep.append(c)
+            if keep:
+                cands = keep
 
         # 同一工具多次调用：把所有取得到该字段的返回都收集起来，
         # **再逐个比 value**。只在"取得到"这一步 break，等于拿第一条返回的值
@@ -1577,13 +1593,21 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         # 这里要求的是**配对成立**，不是"值在数组里出现过"。区别在 H1 上很具体：
         # 85/80/65 可能都在数组里，但配错日期就说明没在读数据，只是在凑数字。
         if has_items:
-            arr = next((g for g in hits if isinstance(g, list)), None)
-            if arr is None:
+            arrs = [g for g in hits if isinstance(g, list)]
+            if not arrs:
                 stats["multi_bad"] += 1
                 misquoted.append(
                     f"{text}（items 要求 ref 指向数组，实际指向 {hits[0]}，不是多值字段）")
                 continue
-            bad = [it for it in items if not _match_item(it, arr, unit)]
+            # 多个候选数组逐个试，取对得最多的那个。模型引的是"那次返回里的这条记录"，
+            # 不是"第几个数组"；指纹收窄不到时是判据自己分不清是哪次调用，
+            # 不能让"分不清"变成"模型编数"。
+            best_bad, arr = None, None
+            for a in arrs:
+                b = [it for it in items if not _match_item(it, a, unit)]
+                if best_bad is None or len(b) < len(best_bad):
+                    best_bad, arr = b, a
+            bad = best_bad
             if not bad:
                 stats["multi_ok"] += 1
                 stats["path_ok"] += 1
@@ -1664,7 +1688,14 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 )
             else:
                 stats["path_bad"] += 1
-                misquoted.append(f"{text}（字段值 {hits[0]} ≠ {v}{unit}）")
+                # 只报 hits[0] 会把"下标写错"读成"编数"：A1 引 groups[7] 想指 11-14
+                # （那个在 groups[6]），但第一个候选数组的第 7 项恰好是另一天的 0.0，
+                # 报出来就是"字段值 0.0 ≠ 17.65%"——看起来像无中生有。
+                # 把候选列全，人才能看出是"指着 0.1875 说 17.65"，即下标错一位。
+                shown = "、".join(str(g) for g in hits[:3])
+                if len(hits) > 3:
+                    shown += f" 等 {len(hits)} 个"
+                misquoted.append(f"{text}（候选值 {shown} 都不是 {v}{unit}）")
 
     stats["cited"] = stats["cited_ok"]
     stats["ev"] = len(ev)

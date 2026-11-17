@@ -35,6 +35,11 @@ class State(TypedDict, total=False):
     missing: list          # 还缺什么才能继续
     param_names: list      # 用户问到的参数名（用于知识分支查文档冲突）
     intent_reason: str     # 模型或程序给出的判断依据（降级时会被程序改写）
+    # 意图判断的自报置信度与处置说明。原来这一步是 temperature=0 的五选一，
+    # 没有置信度——判错时下游无从知道它有多虚，只能整条路径跑到底。
+    # 现在低于 CONF_ASK 直接降级追问，介于两条线之间则在结论里带免责说明。
+    intent_conf: float
+    intent_note: str
 
     # 会话相关（多轮）
     turn: int                              # 第几轮，intake 每轮 +1

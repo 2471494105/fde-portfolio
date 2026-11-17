@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -56,7 +57,10 @@ class OwnershipGuardTest(unittest.TestCase):
             "turn": 1,
         }
         out = nodes.act(state)
-        res = json.loads(out["messages"][0]["content"])
+        # tool content 现在是 "[证据 N] {json}"，不能直接 json.loads。
+        # 走 _load_obj —— 那是生产路径上唯一解析证据的地方，测试跟着走同一条路，
+        # 才不会出现"测试解析方式比生产宽松"的假绿。
+        res = nodes._load_obj({"result": out["messages"][0]["content"]})
         return res, out
 
     def test_foreign_device_is_blocked_before_call(self):
@@ -229,7 +233,8 @@ class ClaimContractTest(unittest.TestCase):
 
     def _verify(self, doc, *payloads, truncated=False):
         final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
-        ev = [{"result": p, "turn": 1, "truncated": truncated} for p in payloads]
+        ev = [{"result": p, "turn": 1, "truncated": truncated, "ev_no": i + 1}
+              for i, p in enumerate(payloads)]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
         old = trace.RUNS_DIR
@@ -309,7 +314,8 @@ class RangeClaimTest(unittest.TestCase):
 
     def _verify(self, doc, *payloads):
         final = json.dumps(doc, ensure_ascii=False)
-        ev = [{"result": p, "turn": 1, "truncated": False} for p in payloads]
+        ev = [{"result": p, "turn": 1, "truncated": False, "ev_no": i + 1}
+              for i, p in enumerate(payloads)]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
         old = trace.RUNS_DIR
@@ -364,6 +370,147 @@ class RangeClaimTest(unittest.TestCase):
         self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
 
 
+class _FakeResp:
+    """假 completion 响应：understand 只读 choices[0].message.content 和 usage。"""
+
+    def __init__(self, content):
+        msg = type("M", (), {"content": content})
+        self.choices = [type("C", (), {"message": msg})]
+        self.usage = None
+
+
+class _FakeCompletions:
+    def __init__(self, content, raises=None):
+        self.content = content
+        self.raises = raises
+
+    def create(self, **kw):
+        if self.raises:
+            raise self.raises
+        return _FakeResp(self.content)
+
+
+class _FakeClient:
+    def __init__(self, content, raises=None):
+        self.chat = self
+        self.completions = _FakeCompletions(content, raises)
+
+
+class IntentConfidenceTest(unittest.TestCase):
+    """意图判断的自报置信度闸。
+
+    融合 Jev 的核心做法：分类器的价值不只在选得准，还在**能报出"我不确定"**。
+    原来这一步是 temperature=0 的五选一，没有置信度——判错时下游无从知道它有多虚，
+    只能整条路径跑到底。
+
+    两条线：低于 CONF_ASK 降级追问；介于两线之间照走但带免责说明。
+    必须能区分"没给置信度"（旧行为，不拦）与"给了低置信度"（要拦）。
+    """
+
+    def _run(self, payload, user_msg="cx-104 数据", device_id="CX-104"):
+        content = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else payload
+        client = _FakeClient(content)
+        st = {"user_msg": user_msg, "device_id": device_id, "turn": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with mock.patch.object(nodes, "get_client", return_value=client):
+                with trace.Tracer("conf", model="m", provider="p", base_url="b"):
+                    return nodes.understand(st)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_low_confidence_falls_back_to_ask(self):
+        # 带着错的理解跑满 8 步，不如先问一句
+        out = self._run({"intent": "diagnose", "confidence": 0.45,
+                         "device_ids": ["CX-104"], "phenomenon": "误判率高"})
+        self.assertEqual(out["intent"], "clarify")
+        self.assertIn("低于", out["intent_note"])
+
+    def test_mid_confidence_keeps_intent_with_note(self):
+        # 落在两条线之间：照判断走，但结论里要带"这是按 X 理解的"
+        out = self._run({"intent": "lookup", "confidence": 0.70,
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "lookup")
+        self.assertIn("按「lookup」理解", out["intent_note"])
+
+    def test_note_never_disagrees_with_final_intent(self):
+        # 硬矛盾已经把 intent 降成 clarify 时，不能再挂"按 diagnose 理解"的说明——
+        # 用户看到的是"你说按诊断理解，那你为什么还问我"。
+        out = self._run({"intent": "diagnose", "confidence": 0.82,
+                         "device_ids": [], "phenomenon": "夜班更差"}, device_id="")
+        self.assertEqual(out["intent"], "clarify")
+        self.assertEqual(out["intent_note"], "")
+
+    def test_high_confidence_no_note(self):
+        out = self._run({"intent": "lookup", "confidence": 0.95,
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "lookup")
+        self.assertEqual(out["intent_note"], "")
+
+    def test_missing_confidence_keeps_old_behaviour(self):
+        # 模型没给这个字段时不能一刀切成追问——那会把所有结论都降级
+        out = self._run({"intent": "lookup", "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "lookup")
+        self.assertEqual(out["intent_conf"], 1.0)
+
+    def test_string_confidence_is_parsed(self):
+        # 模型常把数字写成字符串，不能因此当成"没给"
+        out = self._run({"intent": "lookup", "confidence": "0.40",
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "clarify")
+
+    def test_llm_failure_falls_back_to_cheapest_path(self):
+        # 有设备号时兜底原来跑 diagnose（最贵的一条）。改成 lookup。
+        client = _FakeClient("", raises=RuntimeError("boom"))
+        st = {"user_msg": "cx-104 数据", "device_id": "CX-104", "turn": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with mock.patch.object(nodes, "get_client", return_value=client):
+                with trace.Tracer("conf", model="m", provider="p", base_url="b"):
+                    out = nodes.understand(st)
+        finally:
+            trace.RUNS_DIR = old
+        self.assertEqual(out["intent"], "lookup")
+
+
+class AskUserWordingTest(unittest.TestCase):
+    """追问文案：已经有的信息不能再让用户说一遍。
+
+    用户最烦的两句是"你刚才说的我没听见"和"我刚说过的你再问一次"。
+    这两个各有一个实测样本：说了「误判率有点高」却回「需要两个信息」；
+    上一轮确认过 CX-104，这一轮说「就是那个工位」又被要一次设备号。
+    """
+
+    def test_phenomenon_known_only_asks_for_device(self):
+        out = nodes.ask_user({"device_ids": [], "phenomenon": "误判率有点高",
+                              "slots": {}, "missing": []})
+        self.assertIn("误判率有点高", out["final"])
+        self.assertIn("CX-101 ~ CX-105", out["final"])
+        self.assertNotIn("需要两个信息", out["final"])
+
+    def test_confirmed_device_in_slots_is_not_asked_again(self):
+        # 本轮没提设备、上一轮确认过 → 文案直接用，不再索要
+        out = nodes.ask_user({"device_ids": [], "phenomenon": "夜班更差",
+                              "slots": {"device_id": "CX-104"}, "missing": []})
+        self.assertIn("CX-104", out["final"])
+        self.assertIn("夜班更差", out["final"])
+        self.assertNotIn("还缺一个设备编号", out["final"])
+
+    def test_nothing_known_asks_for_both(self):
+        out = nodes.ask_user({"device_ids": [], "phenomenon": "",
+                              "slots": {}, "missing": []})
+        self.assertIn("需要两个信息", out["final"])
+
+    def test_intent_note_is_prefixed(self):
+        # 低置信降级时先告诉用户"我是按哪种理解在问"
+        out = nodes.ask_user({"device_ids": ["CX-104"], "phenomenon": "",
+                              "slots": {}, "missing": [],
+                              "intent_note": "意图置信度 0.45 低于 0.6，先追问确认再往下走"})
+        self.assertTrue(out["final"].startswith("意图置信度 0.45"))
+
+
 class CheckLoopTest(unittest.TestCase):
     """结论交出前的自查闸口：verify 从"终点"变成"能回头的检查点"。
 
@@ -387,7 +534,8 @@ class CheckLoopTest(unittest.TestCase):
     def _run_check(self, final, retry=0, notes=None, unsourced0=0):
         st = {"final": final, "check_retry": retry, "check_notes": list(notes or []),
               "check_unsourced0": unsourced0,
-              "evidence": [{"result": self.PAYLOAD, "turn": 1, "truncated": False}],
+              "evidence": [{"result": self.PAYLOAD, "turn": 1, "ev_no": 1,
+                            "truncated": False}],
               "messages": []}
         return nodes.check(st)
 
@@ -442,7 +590,8 @@ class CheckLoopTest(unittest.TestCase):
         st = {"final": json.dumps({"conclusion": "x", "claims": [
             {"text": "误判率 11.39%", "value": 11.39, "unit": "%",
              "ref": "1#rate"}]}, ensure_ascii=False),
-              "evidence": [{"result": self.PAYLOAD, "turn": 1, "truncated": False}],
+              "evidence": [{"result": self.PAYLOAD, "turn": 1, "ev_no": 1,
+                            "truncated": False}],
               "turn": 1, "user_msg": "", "tool_names": [], "steps": 0,
               "check_notes": ["回环后未溯源数字从 0 条涨到 2 条：把指错的 ref 改成 null 不是修正"]}
         old = trace.RUNS_DIR
@@ -521,7 +670,8 @@ class PayloadBudgetTest(unittest.TestCase):
         doc = {"conclusion": "x", "claims": [
             {"text": "判定 34 条", "value": 34, "unit": "条", "ref": "1#groups[0].count"}]}
         final = json.dumps(doc, ensure_ascii=False)
-        state = {"final": final, "evidence": [{"result": ev_text, "turn": 1, "truncated": True}],
+        state = {"final": final, "evidence": [{"result": ev_text, "turn": 1,
+                                               "truncated": True, "ev_no": 1}],
                  "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
         old = trace.RUNS_DIR
         trace.RUNS_DIR = Path(tempfile.mkdtemp())
@@ -568,7 +718,8 @@ class ContextEvidenceAlignmentTest(unittest.TestCase):
             for j in range(self.EV_PER_TURN):
                 msgs.append({"role": "tool", "tool_call_id": f"c{t}",
                              "content": f'{{"turn": {t}, "i": {j}}}'})
-                evidence.append({"result": f'{{"turn": {t}, "i": {j}}}', "turn": t})
+                evidence.append({"result": f'{{"turn": {t}, "i": {j}}}',
+                                 "turn": t, "ev_no": len(evidence) + 1})
             msgs.append({"role": "assistant", "content": f"第{t}轮结论"})
             if t < turns:
                 msgs.append({"role": "user", "content": f"第{t+1}轮提问"})
@@ -696,9 +847,104 @@ class BareQuoteRepairTest(unittest.TestCase):
 
     def _state(self):
         return {"turn": 1, "evidence": [
-            {"turn": 1, "tool": "query_defect_log",
+            {"turn": 1, "tool": "query_defect_log", "ev_no": 1,
              "args": {"device_id": "CX-104"},
              "result": json.dumps({"groups": [{"rate": 0.15}]}), "truncated": False}]}
+
+
+class EvidenceNumberingTest(unittest.TestCase):
+    """证据编号的权威只有一处：证据自己带的 ev_no。
+
+    为什么要动这块：模型原来要自己数"这是第几条工具返回"，而 ev 列表下标
+    和它数的不是同一件事——_ctx_window 裁掉前几轮之后，ev[0] 可能是证据 7。
+    2026-11-17 同一份代码、同一条用例连跑两次，语义 25% 与 100%，差异全在
+    k 错位；而四个工具的字段名它一个都没写错（cumulative_hours / records[0].
+    drift_px / conflicts[0].value / chunks[2].text 全对）。
+    编号是纯机械信息，交给会记错的组件去数，等于白送一个失效源。
+
+    没有 test_ref_matches_by_number_not_position，把校验改回按下标也能全绿——
+    那正是这次要消灭的行为。
+    """
+
+    def _verify(self, doc, ev):
+        final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("num", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_payload_carries_number_and_stays_parsable(self):
+        text, cut = nodes._payload({"a": 1}, ev_no=7)
+        self.assertFalse(cut)
+        self.assertTrue(text.startswith("[证据 7] "))
+        self.assertEqual(nodes._load_obj({"result": text}), {"a": 1},
+                         "剥前缀后必须还是原结构，否则校验层全线 ref_bad")
+
+    def test_no_number_means_no_prefix(self):
+        # 不传编号就不加前缀：_payload 还有别的调用方，默认行为不能变。
+        text, _ = nodes._payload({"a": 1})
+        self.assertEqual(text, '{"a": 1}')
+
+    def test_numbered_payload_still_respects_limit(self):
+        # 前缀的字节要从预算里扣，不能靠 limit 之外白送一节。
+        text, cut = nodes._payload({f"k{i}": i for i in range(800)},
+                                   limit=200, ev_no=12)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(text), 200)
+        self.assertTrue(text.startswith("[证据 12] "))
+
+    def test_ref_matches_by_number_not_position(self):
+        # 列表第 1 项是证据 7（前几轮已被裁掉）。引用 7# 必须命中它；
+        # 引用 1# 必须判"不在可见范围"，而不是顺手命中列表第 1 项。
+        ev = [
+            {"ev_no": 7, "tool": "query_calibration", "truncated": False,
+             "result": json.dumps({"records": [{"drift_px": 0.467}]})},
+            {"ev_no": 8, "tool": "search_manual", "truncated": False,
+             "result": json.dumps({"chunks": [{"text": "标定周期为 90 天"}]})},
+        ]
+        doc = {"conclusion": "x", "claims": [
+            {"text": "漂移 0.467 像素", "value": 0.467,
+             "ref": "7#records[0].drift_px"},
+            {"text": "标定周期 90 天", "value": 90, "ref": "1#chunks[0].text"}]}
+        res = self._verify(doc, ev)
+        self.assertEqual(res["misquoted"], [], "证据 7 就在里面，不该判失败")
+        self.assertEqual(res["cite_stats"]["path_miss"], 0)
+        self.assertEqual(res["cite_stats"]["cite_oob"], 1, "证据 1 已不在窗口内")
+
+    def test_missing_number_does_not_fall_back_to_position(self):
+        # 没有 ev_no 的证据不能退回按下标算：那会让"act 漏写编号"永远看不见，
+        # 表现为引用率照旧、问题被悄悄兜住。
+        ev = [{"tool": "query_device_profile", "truncated": False,
+               "result": json.dumps({"line": "4号线"})}]
+        doc = {"conclusion": "x", "claims": [
+            {"text": "4号线", "value": 4, "ref": "1#line"}]}
+        res = self._verify(doc, ev)
+        self.assertEqual(res["cite_stats"]["cite_oob"], 1)
+
+    def test_act_numbers_from_accumulated_count(self):
+        # 多轮：state 里已有 5 条，本轮第一条必须编号 6，不能从 1 重数。
+        # 重数会让第二轮又冒出证据 1、2、3，by_no 后写覆盖先写，
+        # 引用旧编号时静默命中一条完全不相干的证据。
+        def fake(device_id):
+            return {"device_id": device_id, "line": "4号线"}
+
+        state = {
+            "messages": [{"role": "assistant", "tool_calls": [{
+                "id": "c1",
+                "function": {"name": "query_device_profile",
+                             "arguments": json.dumps({"device_id": "CX-101"})}}]}],
+            "evidence": [{"ev_no": i} for i in range(1, 6)],
+            "device_ids": ["CX-101"], "device_id": "CX-101", "turn": 2,
+        }
+        with mock.patch.dict(nodes.TOOL_IMPLS, {"query_device_profile": fake}):
+            out = nodes.act(state)
+        self.assertEqual(out["evidence"][0]["ev_no"], 6)
+        self.assertTrue(out["messages"][0]["content"].startswith("[证据 6] "))
 
 
 class ResultEventContractTest(unittest.TestCase):
@@ -710,7 +956,7 @@ class ResultEventContractTest(unittest.TestCase):
     那时重跑的结果已经不一定一样了。
     """
 
-    REQUIRED = {"turn", "intent", "steps", "stop_reason", "check_rounds",
+    REQUIRED = {"turn", "intent", "intent_conf", "steps", "stop_reason", "check_rounds",
                 "tools", "blocked", "misquoted",
                 "device_ids", "slots", "final", "final_head", "final_text", "cite"}
 

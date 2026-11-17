@@ -114,10 +114,12 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 
 - diagnose：用户描述了异常现象，想找原因。
   例：误判率高、良率掉了、夜班更差、从某天开始变多、是不是光源导致的
-- lookup：用户想看数据、配置、参数、记录本身，没有要找原因的意思。
-  例：给我看下数据、参数是多少、配置是什么、最近记录
-- knowledge：用户在问规则、标准、含义、操作步骤。这类问题不依赖具体设备也能回答。
-  例：E-101 是什么意思、标定周期多久、亮度标准值是多少、怎么清洁镜头
+- lookup：用户想看**这台设备**的数据、配置、参数、记录本身，没有要找原因的意思。
+  例：给我看下数据、cx-104 的保养周期设的是多少、这台上次标定是什么时候、最近记录
+  边界：问的是"某台设备实际怎么配的、上次/现在是多少"，即使问的是参数名，也归 lookup。
+  参数名本身是知识，但这台设了多少是数据。
+- knowledge：用户在问规则、标准、含义、操作步骤。这类问题**不依赖具体设备**也能回答。
+  例：E-101 是什么意思、保养周期规程要求多久、亮度标准值是多少、怎么清洁镜头
 - action：用户要求执行一个动作（建单、派工、登记、通知），不是在问原因。
   例：帮我建个工单、派给设备科、登记一下、再建一次刚才那个单
 - clarify：信息不足以判断以上任何一类
@@ -129,10 +131,13 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
    但用户明确要求查看、排查、诊断时（例如「你查一下」「帮我看看」），即使没描述现象，
    也应判为 diagnose——可以先去取数据再判断。
 4. 如果用户问的是某个参数该取什么值（亮度、周期、阈值、速度、曝光），把参数名写进 param_names。
+5. confidence 如实给。两类都解释得通（既像"要数据"又像"要原因"）时给 0.5~0.7，不要凑 0.9。
+   系统按它决定要不要先追问一句：你虚报高分会让它跳过追问，带着错的理解往下跑到底。
 
 只输出 JSON，不要任何解释文字：
 {
   "intent": "diagnose|lookup|knowledge|action|clarify",
+  "confidence": 0.85,
   "device_ids": ["CX-104"],
   "alarm_codes": ["E-101"],
   "param_names": ["光源亮度设定"],
@@ -143,6 +148,17 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 
 # 模型判为诊断/查询但输出字段不自洽时的降级说明
 _INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "clarify"}
+
+# 意图置信闸的两条线。
+#
+# 低线以下不猜了，直接追问——带着错的理解跑满 8 步是这里最贵的错。
+# 高线不取 Jev 那个 0.9：他们的 0.9 是"不可逆决策转人工"（退款、放行），
+# 我们这里判错只是多问一句，代价可逆，所以线可以低。
+# 实测 9 句的置信分布是 0.60~0.95，取 0.9 会有 6 句都挂免责说明，
+# 每句都"我不太确定"等于每句都不确定，用户会免疫。
+# 0.75 只在真的两可时才提示——第 8 句「你查一下 cx-104」0.60 会命中，正好。
+CONF_ASK = 0.6
+CONF_OK = 0.75
 
 
 def _parse_json_loose(raw):
@@ -205,7 +221,10 @@ def understand(state):
             f"现象={slots.get('phenomenon') or '未定'}。已确认的不要让用户再说一次。"
         )
 
-    fallback_intent = "diagnose" if hint else "clarify"
+    # 兜底不能挑最贵的那条路。原来这里是"有设备号就默认 diagnose"，
+    # 等于 LLM 一挂就跑满 12 步——把最贵、最容易产出伪结论的路径设成了默认值。
+    # lookup 最便宜，而且答非所问时用户一句话就能纠正；clarify 连设备都没有。
+    fallback_intent = "lookup" if hint else "clarify"
     fallback_reason = ""
     data = None
     # 只对"解析失败"重试一次；网络/超时失败不重试，免得把延迟叠成两倍。
@@ -256,6 +275,14 @@ def understand(state):
     if intent not in _INTENT_ENUM:
         intent = "clarify"
 
+    # ---- 置信度解析（判在硬矛盾之后，避免和降级后的 intent 打架）----
+    try:
+        conf = float(data.get("confidence"))
+    except (TypeError, ValueError):
+        conf = 1.0          # 没给就按高置信走，保持旧行为；给了才闸
+    conf = min(max(conf, 0.0), 1.0)
+    intent_note = ""
+
     ids = []
     for x in (data.get("device_ids") or []):
         s = str(x).strip().upper()
@@ -288,17 +315,33 @@ def understand(state):
         intent = "clarify"
         reason = "判为动作请求但没有设备号，降级为追问"
 
+    # ---- 置信闸：必须放在硬矛盾校验之后 ----
+    # 位置很关键：硬矛盾会改写 intent，闸若在它之前，note 会写着"按 diagnose 理解"
+    # 而最终 intent 已经是 clarify，用户看到的是"你说按诊断理解，那你为什么还问我"。
+    # 已经降级成 clarify 的不再叠置信说明：追问本身就是不确定性最好的表达。
+    # 这层是这次唯一"融合 Jev"的地方——分类器的价值不只在选得准，
+    # 还在能报出"我不确定"，并且这个数值真的会被用来改变行为。
+    if intent != "clarify" and conf < CONF_ASK:
+        intent_note = f"意图置信度 {conf:.2f} 低于 {CONF_ASK}，先追问确认再往下走"
+        intent = "clarify"
+    elif intent != "clarify" and conf < CONF_OK:
+        intent_note = f"意图置信度 {conf:.2f}，按「{intent}」理解，若不对请直接纠正"
+
     trace.emit(
         "understand",
         intent=intent,
+        confidence=round(conf, 3),
         device_ids=ids,
         phenomenon=phen[:120],
         missing=list(data.get("missing") or []),
         reason=reason[:160],
+        note=intent_note[:120],
     )
 
     return {
         "intent": intent,
+        "intent_conf": conf,
+        "intent_note": intent_note,
         "device_id": ids[0] if ids else "",
         "device_ids": ids,
         "phenomenon": phen,
@@ -325,28 +368,53 @@ def route_after_understand(state):
 
 
 def ask_user(state):
-    """追问。文案按「缺什么」生成，避免模型面对空信息又自己编一个假设。"""
+    """追问。文案按「缺什么」生成，避免模型面对空信息又自己编一个假设。
+
+    判三件事：本轮说了什么（现象）、这台设备确不确定（本轮 ids 或上一轮 slots）、
+    意图置信度够不够。已经有的信息不能再让用户说一遍——用户最烦的两句话是
+    "你刚才说的我没听见"和"我刚说过的你再问一次"。
+    """
     ids = state.get("device_ids") or []
-    phen = state.get("phenomenon", "")
+    slots = state.get("slots") or {}
+    # 本轮没提设备、但上一轮确认过 → 文案里直接用，不再索要
+    known_dev = (ids[0] if ids else "") or (slots.get("device_id") or "")
+    phen = (state.get("phenomenon", "") or "").strip()
+    phen_show = phen[:30] + ("…" if len(phen) > 30 else "")
+    note = (state.get("intent_note") or "").strip()
     missing = [m for m in (state.get("missing") or []) if m]
 
-    if ids and not phen:
+    if phen and known_dev:
+        # 现象和设备都有，只是"查原因"还是"看数据"没定下来
         final = (
-            f"{ids[0]} 你想先看哪一方面？\n\n"
+            f"{known_dev} 你提到「{phen_show}」。\n\n"
+            "- 要排查原因：回一句「查原因」，我取证后给判断\n"
+            "- 只想看数据：回一句「看数据」，我直接把最近档案和误判统计给你"
+        )
+    elif phen and not known_dev:
+        # 现象已经有了，只缺设备号——不能说成"需要两个信息"
+        final = (
+            f"你提到「{phen_show}」，还缺一个设备编号。\n\n"
+            "当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。"
+        )
+    elif known_dev and not phen:
+        final = (
+            f"{known_dev} 你想先看哪一方面？\n\n"
             "- 想排查异常：说一句现象，比如哪类缺陷误判多、从什么时候开始、哪个班次更重\n"
             "- 只想看数据：回一句「看数据」，我直接把最近的档案和误判统计给你"
         )
-    elif ids:
-        final = "请再具体一点：你想让我查什么、看什么？"
     else:
         final = (
             "需要两个信息才能开始：\n\n"
             "1. 设备编号（当前库里有 CX-101 ~ CX-105）\n"
             "2. 你想做什么——排查异常、看数据，还是查手册里的规则条款"
         )
+    # 低置信降级时，先告诉用户"我是按哪种理解在问"
+    if note:
+        final = f"{note}\n\n{final}"
 
     trace.emit("ask_user", intent=state.get("intent", ""), device_ids=ids,
                phenomenon=phen[:80], missing=missing,
+               confidence=state.get("intent_conf"),
                reason=state.get("intent_reason", ""))
     # 记下追问原话：下一轮的 understand 要靠它判断"用户这句在回答什么"
     return {"final": final, "last_question": final}
@@ -699,24 +767,41 @@ def _slim_result(obj, depth=0, arr=8, strlen=300):
     return obj
 
 
-def _payload(res, limit=1600):
+# 证据编号标签："[证据 5] {...}"。_payload 写到最前面，_load_obj 负责剥掉。
+# 用文本前缀而不是往 JSON 里加 "_ev" 字段，是因为工具返回可能是 list 或标量，
+# 加字段要么改结构（模型引用的路径全变）、要么加不进去；前缀对所有类型都成立，
+# 且完全不影响 JSON 内部的字段路径。
+_EV_TAG = re.compile(r"^\[证据 (\d+)\] ")
+
+
+def _payload(res, limit=1600, ev_no=None):
     """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。
 
     返回 (text, truncated)。text 永远是**合法 JSON**——这是硬约束，因为
     verify 要用 _load_obj 解析它取字段；一旦不是 JSON，所有引用都会判
     ref_bad，报出来是"模型引用写错"，实际是证据坏了，归因完全反了
     （实测：一条 1606 字的 defect_log 返回就能触发，正确引用全被判失败）。
+    —— 除了最前面那截 "[证据 N] " 标签，它由 _load_obj 剥掉，见 _EV_TAG。
 
     逐档收紧结构；三档都压不住时不再切字符串，改为降级成一个仍可解析的
     包装对象，把能留的内容放 preview 里。模型看到 preview 仍可引用其中的
     数字（_value_match 支持字符串内抽数），校验层也能据此判是"证据截断"
     而不是"模型写错"。
+
+    ev_no 为什么在这里：让模型自己数"这是第几条工具返回"是本次最贵的
+    一处不可靠。实测同一份代码、同一条用例连跑两次，语义 25% 与 100%，
+    差异全在 k 错位——字段名模型记得极准（cumulative_hours、records[0].
+    drift_px、conflicts[0].value、chunks[2].text 四个工具的字段全对），
+    位置完全记不住。编号是纯机械的信息，不该交给会记错的组件去数，
+    直接印在它读得到的文本最前面，它照抄即可。
     """
+    head = f"[证据 {ev_no}] " if ev_no else ""
+    budget = limit - len(head)
     for arr, strlen in _SLIM_LEVELS:
         text = json.dumps(_slim_result(res, 0, arr, strlen),
                           ensure_ascii=False, default=str)
-        if len(text) <= limit:
-            return text, False
+        if len(text) <= budget:
+            return head + text, False
 
     # 结构已压到最小仍超限：降级为合法 JSON，明细进 preview
     full = json.dumps(res, ensure_ascii=False, default=str)
@@ -726,15 +811,15 @@ def _payload(res, limit=1600):
         "top_keys": list(res.keys())[:12] if isinstance(res, dict) else [],
         "preview": "",
     }
-    room = limit - len(json.dumps(out, ensure_ascii=False)) - 8   # 留转义余量
+    room = budget - len(json.dumps(out, ensure_ascii=False)) - 8   # 留转义余量
     n = max(0, room)
     out["preview"] = full[:n]
     text = json.dumps(out, ensure_ascii=False)
-    while n > 0 and len(text) > limit:      # 转义会撑长，逐步收窄直到不超
+    while n > 0 and len(text) > budget:     # 转义会撑长，逐步收窄直到不超
         n = int(n * 0.8)
         out["preview"] = full[:n]
         text = json.dumps(out, ensure_ascii=False)
-    return text, True
+    return head + text, True
 
 
 def _owned_device_ids(state):
@@ -755,6 +840,10 @@ def _owned_device_ids(state):
 def act(state):
     last = state["messages"][-1]
     out_msgs, evidence, names = [], [], []
+    # 编号从"已有条数"续，不能从 1 重数：evidence 在 state 里是累加的，
+    # act 每次只返回本轮增量。按增量列表长度算，第二轮又会冒出证据 1、2、3，
+    # 同一编号对应两条不同证据，by_no 后写覆盖先写，引用旧编号会静默命中新证据。
+    base = len(state.get("evidence") or [])
 
     for tc in last["tool_calls"]:
         name = tc["function"]["name"]
@@ -809,7 +898,12 @@ def act(state):
             result_head=res_json[:400],
         )
 
-        slim, cut = _payload(res)
+        # 编号是绝对号（跨轮一直递增），不是本轮内的序号：
+        # 模型引用的 k 必须是它在 messages 里实际看到的那个编号，
+        # 而 _ctx_window 裁剪只影响"参与校验的证据集合"，不能重排编号，
+        # 否则同一份证据在两轮里会有两个号。
+        ev_no = base + len(evidence) + 1
+        slim, cut = _payload(res, ev_no=ev_no)
         out_msgs.append({
             "role": "tool",
             "tool_call_id": tc["id"],
@@ -821,7 +915,8 @@ def act(state):
         # truncated 记下来：这条证据被压到装不下，字段可能根本不在里面，
         # 校验时必须把这种情况和"模型引用写错"分开。
         evidence.append({"tool": name, "args": args, "result": slim,
-                         "truncated": cut, "turn": int(state.get("turn") or 1)})
+                         "truncated": cut, "ev_no": ev_no,
+                         "turn": int(state.get("turn") or 1)})
         names.append(name)
 
     return {
@@ -850,12 +945,20 @@ _MISS = object()
 
 
 def _load_obj(e):
-    """证据对象的原始结构。tool 事件里 result 是 JSON 字符串，也可能已经是 dict。"""
+    """证据对象的原始结构。tool 事件里 result 是 JSON 字符串，也可能已经是 dict。
+
+    先剥掉 _payload 加的 "[证据 N] " 前缀——它只是给模型看的位置标记，
+    不是数据的一部分。不剥掉，json.loads 会失败，所有引用都被判 ref_bad，
+    报出来又是"模型引用写错"，而真凶是包装格式。
+    """
     r = e.get("result")
     if isinstance(r, (dict, list)):
         return r
     if not isinstance(r, str):
         return _MISS
+    m = _EV_TAG.match(r)
+    if m:
+        r = r[m.end():]
     try:
         return json.loads(r)
     except (ValueError, TypeError):
@@ -1062,6 +1165,15 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
       写错/没写 混在同一个解析失败里 —— ref 空是没写，ref 指不到是写错
       标灰看不见 只能记在报告里     —— 渲染时把标记跟在数字后面
     """
+    # 证据按自带编号建索引。没有 ev_no 的（旧数据、测试构造）不入索引，
+    # 引用它会直接判"不在可见范围"——宁可显式失败，也不能静默退回按下标算，
+    # 那样两套编号语义并存，哪天 act 漏写编号就没人发现。
+    by_no = {}
+    for e in ev:
+        no = e.get("ev_no")
+        if no is not None:
+            by_no[int(no)] = e
+
     for c in doc.get("claims") or []:
         if not isinstance(c, dict):
             continue
@@ -1080,24 +1192,29 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             blocked.append(text or str(v))
             continue
 
-        m = re.match(r"^\s*(\d{1,2})#(.+?)\s*$", str(ref))
+        m = re.match(r"^\s*(\d{1,3})#(.+?)\s*$", str(ref))
         if not m:
             stats["ref_bad"] += 1
             misquoted.append(f"{text}（出处格式错:{ref}）")
             continue
         k, path = int(m.group(1)), m.group(2)
 
-        if not (1 <= k <= len(ev)):
+        # 按证据自己带的编号找，不按下标算。模型抄的是它在 "[证据 N]" 里看到的
+        # 那个号，和 ev 列表的第几项不是同一件事——_ctx_window 裁掉前几轮之后，
+        # ev[0] 可能正好是证据 7。按下标算就等于要求模型同时记住"看到的是第几条"
+        # 和"裁完以后算第几条"，而这正是它唯一会错的地方。
+        e = by_no.get(k)
+        if e is None:
             stats["cite_oob"] += 1
-            blocked.append(f"{text}（第{k}条不存在）")
+            blocked.append(f"{text}（证据 {k} 不在本轮可见范围）")
             continue
 
-        obj = _load_obj(ev[k - 1])
+        obj = _load_obj(e)
         if obj is _MISS:
             # 不该发生：_payload 已保证输出永远是合法 JSON（超限时降级成
             # _payload_overflow 包装对象）。真到了这里说明有别处写坏了证据。
             stats["ref_bad"] += 1
-            misquoted.append(f"{text}（第{k}条不是结构化返回）")
+            misquoted.append(f"{text}（证据 {k} 不是结构化返回）")
             continue
 
         got = _get_path(obj, path)
@@ -1105,12 +1222,19 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             # 证据被压缩装不下时，字段本身可能就没送进来。这时模型写的路径
             # 也许完全正确，只是那条证据里已经没有它 —— 判模型写错是误判。
             # 和"字段真不存在"分开：前者放行标灰，后者判失败。
-            if ev[k - 1].get("truncated"):
+            if e.get("truncated"):
                 stats["cite_cut"] += 1
-                blocked.append(f"{text}（第{k}条返回体过大已压缩，该字段未保留）")
+                blocked.append(f"{text}（证据 {k} 返回体过大已压缩，该字段未保留）")
             else:
                 stats["path_miss"] += 1
-                misquoted.append(f"{text}（字段不存在:{path}）")
+                # 必须带上编号和工具名。只写"字段不存在:xxx"，读起来就是"模型编了个
+                # 不存在的字段"，第一反应会去改 prompt；但这一类的成因可能是
+                # 引错了证据，也可能真是字段名错——两种修法完全不同，
+                # 文案里必须能分开。
+                tool = e.get("tool", "?")
+                misquoted.append(
+                    f"{text}（证据 {k} 是 {tool}，其中没有字段 {path}）"
+                )
             continue
 
         vmax = c.get("value_max")

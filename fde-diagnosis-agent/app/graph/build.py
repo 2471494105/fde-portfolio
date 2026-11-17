@@ -99,6 +99,10 @@ def result_event(state):
     return {
         "turn": state.get("turn", 1),
         "intent": state.get("intent", ""),
+        # 意图判断的自报置信度。原来没有这个字段：判错时没人知道它有多虚。
+        # 低于 CONF_ASK 会被降级成追问，所以「意图判错」的统计要从这里分开看——
+        # 低置信追问不算判错，那是系统主动交回给用户；低置信照走还走错才是判错。
+        "intent_conf": state.get("intent_conf"),
         "steps": state.get("steps", 0),
         # 结束原因必须单列：steps=12 有两种完全不同的含义
         # （budget_exhausted = 被预算掐断的半成品；enough = 12 步内自己判断够了）。

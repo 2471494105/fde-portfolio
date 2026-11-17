@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 11:45:55",
-  "commit": "556412f",
+  "ts": "2026-11-17 12:38:28",
+  "commit": "df94a36",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "f29e3badccb5",
+  "code_hash": "03aa9d2f16ee",
   "cases_total": 25,
   "evaluated": 1,
   "workers": 1,
@@ -25,18 +25,18 @@
   "check_rounds_n": 0,
   "intent_bad": 0,
   "fc_fail": 0,
-  "blocked_n": 1,
+  "blocked_n": 0,
   "trace_ok_n": 1,
   "trace_rate": 1.0,
-  "cite_hit": 23,
-  "cite_qty": 24,
-  "cite_rate": 0.9583,
+  "cite_hit": 22,
+  "cite_qty": 22,
+  "cite_rate": 1.0,
   "cite_cut": 0,
   "json_fixed": 0,
   "misquote_n": 0,
   "range_ok": 1,
   "range_bad": 0,
-  "elapsed_s": 174.2
+  "elapsed_s": 261.8
  },
  "results": [
   {
@@ -48,9 +48,9 @@
     "query_device_profile",
     "query_defect_log",
     "query_defect_log",
-    "query_defect_log",
     "query_light_usage",
     "query_calibration",
+    "query_defect_log",
     "query_defect_log",
     "search_manual",
     "check_doc_conflict"
@@ -68,34 +68,32 @@
    ],
    "req_miss": [],
    "steps_ok": true,
-   "blocked": [
-    "近 30 天与近 7 天误判率仅差 0.89 个百分点（=23.89−23），是高位平台而非突然飙升"
-   ],
+   "blocked": [],
    "misquoted": [],
    "trace_ok": true,
    "fc_fail": false,
    "semantic_ok": true,
    "reasons": [],
    "cite_stats": {
-    "qty": 24,
-    "pct": 10,
-    "cited_ok": 23,
-    "cited_path": 23,
+    "qty": 22,
+    "pct": 6,
+    "cited_ok": 22,
+    "cited_path": 22,
     "cite_oob": 0,
-    "path_ok": 23,
+    "path_ok": 22,
     "path_bad": 0,
     "path_miss": 0,
     "json_bad": 0,
-    "unsourced": 1,
+    "unsourced": 0,
     "ref_bad": 0,
     "cite_cut": 0,
     "json_fixed": 0,
     "range_ok": 1,
     "range_bad": 0,
-    "cited": 23,
+    "cited": 22,
     "ev": 9
    },
-   "final_head": "光源已超额定寿命且亮度被两次下调，成像对比度不足，过杀集中在单个工位的光源或镜头侧；标定记录平稳，可排除标定漂移，也非缺陷类型或批次级的算法问题 - 近 7 天整体误判率 23.89% - 近 7 天记录 113 条、误判 27 条 - 1 号工位误判率 58.82%（20/34） - 3 号工位误判率 10.64% "
+   "final_head": "1号工位光源已超额定寿命、亮度又被两次下调，成像对比度不足，误判高度集中在单个工位，属于光源硬件衰减，不是标定漂移或算法/物料问题；另需注意本轮未查到能严格区分夜班与白班的证据，光源亮度设定值在两份文档间存在冲突 - 1号工位误判率 57.63% - 1号工位误判 34 条 - 1号工位记录 59 条 - 3号工位误判"
   }
  ]
 }

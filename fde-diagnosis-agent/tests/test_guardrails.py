@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import trace
 from app.graph import build, nodes
-from app.tools import diagnosis, workorder
+from app.tools import diagnosis, manual, workorder
 from mock_qms import server
 
 
@@ -258,6 +258,68 @@ class LightLifeFieldsTest(unittest.TestCase):
             _, _, estimate = diagnosis._life_fields(cum, rated)
             self.assertNotIn(banned, estimate,
                              f"文案复述了寿命数字 {banned}，又造出第二个数据源")
+
+
+class ParamResolveTest(unittest.TestCase):
+    """check_doc_conflict 的参数名归一：唯一候选才自动改名，多候选一律不猜。
+
+    T1 的真相是模型传了「光源亮度」，库里叫「光源亮度设定」，工具只回一句
+    "请改用可用参数名重查"，把改名重查的负担全压给模型——它没重查，
+    还把"我参数写错了"报成"手册里没有这个数"，归因错了两层。
+
+    归一化能救这一条，但风险也在这里：一旦"差不多的都算一个"，
+    模型传「阈值」就会被悄悄替换成「判定置信度阈值」或「日误判率上报阈值」，
+    错得比不归一化更隐蔽——调用方看不到程序替他猜了一次。
+    """
+
+    KEYS = ["传送带速度(m/s)", "光源亮度设定", "判定置信度阈值",
+            "日误判率上报阈值(%)", "相机曝光(us)", "标定周期(天)"]
+
+    def test_exact_name_unchanged(self):
+        chosen, status, _ = manual._resolve_param("光源亮度设定", self.KEYS)
+        self.assertEqual(chosen, "光源亮度设定")
+        self.assertEqual(status, "exact")
+
+    def test_partial_name_resolves_when_unique(self):
+        """T1 的真实形状：少个后缀，库里只有一个对得上。"""
+        chosen, status, _ = manual._resolve_param("光源亮度", self.KEYS)
+        self.assertEqual(chosen, "光源亮度设定")
+        self.assertEqual(status, "normalized")
+
+    def test_whitespace_and_fullwidth_are_format_only(self):
+        """归一化只抹格式：空格、全角括号。抹到语义就危险了。"""
+        self.assertEqual(manual._norm_param(" 光源亮度（%） "), "光源亮度")
+        chosen, status, _ = manual._resolve_param("  衰减  设定  ", self.KEYS)
+        self.assertEqual(status, "missing", "抹空白不该把不相干的词变成候选")
+
+    def test_multiple_candidates_never_auto_pick(self):
+        """反向断言：两个候选时不许替模型做决定。
+
+        「阈值」能对上「判定置信度阈值」和「日误判率上报阈值」，
+        自动选一个就等于程序在猜，而且调用方无从知道猜了什么。
+        """
+        chosen, status, cands = manual._resolve_param("阈值", self.KEYS)
+        self.assertEqual(status, "ambiguous")
+        self.assertEqual(chosen, "阈值", "没命中就该按原名查，不要偷偷替换")
+        self.assertIn("判定置信度阈值", cands)
+        self.assertIn("日误判率上报阈值(%)", cands)
+
+    def test_unknown_name_is_missing_not_fuzzy(self):
+        """反向断言：不像的就别硬凑。
+
+        模糊匹配没有下限时，任何输入都能"归一化"到某个参数上，
+        于是"查错了"永远报不出来。
+        """
+        chosen, status, cands = manual._resolve_param("不存在的参数", self.KEYS)
+        self.assertEqual(status, "missing")
+        self.assertEqual(chosen, "不存在的参数")
+        self.assertEqual(cands, [])
+
+    def test_extra_qualifier_also_resolves(self):
+        """模型多带限定词（"产线光源亮度设定"）也要能吃下——包含关系是双向看的。"""
+        chosen, status, _ = manual._resolve_param("产线光源亮度设定", self.KEYS)
+        self.assertEqual(chosen, "光源亮度设定")
+        self.assertEqual(status, "normalized")
 
 
 class TracerIsolationTest(unittest.TestCase):

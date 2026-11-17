@@ -231,9 +231,10 @@ class ClaimContractTest(unittest.TestCase):
     GROUPS = ('{"false_positive_rate": 0.1541, "groups": ['
               '{"key": "1号工位", "count": 34, "rate": 0.5882}]}')
 
-    def _verify(self, doc, *payloads, truncated=False):
+    def _verify(self, doc, *payloads, truncated=False, tool="query_defect_log"):
         final = doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False)
-        ev = [{"result": p, "turn": 1, "truncated": truncated, "ev_no": i + 1}
+        ev = [{"result": p, "tool": tool, "turn": 1,
+               "truncated": truncated, "ev_no": i + 1}
               for i, p in enumerate(payloads)]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
@@ -248,7 +249,7 @@ class ClaimContractTest(unittest.TestCase):
     def test_matching_ref_is_cited(self):
         res = self._verify({"conclusion": "1 号工位偏高", "claims": [
             {"text": "误判率 58.82%", "value": 58.82, "unit": "%",
-             "ref": "1#groups[0].rate"}]}, self.GROUPS)
+             "ref": "query_defect_log#groups[0].rate"}]}, self.GROUPS)
         self.assertEqual(res["blocked"], [])
         self.assertEqual(res["misquoted"], [])
         self.assertGreaterEqual(res["cite_stats"]["cited_ok"], 1)
@@ -267,7 +268,7 @@ class ClaimContractTest(unittest.TestCase):
     def test_missing_field_is_misquoted(self):
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "判定 34 条", "value": 34, "unit": "条",
-             "ref": "1#groups[0].cnt"}]}, self.GROUPS)
+             "ref": "query_defect_log#groups[0].cnt"}]}, self.GROUPS)
         self.assertTrue(any("34 条" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["path_miss"], 1)
 
@@ -275,7 +276,7 @@ class ClaimContractTest(unittest.TestCase):
         # 字段存在但值不对：这是"写出处但写错"，比没写出处严重
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "判定 99 条", "value": 99, "unit": "条",
-             "ref": "1#groups[0].count"}]}, self.GROUPS)
+             "ref": "query_defect_log#groups[0].count"}]}, self.GROUPS)
         self.assertTrue(any("99 条" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
 
@@ -284,16 +285,38 @@ class ClaimContractTest(unittest.TestCase):
         # 字段不是数字，但里面有这个数——不能因为类型不是 float 就判成引用写错。
         res = self._verify({"conclusion": "光源超寿命", "claims": [
             {"text": "误判率通常上升 10%~25%", "value": 25, "unit": "%",
-             "ref": "1#assessment"}]},
-            '{"assessment": "已超额定寿命 620 小时，上升 10%-25%，建议更换光源"}')
+             "ref": "query_light_usage#assessment"}]},
+            '{"assessment": "已超额定寿命 620 小时，上升 10%-25%，建议更换光源"}',
+            tool="query_light_usage")
         self.assertEqual(res["misquoted"], [])
         self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
+
+    def test_unknown_tool_name_is_ref_bad(self):
+        # 写了一个仓库里根本不存在的工具名：这是编的出处，不是"被裁剪"。
+        # 两者必须分开——前者该判失败，后者该标灰。
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "误判率 58.82%", "value": 58.82, "unit": "%",
+             "ref": "query_magic_box#groups[0].rate"}]}, self.GROUPS)
+        self.assertGreaterEqual(res["cite_stats"]["ref_bad"], 1)
+        self.assertEqual(res["cite_stats"]["cite_oob"], 0)
+        self.assertTrue(any("不存在的工具名" in m for m in res["misquoted"]))
+
+    def test_numbered_ref_is_rejected_not_reinterpreted(self):
+        # 档 C 之后不再有编号。写 "1#..." 必须判格式错，
+        # 不能悄悄当成"第 1 条"放过——那等于两套引用语义并存。
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "误判率 58.82%", "value": 58.82, "unit": "%",
+             "ref": "1#groups[0].rate"}]}, self.GROUPS)
+        self.assertGreaterEqual(res["cite_stats"]["ref_bad"], 1)
+        self.assertEqual(res["cite_stats"]["cited_ok"], 0)
+        self.assertTrue(any("工具名#字段路径" in m for m in res["misquoted"]))
 
     def test_no_json_is_failure_not_silent_pass(self):
         # 旧文本解析路径已删。模型不按契约输出时判失败，不再静默退回——
         # 退回等于"这条没校验"，而没校验的结论被当成通过，才是真正危险的地方。
-        res = self._verify("标定周期 90 天[1#maintenance_cycle_days]。",
-                           '{"maintenance_cycle_days": 90}')
+        res = self._verify("标定周期 90 天[query_device_profile#maintenance_cycle_days]。",
+                           '{"maintenance_cycle_days": 90}',
+                           tool="query_device_profile")
         self.assertGreaterEqual(res["cite_stats"]["json_bad"], 1)
         self.assertTrue(any("契约" in m for m in res["misquoted"]))
 
@@ -312,9 +335,10 @@ class RangeClaimTest(unittest.TestCase):
 
     RANGE_TEXT = '{"assessment": "已超额定寿命 620 小时，上升 10%-25%", "rate": 0.1541}'
 
-    def _verify(self, doc, *payloads):
+    def _verify(self, doc, *payloads, tool="query_light_usage"):
         final = json.dumps(doc, ensure_ascii=False)
-        ev = [{"result": p, "turn": 1, "truncated": False, "ev_no": i + 1}
+        ev = [{"result": p, "tool": tool, "turn": 1,
+               "truncated": False, "ev_no": i + 1}
               for i, p in enumerate(payloads)]
         state = {"final": final, "evidence": ev, "turn": 1,
                  "user_msg": "", "tool_names": [], "steps": 0}
@@ -330,7 +354,7 @@ class RangeClaimTest(unittest.TestCase):
         # 原文里本来就写着「上升 10%-25%」，两端都能找到 → 合法引用
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "上升 10%~25%", "value": 10, "value_max": 25, "unit": "%",
-             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+             "ref": "query_light_usage#assessment"}]}, self.RANGE_TEXT)
         self.assertEqual(res["misquoted"], [])
         self.assertGreaterEqual(res["cite_stats"]["range_ok"], 1)
         self.assertEqual(res["cite_stats"]["range_bad"], 0)
@@ -341,7 +365,7 @@ class RangeClaimTest(unittest.TestCase):
         # 只要实现里少了"数值字段禁 value_max"这条，这一行就会挂。
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "误判率 10%~25%", "value": 10, "value_max": 25, "unit": "%",
-             "ref": "1#rate"}]}, self.RANGE_TEXT)
+             "ref": "query_light_usage#rate"}]}, self.RANGE_TEXT)
         self.assertTrue(any("撑不住区间" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
 
@@ -349,7 +373,7 @@ class RangeClaimTest(unittest.TestCase):
         # 只找到一端不算：另一端是模型自己加的，不是原文里的
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "上升 10%~40%", "value": 10, "value_max": 40, "unit": "%",
-             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+             "ref": "query_light_usage#assessment"}]}, self.RANGE_TEXT)
         self.assertTrue(any("字段原文对不上" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
 
@@ -365,7 +389,7 @@ class RangeClaimTest(unittest.TestCase):
     def test_reversed_bounds_is_misquoted(self):
         res = self._verify({"conclusion": "x", "claims": [
             {"text": "上升 25%~10%", "value": 25, "value_max": 10, "unit": "%",
-             "ref": "1#assessment"}]}, self.RANGE_TEXT)
+             "ref": "query_light_usage#assessment"}]}, self.RANGE_TEXT)
         self.assertTrue(any("上下界写反" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["range_bad"], 1)
 
@@ -534,7 +558,7 @@ class CheckLoopTest(unittest.TestCase):
     def _run_check(self, final, retry=0, notes=None, unsourced0=0):
         st = {"final": final, "check_retry": retry, "check_notes": list(notes or []),
               "check_unsourced0": unsourced0,
-              "evidence": [{"result": self.PAYLOAD, "turn": 1, "ev_no": 1,
+              "evidence": [{"result": self.PAYLOAD, "tool": "query_light_usage", "turn": 1, "ev_no": 1,
                             "truncated": False}],
               "messages": []}
         return nodes.check(st)
@@ -542,7 +566,7 @@ class CheckLoopTest(unittest.TestCase):
     def test_clean_claim_passes_without_retry(self):
         out = self._run_check(json.dumps({"conclusion": "x", "claims": [
             {"text": "2 号工位误判率 11.39%", "value": 11.39, "unit": "%",
-             "ref": "1#rate"}]}, ensure_ascii=False))
+             "ref": "query_light_usage#rate"}]}, ensure_ascii=False))
         self.assertEqual(out["check_action"], "pass")
         self.assertEqual(out["check_retry"], 0)
         self.assertNotIn("messages", out)
@@ -550,7 +574,7 @@ class CheckLoopTest(unittest.TestCase):
     def test_bad_claim_retries_once_with_reason(self):
         out = self._run_check(json.dumps({"conclusion": "x", "claims": [
             {"text": "2 号工位误判率 4.84%", "value": 4.84, "unit": "%",
-             "ref": "1#rate"}]}, ensure_ascii=False))
+             "ref": "query_light_usage#rate"}]}, ensure_ascii=False))
         self.assertEqual(out["check_action"], "retry")
         self.assertEqual(out["check_retry"], 1)
         msg = out["messages"][-1]["content"]
@@ -562,7 +586,7 @@ class CheckLoopTest(unittest.TestCase):
     def test_second_round_does_not_retry_again(self):
         out = self._run_check(json.dumps({"conclusion": "x", "claims": [
             {"text": "2 号工位误判率 4.84%", "value": 4.84, "unit": "%",
-             "ref": "1#rate"}]}, ensure_ascii=False), retry=1)
+             "ref": "query_light_usage#rate"}]}, ensure_ascii=False), retry=1)
         self.assertEqual(out["check_action"], "pass")
         self.assertEqual(out["check_retry"], 1)
 
@@ -589,8 +613,8 @@ class CheckLoopTest(unittest.TestCase):
         # 不并进去的话，它就是个写了没人读的字段，绕法本身静默通过。
         st = {"final": json.dumps({"conclusion": "x", "claims": [
             {"text": "误判率 11.39%", "value": 11.39, "unit": "%",
-             "ref": "1#rate"}]}, ensure_ascii=False),
-              "evidence": [{"result": self.PAYLOAD, "turn": 1, "ev_no": 1,
+             "ref": "query_light_usage#rate"}]}, ensure_ascii=False),
+              "evidence": [{"result": self.PAYLOAD, "tool": "query_light_usage", "turn": 1, "ev_no": 1,
                             "truncated": False}],
               "turn": 1, "user_msg": "", "tool_names": [], "steps": 0,
               "check_notes": ["回环后未溯源数字从 0 条涨到 2 条：把指错的 ref 改成 null 不是修正"]}
@@ -668,10 +692,10 @@ class PayloadBudgetTest(unittest.TestCase):
         ev_text, cut = nodes._payload({f"k{i:03d}": f"值{i}" for i in range(400)})
         self.assertTrue(cut)
         doc = {"conclusion": "x", "claims": [
-            {"text": "判定 34 条", "value": 34, "unit": "条", "ref": "1#groups[0].count"}]}
+            {"text": "判定 34 条", "value": 34, "unit": "条", "ref": "query_defect_log#groups[0].count"}]}
         final = json.dumps(doc, ensure_ascii=False)
-        state = {"final": final, "evidence": [{"result": ev_text, "turn": 1,
-                                               "truncated": True, "ev_no": 1}],
+        state = {"final": final, "evidence": [{"result": ev_text, "tool": "query_defect_log",
+                                               "turn": 1, "truncated": True, "ev_no": 1}],
                  "turn": 1, "user_msg": "", "tool_names": [], "steps": 0}
         old = trace.RUNS_DIR
         trace.RUNS_DIR = Path(tempfile.mkdtemp())
@@ -689,7 +713,7 @@ class PayloadBudgetTest(unittest.TestCase):
         # 少了这条，把 cite_cut 写成"无条件放行"也能让上一条测试通过。
         res = ClaimContractTest._verify(self, {"conclusion": "x", "claims": [
             {"text": "判定 34 条", "value": 34, "unit": "条",
-             "ref": "1#groups[0].cnt"}]}, ClaimContractTest.GROUPS, truncated=False)
+             "ref": "query_defect_log#groups[0].cnt"}]}, ClaimContractTest.GROUPS, truncated=False)
         self.assertGreaterEqual(res["cite_stats"]["path_miss"], 1)
         self.assertTrue(any("34 条" in m for m in res["misquoted"]))
 
@@ -885,16 +909,14 @@ class BareQuoteRepairTest(unittest.TestCase):
 
 
 class EvidenceNumberingTest(unittest.TestCase):
-    """证据编号的权威只有一处：证据自己带的 ev_no。
+    """引用身份是工具名，不是编号（档 C）。
 
-    为什么要动这块：模型原来要自己数"这是第几条工具返回"，而 ev 列表下标
-    和它数的不是同一件事——_ctx_window 裁掉前几轮之后，ev[0] 可能是证据 7。
-    2026-11-17 同一份代码、同一条用例连跑两次，语义 25% 与 100%，差异全在
-    k 错位；而四个工具的字段名它一个都没写错（cumulative_hours / records[0].
-    drift_px / conflicts[0].value / chunks[2].text 全对）。
-    编号是纯机械信息，交给会记错的组件去数，等于白送一个失效源。
+    为什么换形状：编号是**位置**，会随上下文裁剪和轮次漂移。2026-11-17 三轮探针
+    同一份代码跑两次，第 3 轮一次 14/14、一次 0/15——错的全是编号：模型记得
+    "第 1 轮查过设备档案"，就写 1#，而真实编号是全局累计、第 3 轮从 5 起。
+    工具名是**身份**，第几轮调都叫同一个名字。
 
-    没有 test_ref_matches_by_number_not_position，把校验改回按下标也能全绿——
+    没有这几条反向断言，把请求改回"按编号找"也能全绿——
     那正是这次要消灭的行为。
     """
 
@@ -910,29 +932,29 @@ class EvidenceNumberingTest(unittest.TestCase):
         finally:
             trace.RUNS_DIR = old
 
-    def test_payload_carries_number_and_stays_parsable(self):
-        text, cut = nodes._payload({"a": 1}, ev_no=7)
+    def test_payload_carries_tool_name_and_stays_parsable(self):
+        text, cut = nodes._payload({"a": 1}, tool="query_calibration")
         self.assertFalse(cut)
-        self.assertTrue(text.startswith("[证据 7] "))
+        self.assertTrue(text.startswith("[query_calibration] "))
         self.assertEqual(nodes._load_obj({"result": text}), {"a": 1},
                          "剥前缀后必须还是原结构，否则校验层全线 ref_bad")
 
-    def test_no_number_means_no_prefix(self):
-        # 不传编号就不加前缀：_payload 还有别的调用方，默认行为不能变。
+    def test_no_tool_means_no_prefix(self):
+        # 不传工具名就不加前缀：_payload 还有别的调用方，默认行为不能变。
         text, _ = nodes._payload({"a": 1})
         self.assertEqual(text, '{"a": 1}')
 
-    def test_numbered_payload_still_respects_limit(self):
+    def test_tool_prefixed_payload_still_respects_limit(self):
         # 前缀的字节要从预算里扣，不能靠 limit 之外白送一节。
         text, cut = nodes._payload({f"k{i}": i for i in range(800)},
-                                   limit=200, ev_no=12)
+                                   limit=200, tool="query_defect_log")
         self.assertTrue(cut)
         self.assertLessEqual(len(text), 200)
-        self.assertTrue(text.startswith("[证据 12] "))
+        self.assertTrue(text.startswith("[query_defect_log] "))
 
-    def test_ref_matches_by_number_not_position(self):
-        # 列表第 1 项是证据 7（前几轮已被裁掉）。引用 7# 必须命中它；
-        # 引用 1# 必须判"不在可见范围"，而不是顺手命中列表第 1 项。
+    def test_ref_matches_by_tool_not_by_position(self):
+        # ev 列表第 1 项的工具是 query_calibration。按工具名引用它必须命中；
+        # 而引用"编号 7"必须判格式错——档 C 之后编号已经不是引用格式。
         ev = [
             {"ev_no": 7, "tool": "query_calibration", "truncated": False,
              "result": json.dumps({"records": [{"drift_px": 0.467}]})},
@@ -941,27 +963,54 @@ class EvidenceNumberingTest(unittest.TestCase):
         ]
         doc = {"conclusion": "x", "claims": [
             {"text": "漂移 0.467 像素", "value": 0.467,
-             "ref": "7#records[0].drift_px"},
-            {"text": "标定周期 90 天", "value": 90, "ref": "1#chunks[0].text"}]}
+             "ref": "query_calibration#records[0].drift_px"},
+            {"text": "标定周期 90 天", "value": 90, "ref": "7#chunks[0].text"}]}
         res = self._verify(doc, ev)
-        self.assertEqual(res["misquoted"], [], "证据 7 就在里面，不该判失败")
+        self.assertEqual(res["cite_stats"]["cited_ok"], 1,
+                         "工具名对上了就该成立，跟它是列表第几项无关")
+        self.assertEqual(res["cite_stats"]["ref_bad"], 1,
+                         "写编号不再是合法格式")
         self.assertEqual(res["cite_stats"]["path_miss"], 0)
-        self.assertEqual(res["cite_stats"]["cite_oob"], 1, "证据 1 已不在窗口内")
 
-    def test_missing_number_does_not_fall_back_to_position(self):
-        # 没有 ev_no 的证据不能退回按下标算：那会让"act 漏写编号"永远看不见，
-        # 表现为引用率照旧、问题被悄悄兜住。
-        ev = [{"tool": "query_device_profile", "truncated": False,
-               "result": json.dumps({"line": "4号线"})}]
+    def test_same_tool_twice_any_return_counts(self):
+        # 同一工具一轮里调两次（比如换 query 再搜一遍手册），模型记不住"是第几次"。
+        # 它抄的那段原文只可能来自其中一次，所以在该工具的所有返回里找——
+        # 任一命中即成立。这条如果不成立，档 C 就等于把"编号问题"换成了"次数问题"。
+        ev = [
+            {"ev_no": 9, "tool": "search_manual", "truncated": False,
+             "result": json.dumps({"chunks": [{"text": "标定周期为 90 天"}],
+                                   "query": "标定周期"})},
+            {"ev_no": 10, "tool": "search_manual", "truncated": False,
+             "result": json.dumps({"chunks": [{"text": "漂移上限为 0.3 毫米"}],
+                                   "query": "漂移上限"})},
+        ]
         doc = {"conclusion": "x", "claims": [
-            {"text": "4号线", "value": 4, "ref": "1#line"}]}
+            # 第二批返回里的字段，ref 只写一次工具名，不指明第几次
+            {"text": "漂移上限 0.3 毫米", "value": 0.3,
+             "unit": "毫米", "ref": "search_manual#chunks[0].text"}]}
         res = self._verify(doc, ev)
-        self.assertEqual(res["cite_stats"]["cite_oob"], 1)
+        self.assertEqual(res["misquoted"], [],
+                         "同一工具两次调用，任一返回里有这个字段就该成立")
 
-    def test_act_numbers_from_accumulated_count(self):
-        # 多轮：state 里已有 5 条，本轮第一条必须编号 6，不能从 1 重数。
-        # 重数会让第二轮又冒出证据 1、2、3，by_no 后写覆盖先写，
-        # 引用旧编号时静默命中一条完全不相干的证据。
+    def test_unknown_tool_is_judged_differently_from_cut(self):
+        # 工具名不存在（编的）→ ref_bad 判失败；
+        # 工具存在但本轮没有它的返回（被裁掉）→ cite_oob 标灰放行。
+        # 两类一旦混在一起，"模型编出处"就会伪装成"上下文裁剪"。
+        ev = [{"ev_no": 8, "tool": "query_calibration", "truncated": False,
+               "result": json.dumps({"records": [{"drift_px": 0.467}]})}]
+        doc = {"conclusion": "x", "claims": [
+            {"text": "漂移 0.1", "value": 0.1, "ref": "query_magic_box#drift_px"},
+            {"text": "保养周期 90 天", "value": 90,
+             "ref": "query_device_profile#maintenance_cycle_days"}]}
+        res = self._verify(doc, ev)
+        self.assertEqual(res["cite_stats"]["ref_bad"], 1, "编工具名必须判失败")
+        self.assertEqual(res["cite_stats"]["cite_oob"], 1,
+                         "工具真实存在、只是不在本轮视野 → 标灰")
+        self.assertEqual(len(res["blocked"]), 1)
+
+    def test_act_tags_payload_with_tool_name(self):
+        # act 写进 messages 的标签必须是工具名：多轮里它是模型唯一能抄的东西，
+        # 印错了（比如还印编号）就等于把漂移源又装回去。
         def fake(device_id):
             return {"device_id": device_id, "line": "4号线"}
 
@@ -975,14 +1024,16 @@ class EvidenceNumberingTest(unittest.TestCase):
         }
         with mock.patch.dict(nodes.TOOL_IMPLS, {"query_device_profile": fake}):
             out = nodes.act(state)
+        self.assertEqual(out["messages"][0]["content"],
+                         '[query_device_profile] ' +
+                         out["messages"][0]["content"][len("[query_device_profile] "):])
+        self.assertTrue(out["messages"][0]["content"].startswith("[query_device_profile] "))
+        # ev_no 仍要按累计数续，它是审计用的，不是引用用的
         self.assertEqual(out["evidence"][0]["ev_no"], 6)
-        self.assertTrue(out["messages"][0]["content"].startswith("[证据 6] "))
 
-    def test_lookup_evidence_carries_numbers(self):
-        # lookup 走的是模板拼文本，不经 act——它的 evidence 当初完全没有编号，
-        # 于是同一份 evidence 里并存"有号"和"没号"两种条目。
-        # 后果：多轮里 by_no 只收了诊断那半边的号，lookup 给出的数字
-        # 永远指不回去，报告上却看不出是"没编号"还是"引错了"。
+    def test_lookup_claims_use_tool_names(self):
+        # lookup 走模板拼文本、不经 act，但它自产的 claims 必须和模型用同一套
+        # 引用格式——否则校验层要同时理解两种语义，等于把编号问题搬回来。
         def fake_prof(device_id):
             return {"device_id": device_id, "maintenance_cycle_days": 90}
 
@@ -1000,9 +1051,15 @@ class EvidenceNumberingTest(unittest.TestCase):
                 mock.patch.object(nodes, "query_defect_log", fake_log), \
                 mock.patch.object(nodes, "query_work_order", fake_wo):
             out = nodes.lookup(state)
-        # 上一轮已有 3 条，所以新的必须从 4 起，不能自己从 1 重数。
+        # ev_no 仍按上一轮的累计数续（审计用）：已有 3 条，新的必须从 4 起。
         self.assertEqual([e["ev_no"] for e in out["evidence"]], [4, 5, 6])
         self.assertEqual(len(out["evidence"]), 3)
+        # 但 claims 里的 ref 必须是工具名，不能是这些编号
+        refs = [c.get("ref") for c in json.loads(out["final"])["claims"]]
+        self.assertTrue(refs, "lookup 必须自产 claims")
+        for r in refs:
+            self.assertRegex(r, r"^query_(device_profile|defect_log|work_order)#",
+                             f"lookup 的 ref 应写工具名，实际是 {r}")
 
 
 class LookupClaimsTest(unittest.TestCase):
@@ -1028,7 +1085,8 @@ class LookupClaimsTest(unittest.TestCase):
         ]
 
     def test_every_claim_verifies(self):
-        text, claims = nodes._data_block(self.PROF, self.LOG, 4, 5)
+        text, claims = nodes._data_block(self.PROF, self.LOG,
+                                          "query_device_profile", "query_defect_log")
         stats, blocked, misquoted = nodes._new_stats(), [], []
         nodes._verify_claims({"claims": claims}, self._evidence(),
                              stats, blocked, misquoted)
@@ -1040,9 +1098,10 @@ class LookupClaimsTest(unittest.TestCase):
     def test_wrong_ref_is_caught(self):
         # 反向断言：把 ref 指向同一条证据里的另一个字段，必须判失败。
         # 少了这条，"所有 ref 都指向证据根"也能让上一条通过。
-        _, claims = nodes._data_block(self.PROF, self.LOG, 4, 5)
+        _, claims = nodes._data_block(self.PROF, self.LOG,
+                                       "query_device_profile", "query_defect_log")
         bad = [dict(c) for c in claims]
-        bad[0]["ref"] = "4#log_count"        # 90 天 指向 200
+        bad[0]["ref"] = "query_device_profile#log_count"   # 90 天 指向 200
         stats, blocked, misquoted = nodes._new_stats(), [], []
         nodes._verify_claims({"claims": bad}, self._evidence(),
                              stats, blocked, misquoted)
@@ -1075,7 +1134,7 @@ class KnowledgeQuoteTest(unittest.TestCase):
         # 允许引多段：两段都是原文，用省略号缝起来也算过
         claims = [{"text": "亮度低于 70 时对比度下降 15%",
                    "quote": "光源亮度设定低于 70 时……对比度下降约 15%",
-                   "ref": "7#chunks[0].text"}]
+                   "ref": "search_manual#chunks[0].text"}]
         stats, blocked, misquoted = self._run(claims)
         self.assertEqual(misquoted, [], f"真原文被当成假的：{misquoted}")
         self.assertEqual(stats["quote_ok"], 1)
@@ -1083,7 +1142,7 @@ class KnowledgeQuoteTest(unittest.TestCase):
     def test_drifted_quote_is_caught(self):
         # 反向断言：把原文的 70 写成 65，这句话在片段里就不存在了
         claims = [{"text": "亮度低于 65 时对比度下降",
-                   "quote": "光源亮度设定低于 65 时", "ref": "7#chunks[0].text"}]
+                   "quote": "光源亮度设定低于 65 时", "ref": "search_manual#chunks[0].text"}]
         stats, blocked, misquoted = self._run(claims)
         self.assertTrue(misquoted, "引文被改了一个数字，必须判失败")
         self.assertEqual(stats["quote_bad"], 1)
@@ -1093,10 +1152,10 @@ class KnowledgeQuoteTest(unittest.TestCase):
         # 少了这条，"引文随便挂到任何字段上"也能让前两条里的一条通过。
         claims = [{"text": "亮度低于 70 时对比度下降",
                    "quote": "光源亮度设定低于 70 时",
-                   "ref": "7#chunks[0].source_doc"}]
+                   "ref": "search_manual#chunks[0].source_doc"}]
         stats, blocked, misquoted = self._run(claims)
         # source_doc 也是字符串，这里换成真正的数值字段再测一次
-        claims[0]["ref"] = "7#chunks[0].value"
+        claims[0]["ref"] = "search_manual#chunks[0].value"
         stats, blocked, misquoted = self._run(claims)
         self.assertTrue(misquoted, "ref 指向数值字段，撑不住一句引文")
 
@@ -1154,7 +1213,7 @@ class BareConclusionTest(unittest.TestCase):
         # 正常的结论会复述一句关键数字，认领它的 claim 在那摆着。
         doc = {"conclusion": "误判率 52.34%，根因偏硬件",
                "claims": [{"text": "整体误判率 52.34%", "value": 52.34,
-                           "unit": "%", "ref": "5#false_positive_rate"}]}
+                           "unit": "%", "ref": "query_defect_log#false_positive_rate"}]}
         log = {"false_positive_rate": 0.5234}
         stats, blocked, misquoted = nodes._new_stats(), [], []
         nodes._verify_claims(doc,

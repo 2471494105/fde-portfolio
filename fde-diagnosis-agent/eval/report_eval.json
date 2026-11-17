@@ -1,12 +1,12 @@
 {
  "meta": {
-  "ts": "2026-11-17 14:08:10",
-  "commit": "1a990d5",
+  "ts": "2026-11-17 14:32:19",
+  "commit": "c6010ca",
   "provider": "openai",
   "model": "deepseek-v4.1-flash-1017",
   "base_url": "https://minekuai.cn/v1",
   "cases_hash": "b125ea215ed5",
-  "code_hash": "2603225f3cf2",
+  "code_hash": "4adf606eb238",
   "cases_total": 25,
   "evaluated": 4,
   "workers": 4,
@@ -24,20 +24,20 @@
   "enough": 1,
   "check_rounds_n": 0,
   "intent_bad": 0,
-  "intent_conf_low_n": 1,
+  "intent_conf_low_n": 0,
   "fc_fail": 0,
   "blocked_n": 0,
   "trace_ok_n": 4,
   "trace_rate": 1.0,
-  "cite_hit": 44,
-  "cite_qty": 44,
+  "cite_hit": 43,
+  "cite_qty": 43,
   "cite_rate": 1.0,
   "cite_cut": 0,
   "json_fixed": 0,
   "misquote_n": 0,
   "range_ok": 1,
   "range_bad": 0,
-  "elapsed_s": 110.1
+  "elapsed_s": 54.8
  },
  "results": [
   {
@@ -52,9 +52,9 @@
     "query_defect_log",
     "query_light_usage",
     "query_calibration",
+    "query_defect_log",
     "search_manual",
-    "check_doc_conflict",
-    "query_defect_log"
+    "check_doc_conflict"
    ],
    "steps": 8,
    "stop_reason": "enough",
@@ -76,12 +76,12 @@
    "semantic_ok": true,
    "reasons": [],
    "cite_stats": {
-    "qty": 17,
-    "pct": 5,
-    "cited_ok": 17,
-    "cited_path": 17,
+    "qty": 16,
+    "pct": 6,
+    "cited_ok": 16,
+    "cited_path": 16,
     "cite_oob": 0,
-    "path_ok": 17,
+    "path_ok": 16,
     "path_bad": 0,
     "path_miss": 0,
     "json_bad": 0,
@@ -95,10 +95,10 @@
     "quote_bad": 0,
     "bare_conclusion": 0,
     "svc_fail": 0,
-    "cited": 17,
+    "cited": 16,
     "ev": 8
    },
-   "final_head": "误判高度集中在1号工位，而整机标定最近一次通过、漂移平稳，因此根因指向1号工位的光源侧硬件衰减：该设备光源累计时长已超额定寿命，且亮度设定在近期被两次下调；这不是全工位共用的模型或阈值问题，也不是标定漂移 - 1号工位误判率 58.82%，远高于其他工位[2] - 1号工位 34 条记录中过杀 20 条[2] - 3号"
+   "final_head": "误判集中在 1 号工位（2、3 号工位远低），不是模型或单一批次问题；结合光源累计点亮时长已超额定寿命、亮度被两次下调、标定漂移平稳通过，根因指向 1 号工位光源衰减导致的成像对比度不足，按小时聚合未见夜班集中，用户所述「夜班飙升」与日志规律不符需核对口径 - 1 号工位误判率 58.82%[query_defect_"
   },
   {
    "id": "I5",
@@ -140,21 +140,21 @@
     "json_fixed": 0,
     "range_ok": 0,
     "range_bad": 0,
-    "quote_ok": 12,
+    "quote_ok": 9,
     "quote_bad": 0,
     "bare_conclusion": 0,
     "svc_fail": 0,
     "cited": 0,
     "ev": 1
    },
-   "final_head": "E-101 表示相机未连接或通讯中断，等级为 critical，即需要立即停机处理。 在编码规则上，E 开头表示设备自身异常，三位数字中的第一位 1 代表图像采集与通讯子系统，因此 E-101 被归类为图像采集类第 1 号告警。 该告警的常见原因是网线松脱和相机掉电。处置时，应检查相机供电与网线连接，并确认交换机端口状"
+   "final_head": "E-101 的含义是相机未连接或通讯中断，等级为 critical，属于设备自身异常中的图像采集类第 1 号告警。该告警期间设备无法成像，所有判定结果均不可信。常见原因为网线松脱、相机掉电；处置时需检查相机供电与网线连接、确认交换机端口状态，恢复连接后重新触发一次采集，确认图像正常再恢复生产。由于等级为 critica"
   },
   {
    "id": "I6",
    "type": "意图",
    "intent": "lookup",
    "intent_ok": true,
-   "intent_conf": 0.62,
+   "intent_conf": 0.85,
    "tools": [
     "query_device_profile",
     "query_defect_log",
@@ -207,7 +207,7 @@
    "type": "意图",
    "intent": "lookup",
    "intent_ok": true,
-   "intent_conf": 0.85,
+   "intent_conf": 0.88,
    "tools": [
     "query_device_profile",
     "query_defect_log",

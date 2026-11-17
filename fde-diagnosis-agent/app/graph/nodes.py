@@ -60,8 +60,8 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
 {
   "conclusion": "一句话根因，不要在这里写数字",
   "claims": [
-    {"text": "含数字的原话", "value": 90, "unit": "天", "ref": "1#maintenance_cycle_days"},
-    {"text": "误判率 58.82%", "value": 58.82, "unit": "%", "ref": "3#groups[0].rate"},
+    {"text": "含数字的原话", "value": 90, "unit": "天", "ref": "query_device_profile#maintenance_cycle_days"},
+    {"text": "误判率 58.82%", "value": 58.82, "unit": "%", "ref": "query_defect_log#groups[0].rate"},
     {"text": "复位后预计降到 6%~11%", "value": 6, "value_max": 11, "unit": "%", "ref": null}
   ],
   "advice": ["先重新标定再复测", "把 11-07 前后的标定记录调出来"]
@@ -76,9 +76,12 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
      你要说区间就说明这个区间不是它给的，ref 必须写 null。
      ref 指着整段文字字段（原文里本来就写着「上升 10%-25%」）时可以写，
      但两个端点都必须能在那段原文里找到。
-   - ref 写这个数的出处：第 k 条工具返回的字段路径，k 按你实际看到的顺序从 1 数。
-     字段路径照工具返回的 JSON 原样写，顶层 "2#maintenance_cycle_days"、
-     数组下标 "3#groups[0].count"、嵌套 "6#records[0].drift_px"。
+   - ref 写这个数的出处：**工具名 + "#" + 字段路径**。
+     工具名照你实际调用的那个工具写（query_device_profile、query_defect_log、
+     query_calibration、search_manual…），一个字母都不要改。
+     不要写"第几条"或数字编号——位置会随对话变，工具名不会。
+     字段路径照工具返回的 JSON 原样写：顶层 query_device_profile#maintenance_cycle_days、
+     数组下标 query_defect_log#groups[0].count、嵌套 query_calibration#records[0].drift_px。
    - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，并在 text 里写算式：
      {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null}
    - 自己定的验收目标、假设值，ref 也写 null。
@@ -819,35 +822,44 @@ def _slim_result(obj, depth=0, arr=8, strlen=300):
     return obj
 
 
-# 证据编号标签："[证据 5] {...}"。_payload 写到最前面，_load_obj 负责剥掉。
+# 证据标签："[query_calibration] {...}"。_payload 写到最前面，_load_obj 负责剥掉。
 # 用文本前缀而不是往 JSON 里加 "_ev" 字段，是因为工具返回可能是 list 或标量，
 # 加字段要么改结构（模型引用的路径全变）、要么加不进去；前缀对所有类型都成立，
 # 且完全不影响 JSON 内部的字段路径。
-_EV_TAG = re.compile(r"^\[证据 (\d+)\] ")
+#
+# 这里必须是工具名，不能是编号：编号是位置、会随上下文裁剪漂移，工具名是身份。
+_TOOL_TAG = re.compile(r"^\[([a-z][a-z0-9_]*)\] ")
+
+# 引用格式：工具名#字段路径。工具名是身份，不随轮次/裁剪漂移。
+# 开头必须是字母且有 3 个字符以上：这样 "1#path" 这种编号写法会直接判格式错，
+# 而不是被当成"工具名是 1"再滑到别的分支里。
+_REF_PAT = re.compile(r"^\s*([a-z][a-z0-9_]{2,40})#(.+?)\s*$")
 
 
-def _payload(res, limit=1600, ev_no=None):
+def _payload(res, limit=1600, tool=None):
     """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。
 
     返回 (text, truncated)。text 永远是**合法 JSON**——这是硬约束，因为
     verify 要用 _load_obj 解析它取字段；一旦不是 JSON，所有引用都会判
     ref_bad，报出来是"模型引用写错"，实际是证据坏了，归因完全反了
     （实测：一条 1606 字的 defect_log 返回就能触发，正确引用全被判失败）。
-    —— 除了最前面那截 "[证据 N] " 标签，它由 _load_obj 剥掉，见 _EV_TAG。
+    —— 除了最前面那截 "[工具名] " 标签，它由 _load_obj 剥掉，见 _TOOL_TAG。
+
+    打印的是工具名而不是编号，这是档 C 的落点。之前印 "[证据 N]" 时，
+    模型在单轮里照抄，跨轮却会自己重建一套（第 1 轮查过的设备档案，
+    它记成"证据 1"，而真实编号是全局累计的）——同一份代码跑两次，
+    一次 14/14、一次 0/15，错的全是编号。编号是位置，会随裁剪漂移；
+    工具名是身份，第几轮调它都叫同一个名字。
+
+    所以这里不再给它任何编号可抄：模型看不见编号，就没得重建。
+    引用格式随之变成 "工具名#字段路径"，见 _REF_PAT。
 
     逐档收紧结构；三档都压不住时不再切字符串，改为降级成一个仍可解析的
     包装对象，把能留的内容放 preview 里。模型看到 preview 仍可引用其中的
     数字（_value_match 支持字符串内抽数），校验层也能据此判是"证据截断"
     而不是"模型写错"。
-
-    ev_no 为什么在这里：让模型自己数"这是第几条工具返回"是本次最贵的
-    一处不可靠。实测同一份代码、同一条用例连跑两次，语义 25% 与 100%，
-    差异全在 k 错位——字段名模型记得极准（cumulative_hours、records[0].
-    drift_px、conflicts[0].value、chunks[2].text 四个工具的字段全对），
-    位置完全记不住。编号是纯机械的信息，不该交给会记错的组件去数，
-    直接印在它读得到的文本最前面，它照抄即可。
     """
-    head = f"[证据 {ev_no}] " if ev_no else ""
+    head = f"[{tool}] " if tool else ""
     budget = limit - len(head)
     for arr, strlen in _SLIM_LEVELS:
         text = json.dumps(_slim_result(res, 0, arr, strlen),
@@ -954,8 +966,10 @@ def act(state):
         # 模型引用的 k 必须是它在 messages 里实际看到的那个编号，
         # 而 _ctx_window 裁剪只影响"参与校验的证据集合"，不能重排编号，
         # 否则同一份证据在两轮里会有两个号。
+        # ev_no 仍然留一份，只给审计和报告看，不再参与校验：
+        # 引用契约已经改成工具名（见 _REF_PAT），模型看不到编号。
         ev_no = base + len(evidence) + 1
-        slim, cut = _payload(res, ev_no=ev_no)
+        slim, cut = _payload(res, tool=name)
         out_msgs.append({
             "role": "tool",
             "tool_call_id": tc["id"],
@@ -999,7 +1013,7 @@ _MISS = object()
 def _load_obj(e):
     """证据对象的原始结构。tool 事件里 result 是 JSON 字符串，也可能已经是 dict。
 
-    先剥掉 _payload 加的 "[证据 N] " 前缀——它只是给模型看的位置标记，
+    先剥掉 _payload 加的 "[工具名] " 前缀——它只是给模型看的身份标记，
     不是数据的一部分。不剥掉，json.loads 会失败，所有引用都被判 ref_bad，
     报出来又是"模型引用写错"，而真凶是包装格式。
     """
@@ -1008,7 +1022,7 @@ def _load_obj(e):
         return r
     if not isinstance(r, str):
         return _MISS
-    m = _EV_TAG.match(r)
+    m = _TOOL_TAG.match(r)
     if m:
         r = r[m.end():]
     try:
@@ -1176,10 +1190,12 @@ def _render_claims(doc):
         t = str(c.get("text") or "").strip()
         if not t:
             continue
-        # 编号要跟着这句话走。只记在报告里，用户看到的就是一个没有出处的数字——
+        # 出处标记要跟着这句话走。只记在报告里，用户看到的就是一个没有出处的数字——
         # 而"看得到出处"才是这套契约对用户的全部意义。
+        # 标的是工具名不是编号：用户看到 [query_device_profile] 能直接对上是哪次查询，
+        # 看到 [7] 还得自己去数第七次调了哪个工具。
         ref = str(c.get("ref") or "")
-        m = re.match(r"^\s*(\d{1,3})#", ref)
+        m = _REF_PAT.match(ref)
         if m:
             mark = f"[{m.group(1)}]"
         elif not ref:
@@ -1239,7 +1255,7 @@ def _norm_quote(s):
     return s
 
 
-def _verify_quote(c, text, quote, by_no, stats, blocked, misquoted):
+def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
     """引文型 claim：模型说"这段原文在这个片段里"，程序回原文核对。
 
     数字型 claim 问的是"这个数在不在这个字段"，引文型问的是"这句话在不在这份原文"。
@@ -1255,44 +1271,63 @@ def _verify_quote(c, text, quote, by_no, stats, blocked, misquoted):
         stats["unsourced"] += 1
         blocked.append(text or quote[:40])
         return
-    m = re.match(r"^\s*(\d{1,3})#(.+?)\s*$", str(ref))
+    m = _REF_PAT.match(str(ref))
     if not m:
         stats["ref_bad"] += 1
-        misquoted.append(f"{text}（出处格式错:{ref}）")
+        misquoted.append(f"{text}（出处格式错:{ref}，应写 工具名#字段路径）")
         return
-    k, path = int(m.group(1)), m.group(2)
-    e = by_no.get(k)
-    if e is None:
-        stats["cite_oob"] += 1
-        blocked.append(f"{text}（证据 {k} 不在本轮可见范围）")
+    tool, path = m.group(1), m.group(2)
+    cands = by_tool.get(tool)
+    if not cands:
+        if tool in TOOL_IMPLS:
+            stats["cite_oob"] += 1
+            blocked.append(f"{text}（{tool} 的返回不在本轮可见范围）")
+        else:
+            stats["ref_bad"] += 1
+            misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
         return
-    obj = _load_obj(e)
-    if obj is _MISS:
-        stats["ref_bad"] += 1
-        misquoted.append(f"{text}（证据 {k} 不是结构化返回）")
-        return
-    got = _get_path(obj, path)
-    if got is _MISS:
-        if e.get("truncated"):
+
+    # 引文可以在该工具的任一条返回里出现——同一工具多次调用时，
+    # 模型记不住"是第几次"，但它抄的那段原文只可能来自其中一次。
+    # 所以收集所有候选，逐条试"整段引文都在里面"，任一命中即成立。
+    # 只取第一条含该字段的返回就 break，会把"搜了两次手册"变成必然误判。
+    hits = []
+    any_truncated = False
+    for cand in cands:
+        obj = _load_obj(cand)
+        if obj is _MISS:
+            continue
+        g = _get_path(obj, path)
+        if g is _MISS:
+            if cand.get("truncated"):
+                any_truncated = True
+            continue
+        hits.append(g)
+
+    if not hits:
+        if any_truncated:
             stats["cite_cut"] += 1
-            blocked.append(f"{text}（证据 {k} 返回体过大已压缩，该字段未保留）")
+            blocked.append(f"{text}（{tool} 返回体过大已压缩，该字段未保留）")
         else:
             stats["path_miss"] += 1
-            misquoted.append(
-                f"{text}（证据 {k} 是 {e.get('tool', '?')}，其中没有字段 {path}）")
+            misquoted.append(f"{text}（{tool} 的返回里没有字段 {path}）")
         return
-    if not isinstance(got, str):
+    if not any(isinstance(g, str) for g in hits):
         # 引文必须有原文可核。ref 指到一个数值，就没有"原文"这东西可引。
         stats["quote_bad"] += 1
         misquoted.append(f"{text}（ref 指向的不是原文，撑不住一句引文）")
         return
     segs = [s for s in re.split(r"…+|\.{3,}|\n", quote) if s.strip()]
-    bad = [s for s in segs if _norm_quote(s) not in _norm_quote(got)]
-    if bad:
-        stats["quote_bad"] += 1
-        misquoted.append(f"{text}（引文在 {k}#{path} 里找不到：{bad[0][:28]}）")
-    else:
-        stats["quote_ok"] += 1
+    for g in hits:
+        if not isinstance(g, str):
+            continue
+        if not [s for s in segs if _norm_quote(s) not in _norm_quote(g)]:
+            stats["quote_ok"] += 1
+            return
+    stats["quote_bad"] += 1
+    first = next(g for g in hits if isinstance(g, str))
+    bad = [s for s in segs if _norm_quote(s) not in _norm_quote(first)]
+    misquoted.append(f"{text}（引文在 {tool}#{path} 里找不到：{bad[0][:28]}）")
 
 
 def _verify_claims(doc, ev, stats, blocked, misquoted):
@@ -1303,14 +1338,15 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
       写错/没写 混在同一个解析失败里 —— ref 空是没写，ref 指不到是写错
       标灰看不见 只能记在报告里     —— 渲染时把标记跟在数字后面
     """
-    # 证据按自带编号建索引。没有 ev_no 的（旧数据、测试构造）不入索引，
-    # 引用它会直接判"不在可见范围"——宁可显式失败，也不能静默退回按下标算，
-    # 那样两套编号语义并存，哪天 act 漏写编号就没人发现。
-    by_no = {}
+    # 证据按工具名建索引。档 C 之后 ref 是"工具名#字段路径"，
+    # 同一个工具在一轮里可能调两次，所以每个工具对应一个列表而不是单条。
+    # 校验时逐条尝试，任一命中即算引用成立——模型引的是"那次返回里的这个字段"，
+    # 不要求它同时记得是第几次调用。
+    by_tool = {}
     for e in ev:
-        no = e.get("ev_no")
-        if no is not None:
-            by_no[int(no)] = e
+        t = e.get("tool")
+        if t:
+            by_tool.setdefault(t, []).append(e)
 
     # 把数字全塞进 conclusion、claims 给空数组——这条通道刚被发现。
     # 后果不是判错，是"什么都不判"：qty=0，报告上既不红也不绿，和刚撤掉的豁免
@@ -1335,7 +1371,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         quote = str(c.get("quote") or "").strip()
         if v is None and quote:
             # 引文型：没有数字，但有它声称抄来的原文，回原文核对
-            _verify_quote(c, text, quote, by_no, stats, blocked, misquoted)
+            _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted)
             continue
         if v is None:
             continue          # 纯论述型 claim，既没数字也没引文，无从核对
@@ -1349,48 +1385,63 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             blocked.append(text or str(v))
             continue
 
-        m = re.match(r"^\s*(\d{1,3})#(.+?)\s*$", str(ref))
+        m = _REF_PAT.match(str(ref))
         if not m:
             stats["ref_bad"] += 1
-            misquoted.append(f"{text}（出处格式错:{ref}）")
+            misquoted.append(
+                f"{text}（出处格式错:{ref}，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）")
             continue
-        k, path = int(m.group(1)), m.group(2)
+        tool, path = m.group(1), m.group(2)
 
-        # 按证据自己带的编号找，不按下标算。模型抄的是它在 "[证据 N]" 里看到的
-        # 那个号，和 ev 列表的第几项不是同一件事——_ctx_window 裁掉前几轮之后，
-        # ev[0] 可能正好是证据 7。按下标算就等于要求模型同时记住"看到的是第几条"
-        # 和"裁完以后算第几条"，而这正是它唯一会错的地方。
-        e = by_no.get(k)
-        if e is None:
-            stats["cite_oob"] += 1
-            blocked.append(f"{text}（证据 {k} 不在本轮可见范围）")
-            continue
-
-        obj = _load_obj(e)
-        if obj is _MISS:
-            # 不该发生：_payload 已保证输出永远是合法 JSON（超限时降级成
-            # _payload_overflow 包装对象）。真到了这里说明有别处写坏了证据。
-            stats["ref_bad"] += 1
-            misquoted.append(f"{text}（证据 {k} 不是结构化返回）")
+        # 按工具名找，不按编号找。编号是位置：_ctx_window 裁掉前几轮之后，
+        # 同一份证据的编号不变，但模型看不见它了——然后它会自己补一个"第 1 条"。
+        # 工具名是身份，第几轮调都叫同一个名字，裁剪不影响它。
+        cands = by_tool.get(tool)
+        if not cands:
+            if tool in TOOL_IMPLS:
+                # 工具真实存在，只是它的返回被裁出了本轮视野
+                stats["cite_oob"] += 1
+                blocked.append(f"{text}（{tool} 的返回不在本轮可见范围）")
+            else:
+                # 工具名根本不存在：这是编的出处，和"裁剪"不是一回事
+                stats["ref_bad"] += 1
+                misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
             continue
 
-        got = _get_path(obj, path)
-        if got is _MISS:
+        # 同一工具多次调用：把所有取得到该字段的返回都收集起来，
+        # **再逐个比 value**。只在"取得到"这一步 break，等于拿第一条返回的值
+        # 去比模型引的第二条（实测：手册搜了两次，第一条讲标定周期、
+        # 第二条讲漂移上限，ref 写一次 search_manual#chunks[0].text 就比错了）。
+        hits = []
+        any_truncated = False
+        for cand in cands:
+            obj = _load_obj(cand)
+            if obj is _MISS:
+                # 不该发生：_payload 已保证输出永远是合法 JSON（超限时降级成
+                # _payload_overflow 包装对象）。真到了这里说明有别处写坏了证据。
+                continue
+            g = _get_path(obj, path)
+            if g is _MISS:
+                if cand.get("truncated"):
+                    any_truncated = True
+                continue
+            hits.append(g)
+
+        if not hits:
             # 证据被压缩装不下时，字段本身可能就没送进来。这时模型写的路径
             # 也许完全正确，只是那条证据里已经没有它 —— 判模型写错是误判。
             # 和"字段真不存在"分开：前者放行标灰，后者判失败。
-            if e.get("truncated"):
+            if any_truncated:
                 stats["cite_cut"] += 1
-                blocked.append(f"{text}（证据 {k} 返回体过大已压缩，该字段未保留）")
+                blocked.append(f"{text}（{tool} 返回体过大已压缩，该字段未保留）")
             else:
                 stats["path_miss"] += 1
-                # 必须带上编号和工具名。只写"字段不存在:xxx"，读起来就是"模型编了个
+                # 必须带上工具名。只写"字段不存在:xxx"，读起来就是"模型编了个
                 # 不存在的字段"，第一反应会去改 prompt；但这一类的成因可能是
-                # 引错了证据，也可能真是字段名错——两种修法完全不同，
+                # 引错了工具，也可能真是字段名错——两种修法完全不同，
                 # 文案里必须能分开。
-                tool = e.get("tool", "?")
                 misquoted.append(
-                    f"{text}（证据 {k} 是 {tool}，其中没有字段 {path}）"
+                    f"{text}（{tool} 的返回里没有字段 {path}）"
                 )
             continue
 
@@ -1415,30 +1466,32 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 stats["range_bad"] += 1
                 misquoted.append(f"{text}（区间上下界写反:{lo}>{hi}）")
                 continue
-            if not isinstance(got, str):
-                stats["range_bad"] += 1
-                misquoted.append(
-                    f"{text}（ref 指向数值字段 {got}，撑不住区间 {lo}~{hi}）")
-                continue
             # 文本字段：两端必须同时出现。只找到一端不算——
             # 那说明另一端是模型自己补的，不是原文里的。
-            if _value_match(lo, got, unit) and _value_match(hi, got, unit):
+            # 多条候选里任一条两端都对上即成立。
+            ok = any(isinstance(g, str) and _value_match(lo, g, unit)
+                     and _value_match(hi, g, unit) for g in hits)
+            if ok:
                 stats["path_ok"] += 1
                 stats["cited_path"] += 1
                 stats["cited_ok"] += 1
                 stats["range_ok"] += 1
+            elif not any(isinstance(g, str) for g in hits):
+                stats["range_bad"] += 1
+                misquoted.append(
+                    f"{text}（ref 指向数值字段 {hits[0]}，撑不住区间 {lo}~{hi}）")
             else:
                 stats["range_bad"] += 1
                 misquoted.append(f"{text}（区间 {lo}~{hi} 与该字段原文对不上）")
             continue
 
-        if _value_match(v, got, unit):
+        if any(_value_match(v, g, unit) for g in hits):
             stats["path_ok"] += 1
             stats["cited_path"] += 1
             stats["cited_ok"] += 1
         else:
             stats["path_bad"] += 1
-            misquoted.append(f"{text}（字段值 {got} ≠ {v}{unit}）")
+            misquoted.append(f"{text}（字段值 {hits[0]} ≠ {v}{unit}）")
 
     stats["cited"] = stats["cited_ok"]
     stats["ev"] = len(ev)
@@ -1541,7 +1594,7 @@ def _pct(v, digits=2):
         return str(v)
 
 
-def _data_block(prof, log, ev_prof, ev_log):
+def _data_block(prof, log, tool_prof, tool_log):
     """拼这台设备的档案块，同时把每个数字记成一条 claim。
 
     为什么要在拼的时候顺手记：文本里的数字和 evidence 里的字段原本毫无绑定，
@@ -1560,7 +1613,7 @@ def _data_block(prof, log, ev_prof, ev_log):
             return
         claims.append({"text": text, "value": value, "unit": unit, "ref": ref})
 
-    prof_ref = f"{ev_prof}#"
+    prof_ref = f"{tool_prof}#"
     lines = [
         f"### {prof['device_id']}（{prof.get('line', '-')} / {prof.get('station', '-')}）",
         "",
@@ -1579,7 +1632,7 @@ def _data_block(prof, log, ev_prof, ev_log):
         prof.get("log_count"), "条", prof_ref + "log_count")
 
     if isinstance(log, dict) and "error" not in log:
-        log_ref = f"{ev_log}#"
+        log_ref = f"{tool_log}#"
         lines += [
             "",
             f"最近 7 天（{log.get('time_from', '-')} ~ {log.get('time_to', '-')}）："
@@ -1624,9 +1677,10 @@ def lookup(state):
     blocks, evidence, names, steps, claims = [], [], [], 0, []
 
     turn = int(state.get("turn") or 1)
-    # 编号沿用 act 那套绝对号（跨轮递增）。lookup 的证据也得有号：
-    # 否则同一份 evidence 里并存"有号"和"没号"两种条目，多轮下必然打架，
-    # 而且模型在 lookup 结论里看到的数字，事后没有任何编号可以指回去。
+    # ev_no 仍然记，但只为审计与报告——引用契约已经改成工具名。
+    # 这三个工具的 ref 在下面全部写成 "工具名#字段路径"，和模型走同一套格式，
+    # 否则"程序自产的 claims 用一个格式、模型写的 claims 用另一个"，
+    # 校验层就得同时理解两种语义，等于把编号那套问题又搬回来。
     base = len(state.get("evidence") or [])
     for d in ids:
         prof = query_device_profile(d)
@@ -1646,7 +1700,8 @@ def lookup(state):
                          "result": log, "turn": turn, "ev_no": log_no})
         names.append("query_defect_log")
         steps += 1
-        text, block_claims = _data_block(prof, log, prof_no, log_no)
+        text, block_claims = _data_block(prof, log,
+                                          "query_device_profile", "query_defect_log")
         blocks.append(text)
         claims.extend(block_claims)
 
@@ -1672,7 +1727,7 @@ def lookup(state):
             blocks.append(f"### {d} 历史工单（{wo['count']} 张）\n\n{lines}")
             claims.append({"text": f"历史工单 {wo['count']} 张",
                            "value": wo["count"], "unit": "张",
-                           "ref": f"{wo_no}#count"})
+                           "ref": "query_work_order#count"})
         else:
             blocks.append(f"### {d} 历史工单\n\n{wo.get('note', '没有工单记录')}")
 
@@ -1839,8 +1894,8 @@ def knowledge(state):
         return {"final": answer, "evidence": evidence,
                 "tool_names": names, "steps": steps}
 
-    # ref 是片段编号（模型只看得见 [1]..[5]），要换成校验层认的绝对号 + 字段路径。
-    # 纯机械映射，不改模型说了什么：它说"片段 3"，程序翻成"证据 7 的 chunks[2].text"。
+    # ref 是片段编号（模型只看得见 [1]..[5]），要换成校验层认的工具名 + 字段路径。
+    # 纯机械映射，不改模型说了什么：它说"片段 3"，程序翻成"search_manual 的 chunks[2].text"。
     # 越界编号原样留着不修——校验层会记 ref_bad；替它改成"正确"的编号就是合伙作弊。
     for c in (doc.get("claims") or []):
         if not isinstance(c, dict):
@@ -1849,7 +1904,7 @@ def knowledge(state):
         if r.isdigit():
             i = int(r) - 1
             if 0 <= i < len(chunks):
-                c["ref"] = f"{search_no}#chunks[{i}].text"
+                c["ref"] = f"search_manual#chunks[{i}].text"
 
     trace.emit("knowledge", status="ok", chunks=len(chunks),
                claims=len(doc.get("claims") or []))

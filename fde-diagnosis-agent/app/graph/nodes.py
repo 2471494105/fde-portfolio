@@ -1188,12 +1188,30 @@ def act(state):
                         ),
                     }
                 else:
-                    try:
-                        res = impl(**args)
-                    except TypeError as exc:
-                        res = {"error": f"参数不匹配：{exc}"}
-                    except Exception as exc:
-                        res = {"error": f"{type(exc).__name__}: {exc}"}
+                    # 建单前核对引用。工单是唯一会离开本系统的产物，
+                    # 只校验"非空"等于允许编造的引用进单——那是发出去之后才暴露的问题。
+                    bad_refs = (
+                        _unresolvable_refs(args.get("evidence_refs"), state)
+                        if name == "create_work_order" else []
+                    )
+                    if bad_refs:
+                        res = {
+                            "error": "证据引用无法核对，工单未创建",
+                            "problems": bad_refs,
+                            "hint": (
+                                "把每条 evidence_refs 改成「工具名#字段路径」的指针，"
+                                "指向本轮真正查到过的字段。"
+                                "不要写「1号工位误判率57.6%」这类自然语言复述，"
+                                "也不要引用没有调用过的工具。"
+                            ),
+                        }
+                    else:
+                        try:
+                            res = impl(**args)
+                        except TypeError as exc:
+                            res = {"error": f"参数不匹配：{exc}"}
+                        except Exception as exc:
+                            res = {"error": f"{type(exc).__name__}: {exc}"}
         ms = round((time.perf_counter() - t0) * 1000)
 
         ok = not (isinstance(res, dict) and "error" in res)
@@ -1303,6 +1321,65 @@ def _get_path(obj, path):
                 return _MISS
             cur = cur[name]
     return cur
+
+
+def _unresolvable_refs(refs, state):
+    """建单前核对每一条证据引用是否真的指得到东西。返回问题列表，空 = 全部可解析。
+
+    为什么放在 act 层而不是 create_work_order 里：工具实现拿不到 state，
+    只看得到参数。而"这条 ref 指向的字段到底存不存在"必须对着本轮 evidence 才算得出来。
+    放在工具里最多校验格式——格式写对、内容是编的，照样通过，工单就带着假证据发出去。
+    那是唯一一个会离开本系统的产物，不能只验格式。
+
+    为什么仍然用字符串、不改 schema 成 {tool,sig,path}：
+      - 外发格式一变，mock QMS 与真实 QMS 都要跟着改；
+      - 模型写对象比写字符串更容易崩（嵌套结构、漏 key）。
+    先让"写错会被拒"生效，等模型稳定写出正确指针，再谈结构化。
+    这一步的收益已经是全部收益的绝大部分：编造的引用进不了单。
+    """
+    problems = []
+    by_tool = {}
+    for e in list(state.get("evidence") or []):
+        by_tool.setdefault(e.get("tool"), []).append(e)
+
+    for raw in (refs or []):
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        m = _REF_PAT.match(s)
+        if not m:
+            problems.append(
+                f"证据引用「{s}」格式不对：应写「工具名#字段路径」"
+                f"（例如 query_defect_log#groups[0].rate），不要写自然语言复述")
+            continue
+        tool, sig_g, path = m.group(1), (m.group(2) or ""), m.group(3)
+        sig = sig_g[1:-1] if sig_g else ""
+
+        cands = by_tool.get(tool)
+        if not cands:
+            if tool in TOOL_IMPLS:
+                problems.append(f"证据引用「{s}」：{tool} 本轮没有调用记录")
+            else:
+                problems.append(f"证据引用「{s}」：没有名为 {tool} 的工具")
+            continue
+
+        # 指纹只收窄不判死，理由与 _verify_claims 一致：
+        # 匹配不上可能是参数抄错（真错，后面的路径校验会抓住），也可能是被裁出窗口。
+        if sig:
+            narrowed = [c for c in cands if c.get("sig") == sig]
+            if narrowed:
+                cands = narrowed
+
+        hit = False
+        for c in cands:
+            v = _get_path(_load_obj(c), path)
+            if v is not _MISS and v not in (None, "", [], {}):
+                hit = True
+                break
+        if not hit:
+            problems.append(f"证据引用「{s}」：{tool} 的返回里没有字段 {path}")
+
+    return problems
 
 
 

@@ -219,8 +219,10 @@ class WriteIntentGuardTest(unittest.TestCase):
         nodes.TOOL_IMPLS.clear()
         nodes.TOOL_IMPLS.update(self._orig)
 
-    def _run(self, question, device="CX-101"):
+    def _run(self, question, device="CX-101", refs=None):
         """question=None 表示 state 里没有 user 消息。"""
+        if refs is None:
+            refs = ["query_calibration#last"]
         msgs = []
         if question is not None:
             msgs.append({"role": "user", "content": question})
@@ -236,7 +238,7 @@ class WriteIntentGuardTest(unittest.TestCase):
                         "root_cause_code": "calibration_drift",
                         "severity": "high",
                         "actions": ["重新标定"],
-                        "evidence_refs": ["query_calibration#last"],
+                        "evidence_refs": refs,
                     }, ensure_ascii=False),
                 },
             }],
@@ -246,6 +248,13 @@ class WriteIntentGuardTest(unittest.TestCase):
             "device_ids": [device],
             "device_id": device,
             "turn": 1,
+            # 建单前会核对引用，所以这里必须给一条真实证据。
+            # 不给的话，测的就不是"写意图闸放行"，而是"引用校验拦截"——两件事混在一起。
+            "evidence": [{"tool": "query_calibration",
+                          "args": {"device_id": device},
+                          "sig": f"device_id={device}",
+                          "result": '{"last": {"drift": 0.42}}',
+                          "truncated": False, "ev_no": 1, "turn": 1}],
         }
         out = nodes.act(state)
         res = nodes._load_obj({"result": out["messages"][0]["content"]})
@@ -264,6 +273,25 @@ class WriteIntentGuardTest(unittest.TestCase):
         res, _ = self._run("帮 CX-101 建个单报修，标定漂移了")
         self.assertNotIn("error", res)
         self.assertEqual(len(self.calls), 1)
+
+    def test_fabricated_ref_blocks_write(self):
+        """有建单意图、但引用是自然语言复述 —— 拦下，且不落 QMS。
+
+        写意图闸管"该不该建"，引用校验管"证据是不是真的"，两件事必须分别有红测试。
+        只测前者的后果是：闸放了行、假引用照样跟着工单发给客户。
+        """
+        res, _ = self._run("帮 CX-101 建个单报修，标定漂移了",
+                           refs=["1号工位误判率57.6%"])
+        self.assertIn("error", res)
+        self.assertIn("证据引用", res["error"])
+        self.assertEqual(self.calls, [], "引用对不上就不能落到 QMS")
+
+    def test_ref_to_unqueried_field_blocks_write(self):
+        """格式对、但指向本轮没查过的字段 —— 同样拦下。"""
+        res, _ = self._run("帮 CX-101 建个单报修，标定漂移了",
+                           refs=["query_calibration#no_such"])
+        self.assertIn("error", res)
+        self.assertEqual(self.calls, [], "编造的路径不能进单")
 
     def test_reading_orders_is_not_write_intent(self):
         """"查一下工单"里有"工单"两个字，但它是在读，不能当写意图放行。"""
@@ -1092,6 +1120,58 @@ class AskUserWordingTest(unittest.TestCase):
         self.assertTrue(out["final_text"].strip(), "ask_user 必须给 final_text")
         self.assertIsInstance(out["final"], dict, "final 应走统一结论结构")
         self.assertEqual(out["final"]["claims"], [], "追问里没有可引用的事实")
+
+
+class UnresolvableRefsTest(unittest.TestCase):
+    """建单引用的可解析性：工单是唯一外发物，编造的引用必须在出门前被拦。
+
+    这里测的是纯函数 _unresolvable_refs，不碰 HTTP——它只对着 state 里的
+    evidence 算"这条指针指得到东西吗"，与是否真的建单无关。
+    """
+
+    def _state(self):
+        return {"evidence": [
+            {"tool": "query_device_profile", "args": {}, "sig": "device_id=CX-101",
+             "result": '{"maintenance_cycle_days": 90, '
+                       '"light": {"cumulative_hours": 8620}}',
+             "truncated": False, "ev_no": 1, "turn": 1},
+            {"tool": "query_defect_log", "args": {}, "sig": "group_by=station",
+             "result": '{"groups": [{"station": "1号工位", "rate": 57.6}]}',
+             "truncated": False, "ev_no": 2, "turn": 1},
+        ]}
+
+    def test_valid_refs_pass(self):
+        bad = nodes._unresolvable_refs(
+            ["query_device_profile#maintenance_cycle_days",
+             "query_defect_log#groups[0].rate"], self._state())
+        self.assertEqual(bad, [])
+
+    def test_prose_ref_is_rejected(self):
+        bad = nodes._unresolvable_refs(["1号工位误判率57.6%"], self._state())
+        self.assertEqual(len(bad), 1)
+        self.assertIn("格式不对", bad[0])
+
+    def test_unknown_tool_is_rejected(self):
+        bad = nodes._unresolvable_refs(["query_nonexistent#last"], self._state())
+        self.assertEqual(len(bad), 1)
+        self.assertIn("没有名为 query_nonexistent 的工具", bad[0])
+
+    def test_missing_path_is_rejected(self):
+        bad = nodes._unresolvable_refs(
+            ["query_device_profile#no_such_field"], self._state())
+        self.assertEqual(len(bad), 1)
+        self.assertIn("没有字段 no_such_field", bad[0])
+
+    def test_fingerprint_selects_the_right_call(self):
+        # 指纹指到存在的那次调用 → 通过；指到不存在的那次 → 收窄失败后回退全部候选，
+        # 路径仍然取得到，所以这条不判死。这是有意为之：指纹是收紧用的，不是判据。
+        bad = nodes._unresolvable_refs(
+            ["query_defect_log{group_by=station}#groups[0].rate"], self._state())
+        self.assertEqual(bad, [])
+
+    def test_empty_ref_is_ignored_here(self):
+        # 空串由 _check_order_args 的 empty_list 负责，这里不重复报
+        self.assertEqual(nodes._unresolvable_refs(["", "  "], self._state()), [])
 
 
 class CheckLoopTest(unittest.TestCase):

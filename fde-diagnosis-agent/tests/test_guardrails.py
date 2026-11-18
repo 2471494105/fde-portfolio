@@ -1975,6 +1975,103 @@ class CiteFailDetailTest(unittest.TestCase):
         self.assertEqual(len(got[0]["values"]), 2)
         self.assertEqual(got[0]["values"][0]["value"], 80)
 
+    def test_unknown_recovered_from_evidence(self):
+        # 诊断意图走 plan→act，根本不进 lookup / knowledge——
+        # 那三处 unknown 的写入口永远不会执行。所以必须从证据里回收，
+        # 否则 unknown 在主场景上恒为空（这是 2026-11-18 查出来的结构性缺口）。
+        ev = [
+            {"tool": "query_work_order", "turn": 1, "args": {"device_id": "CX-101"},
+             "result": nodes._payload(
+                 {"device_id": "CX-101", "count": 0, "orders": [], "state": "no_order",
+                  "note": "没有任何工单记录"}, tool="query_work_order",
+                 sig="device_id=CX-101")[0]},
+            {"tool": "query_calibration", "turn": 1, "args": {"device_id": "CX-101"},
+             "result": nodes._payload(
+                 {"device_id": "CX-101", "records": [], "state": "no_calibration",
+                  "message": "该设备无标定记录"},
+                 tool="query_calibration", sig="device_id=CX-101")[0]},
+            {"tool": "search_manual", "turn": 1, "args": {"query": "某不存在参数"},
+             "result": nodes._payload({"query": "某不存在参数", "chunks": []},
+                                      tool="search_manual", sig="query=某不存在参数")[0]},
+            {"tool": "query_device_profile", "turn": 1, "args": {"device_id": "CX-999"},
+             "result": nodes._payload(
+                 {"error": "设备 CX-999 不存在", "state": "device_not_found",
+                  "known_devices": ["CX-101"]}, tool="query_device_profile",
+                 sig="device_id=CX-999")[0]},
+        ]
+        got = nodes._unknown_from_evidence(ev)
+        kinds = sorted(u["kind"] for u in got)
+        self.assertEqual(kinds,
+                         ["device_not_found", "manual_empty",
+                          "no_calibration", "no_work_order"])
+
+    def test_bad_args_is_not_counted_as_unknown(self):
+        # query_defect_log 的 error 同时用于参数校验失败。
+        # 把「模型参数写错」记成「库里没有」，拒答依据就是假的——
+        # 用户会被告知"这台设备没有日志"，实际是模型 group_by 拼错了。
+        ev = [{"tool": "query_defect_log", "turn": 1,
+               "args": {"device_id": "CX-101", "group_by": "typo"},
+               "result": nodes._payload({"error": "group_by 只支持 [...]",
+                                         "state": "bad_args"},
+                                       tool="query_defect_log",
+                                       sig="device_id=CX-101,group_by=typo")[0]}]
+        self.assertEqual(nodes._unknown_from_evidence(ev), [])
+
+    def test_unknown_not_recorded_for_healthy_returns(self):
+        # 反向：查到东西时不能记"查无"。记了的话，摘要会告诉下一轮"库里没有"，
+        # 下一轮就不再查了——比不记更糟。
+        ev = [
+            {"tool": "query_work_order", "turn": 1, "args": {"device_id": "CX-101"},
+             "result": nodes._payload(
+                 {"device_id": "CX-101", "count": 1, "orders": [{"order_id": "WO-1"}],
+                  "state": "found"}, tool="query_work_order", sig="device_id=CX-101")[0]},
+            {"tool": "search_manual", "turn": 1, "args": {"query": "光源"},
+             "result": nodes._payload({"query": "光源", "chunks": [{"text": "x"}],
+                                       "state": "found"},
+                                      tool="search_manual", sig="query=光源")[0]},
+        ]
+        self.assertEqual(nodes._unknown_from_evidence(ev), [])
+
+    def test_unknown_merge_dedupes_repeated_lookups(self):
+        # 多轮反复调同一个查不到的工具，不该记成好几条
+        a = [{"kind": "no_work_order", "what": "CX-101"}]
+        b = [{"kind": "no_work_order", "what": "CX-101"},
+             {"kind": "manual_empty", "what": "标定周期"}]
+        merged = nodes._merge_unknown(a, b)
+        self.assertEqual(len(merged), 2)
+
+class CiteStatsKeyBudgetTest(unittest.TestCase):
+    """cite_stats 的 key 上限。
+
+    stats 是失败分类的计数表：加一类失败就加一个 key。现在 26 个
+    （verify 运行时另写 `cited` / `ev`，报告里实际 28 个）。
+    它们全部由 _verify_claims 写入，但生产代码只读其中 12 个——
+    剩下的没人读，就变成第二个 state：一堆字段，谁也说不出哪个该看。
+
+    定上限的意思是：以后再想加一个 key，必须先回答"谁读它"。答不出来就走
+    `cite_fail`（明细，无上限），而不是继续往这个 dict 里塞。
+    历史上每次都是"顺手加一个 key"，没有一次是"决定了要加"。
+    """
+
+    LIMIT = 30
+
+    def test_new_stats_stays_within_budget(self):
+        n = len(nodes._new_stats())
+        self.assertLessEqual(
+            n, self.LIMIT,
+            f"cite_stats 已有 {n} 个 key（上限 {self.LIMIT}）。"
+            "加新失败类型前先确认有没有读方；没有就走 cite_fail 明细，别加 key。")
+
+    def test_runtime_only_keys_are_still_written(self):
+        # cited / ev 不在 _new_stats() 的壳里，是 _verify_claims 运行时补的
+        # （不是 verify 补的——我第一版就写错在这里，测试当场抓住）。
+        # 于是"出厂壳"和"报告里的实际形态"对不上：26 与 28。
+        # 这条钉住这个已知事实——谁要按 26 去对齐报告，得先看这里。
+        src = inspect.getsource(nodes._verify_claims)
+        for k in ("cited", "ev"):
+            self.assertIn(f'stats["{k}"]', src,
+                          f"运行时 key {k} 的写法变了，请同步核对报告里的实际 key 数")
+
 
 class CheckReadsFinalFromMessagesTest(unittest.TestCase):
     """check 必须和 verify 看到同一份结论。

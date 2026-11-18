@@ -1994,6 +1994,9 @@ def verify(state):
     # 那条路根本不经过 knowledge。2026-11-18 实测踩过——模型第 8 步直接调了、
     # 返回 has_conflict=true，result 里 conflicts 却是空。绑节点只覆盖走那个节点的路径。
     conflicts = _merge_conflicts(state.get("conflicts"), _conflicts_from_evidence(ev))
+    # 查无同理：unknown 的写入口原本全在 lookup / knowledge，而诊断走 plan→act，
+    # 那两个节点根本不执行，于是这个字段在主场景上恒为空。也从证据里回收。
+    unknown = _merge_unknown(state.get("unknown"), _unknown_from_evidence(ev))
 
     blocked = []
     # 未溯源 ≠ 伪引用。两个列表装的是两类东西：
@@ -2007,7 +2010,8 @@ def verify(state):
     # 失败明细：stats 回答"每一类有几个"，这里回答"具体哪几条、为什么、属于哪类"。
     # 口径是"本轮判据判出来的"，不含上面并进来的 check_notes ——那是上一轮回环时
     # 留下的提醒，不是这一次 `_verify_claims` 的判断。
-    # 为什么要有它：stats 是 27 个计数字段，每加一类失败就得加一个 key，而 key 加完
+    # 为什么要有它：stats 是 26 个计数字段（`_verify_claims` 运行时另补 cited / ev，
+    # 报告里实际 28 个），每加一类失败就得加一个 key，而 key 加完
     # 没人会回头改 eval / 报告 / UI 的读数，半年后它就成了第二个 state。
     # 列表不一样：加一类失败只是多一种 code，读的人不用动。
     cite_fail = []
@@ -2054,7 +2058,7 @@ def verify(state):
         return {"final": doc, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted,
                 "cite_stats": stats, "cite_fail": cite_fail,
-                "conflicts": conflicts}
+                "conflicts": conflicts, "unknown": unknown}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
     # 而没校验的结论被当成通过，才是真正危险的地方。
@@ -2068,7 +2072,7 @@ def verify(state):
                final_len=len(final), **stats)
     return {"final": out_final, "final_text": final, "blocked": blocked,
             "misquoted": misquoted, "cite_stats": stats, "cite_fail": cite_fail,
-            "conflicts": conflicts}
+            "conflicts": conflicts, "unknown": unknown}
 
 
 def _pct(v, digits=2):
@@ -2336,6 +2340,68 @@ def _merge_conflicts(*lists):
             key = c.get("param") or ""
             if key not in seen:
                 seen[key] = c
+    return list(seen.values())
+
+
+def _unknown_from_evidence(ev):
+    """从工具证据里回收"查了、正常返回、结果就是空"的条目。
+
+    和 conflicts 犯的是同一个错，所以用同一个修法：原来 unknown 的三个写入口
+    全在 lookup / knowledge 节点里，而诊断意图走 plan→act（route_after_understand
+    对 diagnose/action 直接返回 "plan"），根本不经过那两个节点。结果是
+    **unknown 在项目主场景上恒为空**——不是"工具没返回空"，是"这些分支没执行"。
+
+    判据只认工具自己声明的 `state`，不猜文案：
+      query_work_order     no_order / device_not_found
+      query_device_profile device_not_found
+      query_defect_log     no_defect_log      （bad_args 是参数写错，不是查无，不收）
+      query_calibration    no_calibration
+      query_light_usage    no_light_record
+
+    `state` 是 2026-11-18 给这几个工具加的：原来只有 `error` 字符串，
+    上游要么不收（unknown 恒空），要么靠文案猜（defect_log 的 error 同时用于
+    参数校验失败，猜错就把「参数写错」记成「库里没有」，拒答依据本身是假的）。
+    工具自己声明状态，调用方就不用猜。
+    """
+    # state → (kind, 给人看的一句话)
+    STATE_KIND = {
+        ("query_work_order", "no_order"): ("no_work_order", "该设备在台账中，但没有任何工单记录"),
+        ("query_work_order", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
+        ("query_device_profile", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
+        ("query_defect_log", "no_defect_log"): ("no_defect_log", "该设备没有误判日志"),
+        ("query_calibration", "no_calibration"): ("no_calibration", "该设备没有标定记录"),
+        ("query_light_usage", "no_light_record"): ("no_light_record", "该设备没有光源使用记录"),
+    }
+    out = []
+    for e in ev or []:
+        tool = e.get("tool")
+        args = e.get("args") or {}
+        r = _load_obj(e)
+        if not isinstance(r, dict):
+            continue
+        hit = STATE_KIND.get((tool, str(r.get("state") or "")))
+        if hit:
+            out.append({"kind": hit[0],
+                        "what": r.get("device_id") or args.get("device_id") or "",
+                        "note": hit[1]})
+            continue
+        # search_manual 没有 state 字段（它返回的是检索结果而不是台账记录），
+        # 空 chunks 就是确定的查无。
+        if tool == "search_manual" and not (r.get("chunks") or []):
+            out.append({"kind": "manual_empty",
+                        "what": r.get("query") or args.get("query") or "",
+                        "note": "手册检索返回 0 条"})
+    return out
+
+
+def _merge_unknown(*lists):
+    """按 (kind, what) 去重。多轮反复调同一个查不到的工具时，不该记成好几条。"""
+    seen = {}
+    for lst in lists:
+        for u in lst or []:
+            key = (u.get("kind") or "", str(u.get("what") or ""))
+            if key not in seen:
+                seen[key] = u
     return list(seen.values())
 
 

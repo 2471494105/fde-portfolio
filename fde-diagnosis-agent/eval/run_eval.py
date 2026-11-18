@@ -322,6 +322,23 @@ def judge(traj, state):
     }
 
 
+def _fixture_preflight():
+    """跑全量之前先验判据没退化。返回 (失败用例 id 列表, 夹具总数)。
+
+    为什么放在这里：一次全量 3000 秒。如果判据自己坏了，这 3000 秒算出来的
+    每个数字都不可信——更糟的是它们仍然看起来像"模型能力"，会被当结论用。
+    夹具 10 条、不到 0.1 秒，是这条链上最便宜的一次拦截。
+
+    不算"跑评测"，只读本地文件、不连库不发请求，所以不会污染 meta。
+    """
+    from eval.check_criteria import FIXTURE, check
+
+    if not FIXTURE.exists():
+        return None, 0
+    cases = json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
+    return [c["id"] for c in cases if check(c)[0]], len(cases)
+
+
 def main():
     only = None
     workers = 1
@@ -333,6 +350,23 @@ def main():
 
     targets = [t for t in TRAJECTORIES if not only or t["id"] in only]
     print(f"待评测 {len(targets)} 条，并发 {workers}\n")
+
+    # 判据自检必须在这里拦，不能放到跑完之后——判据坏了，后面每个数字都是废的。
+    # --no-fixture-check 是逃生口，但绕过要留痕：输出里那行 !! 会一起进报告。
+    if "--no-fixture-check" in sys.argv[1:]:
+        print("!! 绕过了判据自检：本次数字不能和带自检的那一轮直接比较\n")
+    else:
+        bad_ids, n_cases = _fixture_preflight()
+        if bad_ids is None:
+            print("!! 判据夹具缺失（eval/fixtures/criteria_cases.json 应该已提交）"
+                  "——跳过自检，但这不正常\n")
+        elif bad_ids:
+            print(f"!! 判据退化：{', '.join(bad_ids)} 共 {len(bad_ids)} 条 FAIL。")
+            print("   先跑：python eval/check_criteria.py -v")
+            print("   改完判据再跑全量——这 3000 秒现在跑出来也是废的。\n")
+            sys.exit(1)
+        else:
+            print(f"判据自检通过（{n_cases} 条夹具）\n")
 
     # 这一份 meta 是"这份报告是在什么条件下产生的"的唯一凭证。
     # 没有它，8 份历史报告之间无法比较：不知道换过模型、改过用例、还是改过 prompt。

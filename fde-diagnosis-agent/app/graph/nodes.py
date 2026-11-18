@@ -499,10 +499,66 @@ def _context_messages(state):
     msgs = list(state.get("messages") or [])
     starts = [i for i, m in enumerate(msgs) if m.get("role") == "user"]
     if len(starts) <= CTX_VISIBLE_TURNS:
-        return msgs
+        return _fold_old_tool_results(msgs)
     cut = starts[-CTX_VISIBLE_TURNS]
     head = msgs[:1] if cut > 0 else []      # 第一句原始诉求留着，别丢掉上下文起点
-    return head + msgs[cut:]
+    return _fold_old_tool_results(head + msgs[cut:])
+
+
+# 同一轮内保留几条完整工具结果。诊断链的自然形状是 档案 → 缺陷统计 → 工单 三联，
+# 三次之后的调用基本是补充查询，而这三份往往要反复对照着读。
+KEEP_RAW_TOOL_RESULTS = 3
+# 折叠时保住开头的字符数。_payload 把 "[工具名{参数指纹}]" 印在头部，
+# 保住它，模型就仍然知道"这条我调过、参数是什么"，只是看不到明细。
+FOLD_HEAD_CHARS = 180
+# 短于这个长度的不折叠：折叠标记本身就有几十字，硬折反而更长。
+FOLD_MIN_BODY = 400
+
+
+def _fold_old_tool_results(msgs, keep=KEEP_RAW_TOOL_RESULTS):
+    """本轮内较早的工具结果折叠成「头部 + 折叠标记」。
+
+    依据是 Anthropic context engineering 里那句：
+    「once a tool has been called deep in the message history, why would the
+    agent need to see the raw result again?」——判据是**深**，不是旧。
+    同一轮里第 4 次调用时回看第 1 次的完整返回，通常只是找一个已经在头部的事实。
+
+    三条边界，都是原文的限制句划出来的：
+
+    - 只折叠**最后一轮之内**的。跨轮的整轮裁剪已经由 _context_messages 做完，
+      这里再动会削掉"上一轮结论所依据的证据"——那正是原文警告的
+      "importance only becomes apparent later"。
+    - 最近 keep 条保持完整。更早的才折。
+    - **折叠不是清空**：头部留着，标记里写明原文多长、要明细怎么拿。
+      模型看不见的字段引用不出来，这是折叠该付的代价，不是 bug。
+
+    **不改 state**：这是投影，不是真相。消息对象是 dict，直接改 content
+    会污染 state 里同一批对象（list() 只浅拷贝列表）。所以每条折叠都新建 dict。
+    evidence 里的明细一字不动，verify 溯源、报告、traces 全都读 evidence。
+    """
+    last_user = None
+    for i, m in enumerate(msgs):
+        if m.get("role") == "user":
+            last_user = i
+    if last_user is None:
+        return msgs
+
+    tool_idx = [i for i in range(last_user + 1, len(msgs))
+                if msgs[i].get("role") == "tool"]
+    old = tool_idx[:-keep] if keep else tool_idx
+    if not old:
+        return msgs
+
+    out = list(msgs)
+    for pos, i in enumerate(old, start=1):
+        body = str(out[i].get("content") or "")
+        if len(body) <= FOLD_MIN_BODY:
+            continue
+        note = (f"\n…[已折叠：本轮第 {pos} 条工具结果，原文 {len(body)} 字。"
+                f"上面是它的头部（工具名、参数指纹和返回的开头）。"
+                f"需要明细就重新调用同一工具；引用只能用头部里看得到的字段。]")
+        out[i] = {**out[i], "content": body[:FOLD_HEAD_CHARS] + note}
+    return out
 
 
 _PENDING_WORDS = ("调用", "查询", "查一下", "看一下", "确认", "检查", "核对", "再查", "还需要")

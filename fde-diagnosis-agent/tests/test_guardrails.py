@@ -1341,6 +1341,78 @@ class ContextEvidenceAlignmentTest(unittest.TestCase):
                                  f"窗口应是 {expected} 条")
 
 
+class ToolResultFoldTest(unittest.TestCase):
+    """本轮内早期工具结果的折叠。
+
+    依据是 Anthropic 那句 "once a tool has been called deep in the message
+    history, why would the agent need to see the raw result again?"——
+    判据是深，不是旧。所以边界必须测出来，而不是"折了就折了"。
+    """
+
+    def _state(self, n_tools, body_len=800):
+        msgs = [{"role": "user", "content": "CX-104 排查"}]
+        for i in range(n_tools):
+            msgs.append({"role": "assistant", "content": "", "tool_calls": [{
+                "id": f"c{i}", "type": "function",
+                "function": {"name": "query_defect_log", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}",
+                         "name": "query_defect_log",
+                         "content": f"[query_defect_log{{d{i}}}] " + ("x" * body_len)})
+        return {"messages": msgs, "evidence": [], "turn": 1}
+
+    def test_last_k_results_stay_intact(self):
+        st = self._state(6)
+        out = nodes._context_messages(st)
+        tools = [m for m in out if m.get("role") == "tool"]
+        # 折叠只改内容，不改条数：条数变了 k 索引就整体错位（见上一个测试类）
+        self.assertEqual(len(tools), 6)
+        for m in tools[-nodes.KEEP_RAW_TOOL_RESULTS:]:
+            self.assertNotIn("已折叠", m["content"])
+        for m in tools[:-nodes.KEEP_RAW_TOOL_RESULTS]:
+            self.assertIn("已折叠", m["content"])
+
+    def test_fold_keeps_tool_name_and_sig_in_head(self):
+        st = self._state(5)
+        out = nodes._context_messages(st)
+        first = [m for m in out if m.get("role") == "tool"][0]["content"]
+        # 头部必留 "[工具名{参数指纹}]"：模型得知道"这条我调过、参数是什么"，
+        # 否则折叠等于把"我查过"这件事一起抹掉，下一轮会重复调用同一个工具。
+        self.assertTrue(first.startswith("[query_defect_log{d0}] "))
+        self.assertIn("重新调用", first, "折叠标记要写清怎么拿明细")
+
+    def test_state_messages_are_not_mutated(self):
+        # 投影不是真相。消息是 dict，直接改 content 会改到 state 里同一批对象
+        #（list() 只浅拷贝列表，元素是同一批 dict）。这条防的是
+        # "跑完一轮，state 里的工具全文没了"——evidence 和报告会跟着崩。
+        st = self._state(6)
+        before = [m["content"] for m in st["messages"] if m.get("role") == "tool"]
+        nodes._context_messages(st)
+        after = [m["content"] for m in st["messages"] if m.get("role") == "tool"]
+        self.assertEqual(before, after, "折叠污染了 state")
+
+    def test_previous_turn_results_are_not_folded(self):
+        # 上一轮的完整结果必须留着：那是本轮结论所依据的证据。
+        # 原文警告的 "importance only becomes apparent later" 就是指这个。
+        msgs = [{"role": "user", "content": "t1"},
+                {"role": "tool", "tool_call_id": "a", "content": "old " + "y" * 800},
+                {"role": "assistant", "content": "t1 结论"},
+                {"role": "user", "content": "t2"}]
+        for i in range(5):
+            msgs.append({"role": "tool", "tool_call_id": f"b{i}",
+                         "content": "new " + "z" * 800})
+        st = {"messages": msgs, "evidence": [], "turn": 2}
+        out = nodes._context_messages(st)
+        old = [m for m in out if m.get("tool_call_id") == "a"]
+        self.assertTrue(old)
+        self.assertNotIn("已折叠", old[0]["content"])
+
+    def test_short_bodies_are_left_alone(self):
+        st = self._state(6, body_len=50)
+        out = nodes._context_messages(st)
+        for m in [m for m in out if m.get("role") == "tool"]:
+            self.assertNotIn("已折叠", m["content"], "太短的折了反而更长")
+
+
 class BareQuoteRepairTest(unittest.TestCase):
     """结论 JSON 里值内裸引号：修格式，但不放宽校验。
 

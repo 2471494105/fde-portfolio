@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from app import trace
 from app.graph import build, nodes
 from app.tools import diagnosis, manual, workorder
+from eval import run_eval
 from mock_qms import server
 
 
@@ -1910,6 +1911,77 @@ class StopReasonTest(unittest.TestCase):
         notes, gaps, _ = nodes._plan_notes({"missing": []}, 4)
         self.assertEqual(gaps, [])
         self.assertFalse(any("还缺的信息" in n for n in notes))
+
+
+class JudgeAttributionTest(unittest.TestCase):
+    """失败要能分清"没答 / 追问 / 答偏"。
+
+    盯的不是判对错，是红了之后看不看得出病因。
+
+    T3 三次记录全落进同一句 reasons（判断错/结论未命中），但实际是：
+      ae28aa2  追问"你想先看哪一方面"                  → 没答
+      a553cc6  追问 + 把"意图置信度 0.55"打进答案里     → 没答，还漏了内部字段
+      32704d4  真去查了三个工具，列 15 条真实数字       → 答偏（而且是抗令，见下）
+
+    前两种该改话术，第三种该改用例或改"该不该查"的判定，第四种要改模型。
+    **一个字符串盖住四件事，等于把诊断推给看报告的人。**
+
+    注意 T3 的第三形态判据只能给到 conclusion_off，判不出"抗令"：
+    用例里没有"禁止调用"的字段，判据不知道这些调用本来是不该发生的。
+    这条边界写在 failure 的 note 里，不假装判得出来。
+    """
+
+    BASE_TRAJ = {
+        "id": "X", "type": "陷阱", "expect_tools": [], "forbid_tools": [],
+        "expect_group_by": [], "final_keywords": ["无法", "没有", "不能"],
+        "expect_ask": False, "steps_range": (0, 8),
+    }
+
+    def _judge(self, traj=None, **kw):
+        st = {"tool_names": [], "final_text": "x", "steps": 1, "blocked": [],
+              "misquoted": [], "cite_stats": {}, "evidence": [],
+              "intent": "lookup", "intent_conf": 0.9,
+              "stop_reason": "enough", "check_retry": 0}
+        st.update(kw)
+        return run_eval.judge(traj or dict(self.BASE_TRAJ), st)
+
+    def test_asked_instead_of_answering_is_named(self):
+        # 追问本身没错，但这条用例要求直接给结论 → 失败原因必须是"追问了"
+        r = self._judge(intent="clarify", tool_names=[],
+                        final_text="CX-101 你想先看哪一方面？")
+        self.assertFalse(r["semantic_ok"])
+        self.assertEqual([f["code"] for f in r["failure"]], ["asked_instead"])
+
+    def test_called_tools_but_missed_keywords_is_named_off(self):
+        # 调了工具、结论却没落在关键词上：和"啥也没做"分开
+        r = self._judge(tool_names=["query_device_profile", "query_defect_log"],
+                        final_text="按设备档案与误判统计列出如下")
+        self.assertEqual([f["code"] for f in r["failure"]], ["conclusion_off"])
+        self.assertEqual(r["failure"][0]["basis"]["tools"],
+                         ["query_device_profile", "query_defect_log"])
+        # 边界要说出来：判据不知道这些调用是否多余
+        self.assertIn("看不出", r["failure"][0]["note"])
+
+    def test_nothing_done_is_plain_miss(self):
+        r = self._judge(tool_names=[], final_text="不知道")
+        self.assertEqual([f["code"] for f in r["failure"]], ["conclusion_miss"])
+
+    def test_pass_has_no_failure_entries(self):
+        traj = dict(self.BASE_TRAJ, final_keywords=["3"])
+        r = self._judge(traj=traj, final_text="CX-101 是 3 个工位")
+        self.assertTrue(r["semantic_ok"])
+        self.assertEqual(r["failure"], [])
+
+    def test_every_reason_still_has_a_code(self):
+        # 兼容约束：reasons 一条都不能少。结构性归因是加在旁边的，
+        # 不是替换掉给人看的那句话。
+        traj = dict(self.BASE_TRAJ, expect_tools=["query_device_profile"],
+                    forbid_tools=["create_work_order"], steps_range=(5, 6))
+        r = self._judge(traj=traj, tool_names=[], steps=0)
+        self.assertEqual(len(r["failure"]), len(r["reasons"]))
+        self.assertTrue(all(f["code"] for f in r["failure"]))
+        self.assertTrue(all(f["owner"] in ("model", "case", "uncertain")
+                            for f in r["failure"]))
 
 
 if __name__ == "__main__":

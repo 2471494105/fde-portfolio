@@ -253,34 +253,84 @@ def judge(traj, state):
         and round_ok
     )
 
-    # 归因：失败落在哪一类
+    # 归因：失败落在哪一类。
+    #
+    # reasons 是给人看的一句话；failure 是同源的机器可读版本。
+    # 为什么要多这一层：reasons 一直是一个字符串常量，于是"追问 / 没答 /
+    # 答偏 / 抗令"这些完全不同的病，只要都表现为"关键词没对上"，就全被
+    # 压成同一句"判断错/结论未命中"。看报告的人得自己拿 kw_rate、tools、
+    # ask_ok 重新组合一遍——而组合规则是固定的，固定规则就该写成代码。
+    #
+    # 两者同源产出，不是为了少写一遍：分开写迟早漂移，一处改了另一处忘。
     reasons = []
+    failure = []
+
+    def _fail(code, owner, msg, note="", **basis):
+        reasons.append(msg)
+        item = {"code": code, "owner": owner, "basis": basis}
+        if note:
+            item["note"] = note
+        failure.append(item)
+
     if not intent_ok:
-        reasons.append(f"意图判错({state.get('intent') or '空'}，应为{intent_expect})")
+        _fail("intent_wrong", "model",
+              f"意图判错({state.get('intent') or '空'}，应为{intent_expect})",
+              got=state.get("intent") or "空", expect=intent_expect)
     if not ask_ok:
-        reasons.append(ask_detail)
+        _fail("no_clarify", "model", ask_detail, intent=state.get("intent"))
     if forbid_words:
-        reasons.append(f"出现禁用表述({','.join(forbid_words)})")
+        _fail("forbid_word", "model",
+              f"出现禁用表述({','.join(forbid_words)})", words=forbid_words)
     if tool_rate < 1.0:
-        reasons.append(f"工具选错(缺{','.join(t for t in expect if t not in tools)})")
+        _fail("tool_missing", "model",
+              f"工具选错(缺{','.join(t for t in expect if t not in tools)})",
+              missing=[t for t in expect if t not in tools])
     if gb_rate < 1.0:
-        reasons.append(f"取证维度不足(缺{','.join(g for g in gb_expect if g not in gb_used)})")
+        _fail("gb_missing", "model",
+              f"取证维度不足(缺{','.join(g for g in gb_expect if g not in gb_used)})",
+              missing=[g for g in gb_expect if g not in gb_used])
     if kw_rate < 0.5:
-        reasons.append("判断错/结论未命中")
+        # 原来这一条只有一句"判断错/结论未命中"，至少盖住三种：
+        #   追问了但该直接答 → 没答，病根在"该不该反问"
+        #   调了工具仍没命中 → 答偏，病根在结论
+        #   什么都没有     → 没答也没查
+        # 判据分得出前两种就分开记；分不出的写进 note，不假装判得出来。
+        if state.get("intent") == "clarify" and not ask_expect:
+            _fail("asked_instead", "model",
+                  "判断错/结论未命中（追问了，但这条用例要求直接作答）",
+                  kw_rate=kw_rate, intent="clarify")
+        elif tools:
+            _fail("conclusion_off", "model",
+                  f"判断错/结论未命中（调了 {len(tools)} 个工具，结论仍没落在关键词上）",
+                  kw_rate=kw_rate, tools=tools, kw_hit=kw_hit,
+                  # 有 forbid_tools 不等于"禁止调用"：T3 只禁了 create_work_order，
+                  # 其余工具照调不违规。真正说明"这条用例没要求任何工具"的是
+                  # expect_tools 为空——那种情况下调了工具算不算多余，判据说不准。
+                  note=("这条用例没要求任何工具，判据看不出这些调用是多余还是有用"
+                        if not expect else ""))
+        else:
+            _fail("conclusion_miss", "model", "判断错/结论未命中",
+                  kw_rate=kw_rate, kw_hit=kw_hit)
     if req_miss:
-        reasons.append(f"结论落点不全(缺{','.join(req_miss)})")
+        _fail("req_miss", "model", f"结论落点不全(缺{','.join(req_miss)})",
+              missing=req_miss)
     if forbid_hit:
-        reasons.append(f"越界调用({','.join(forbid_hit)})")
+        _fail("tool_forbidden", "model", f"越界调用({','.join(forbid_hit)})",
+              hit=forbid_hit)
     if not steps_ok:
-        reasons.append(f"步数越界({steps}不在{lo}-{hi})")
+        # 步数越界多半是用例区间写窄了，也可能是模型真绕远路——判据手里
+        # 只有这一个数，分不出来。owner 记 uncertain，不默认怪模型。
+        _fail("steps_out", "uncertain", f"步数越界({steps}不在{lo}-{hi})",
+              steps=steps, lo=lo, hi=hi)
     if misquoted:
-        reasons.append(f"引用写错({','.join(misquoted)})")
+        _fail("cite_wrong", "model", f"引用写错({','.join(misquoted)})",
+              misquoted=[m[:80] for m in misquoted[:5]])
     if fc_fail:
-        reasons.append("工具调用格式错")
+        _fail("fc_bad", "model", "工具调用格式错")
     if not deduped_ok:
-        reasons.append("未命中幂等（应返回已存在工单）")
+        _fail("idem_miss", "model", "未命中幂等（应返回已存在工单）")
     if not round_ok:
-        reasons.append(round_detail)
+        _fail("round_cite_dead", "model", round_detail)
 
     return {
         "id": traj["id"],
@@ -317,6 +367,10 @@ def judge(traj, state):
         "round_detail": round_detail,
         "turns": len(traj.get("turns") or []),
         "reasons": reasons,
+        # 和 reasons 一一对应，带 code/owner/basis/note。
+        # owner 只标判据真能判的三类：model（行为）/ uncertain（判据分不出）/
+        # case（用例写错）。没有 evaluator——那是判据自己，判据不该给自己的错开脱。
+        "failure": failure,
         "cite_stats": cite_stats,
         "final_head": readable[:160].replace("\n", " "),
     }
@@ -432,6 +486,12 @@ def main():
                     "id": traj["id"], "type": traj["type"], "semantic_ok": False,
                     "intent_ok": True, "ask_ok": True, "deduped_env": "",
                     "reasons": [f"运行异常:{name}: {msg}"],
+                    # 运行异常归 env，不归 model：超时、连不上、429 重试耗尽
+                    # 都是评测环境的问题，判据不知道模型本来会不会做对。
+                    # 这和 deduped_env 是同一个立场。
+                    "failure": [{"code": "run_error", "owner": "env",
+                                 "basis": {"case": name},
+                                 "hint": f"运行异常:{name}: {msg}"}],
                     "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
                     "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
                     "trace_ok": False, "fc_fail": True,
@@ -459,6 +519,7 @@ def main():
                     "steps": r["steps"],
                     "tools": r["tools"],
                     "reasons": r["reasons"],
+                    "failure": r.get("failure") or [],
                     "cite_stats": r.get("cite_stats") or {},
                     "final": state.get("final", "") or "",
                     # 证据全文一起落盘：否则改了校验规则想复盘"当时为什么被判未溯源"，
@@ -495,6 +556,9 @@ def main():
         print(f"[{r['id']}] {flag} 步数{r['steps']} 工具{len(r['tools'])}")
         if not r["semantic_ok"]:
             print(f"     原因: {'; '.join(r['reasons'])}")
+            codes = [f["code"] for f in (r.get("failure") or [])]
+            if codes:
+                print(f"     归因: {', '.join(codes)}")
 
     n = len(results)
     ok = sum(1 for r in results if r["semantic_ok"])
@@ -605,6 +669,18 @@ def main():
         print(f"多轮引用成立  {m_ok}/{len(multi)}   （最后一轮所有 ref 在本轮可见证据里成立）")
     else:
         print("多轮引用成立  未运行   （本次没有多轮用例）")
+    # 失败归因分布。不统计的话 failure 只躺在逐条明细里，看总览时仍然
+    # 得一条条点开才知道"这五个红里哪几个是答偏、哪几个是引用写错"。
+    # 分母按 code 累计而不是按条数：一条用例可能同时踩两个坑。
+    kinds = {}
+    for r in results:
+        for f in (r.get("failure") or []):
+            kinds[f["code"]] = kinds.get(f["code"], 0) + 1
+    if kinds:
+        top = sorted(kinds.items(), key=lambda kv: -kv[1])
+        print(f"失败归因      {' / '.join(f'{c}×{v}' for c, v in top)}")
+    else:
+        print("失败归因      无   （这一轮没有失败；旧报告没有 failure 字段也会显示这行）")
     print(f"总耗时        {elapsed:.0f} s（平均 {elapsed / n:.1f} s/条）")
 
     # 报告从"一个裸数组"变成"带身份的结构体"：meta 说清这份报告在什么条件下产生，
@@ -632,6 +708,7 @@ def main():
         "trace_rate": round(trace_ok_n / n, 4) if n else 0.0,
         "cite_hit": cite_hit,
         "cite_qty": cite_qty,
+        "failure_kinds": dict(sorted(kinds.items(), key=lambda kv: -kv[1])),
         "cite_rate": round(cite_rate, 4),
         "cite_cut": cite_cut,
         "json_fixed": json_fixed,

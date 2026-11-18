@@ -2229,18 +2229,36 @@ def lookup(state):
                             "note": wo.get("note") or "没有工单记录"})
 
     body = "\n\n".join(blocks) if blocks else "没有可用的设备编号。"
-    tail = (
-        "\n\n---\n以上是设备档案、最近 7 天的误判统计与历史工单，**没有做根因判断**。"
-        "需要排查原因的话，说一句现象（哪类缺陷、从什么时候开始、哪个班次更重），我再往下查。"
-    )
     # final 走 claims 契约（给校验层），final_text 保留表格（给人看）。
     # 两份出自同一处取值：拼这一行的时候就知道这个数来自哪个字段，
     # 所以"文本里的数字"和"ref"不可能不一致——它们不是各算一遍。
-    doc = {
-        "conclusion": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。",
-        "claims": claims,
-        "advice": [],
-    }
+    #
+    # claims 为空时不能还说"列出如下"：结构化消费端（eval / UI / 下一轮摘要）
+    # 读的是 conclusion 和 claims 两个字段，一个承诺有内容、另一个是空数组，
+    # 这条结论自相矛盾，谁读谁都得先判"到底列没列"。
+    # 实测见过这条：用户问"CX-999 有工单吗"，产出
+    # `{"conclusion": "按设备档案…列出如下", "claims": []}` —— 说过要列，一条没列。
+    if claims:
+        tail = (
+            "\n\n---\n以上是设备档案、最近 7 天的误判统计与历史工单，**没有做根因判断**。"
+            "需要排查原因的话，说一句现象（哪类缺陷、从什么时候开始、哪个班次更重），我再往下查。"
+        )
+        doc = {
+            "conclusion": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。",
+            "claims": claims,
+            "advice": [],
+        }
+    else:
+        miss = "、".join(
+            str(u.get("what")) for u in unknown
+            if u.get("kind") == "device_not_found"
+        ) or "、".join(ids)
+        tail = "\n\n---\n查不到这台设备，因此没有可列出的数据。"
+        doc = {
+            "conclusion": f"{miss} 在设备台账里查不到，没有档案、误判统计或工单可列。",
+            "claims": [],
+            "advice": ["核对现场铭牌或产线看板上的设备编号，用正确编号重新查询"],
+        }
     trace.emit("lookup", device_ids=ids, blocks=len(blocks), steps=steps,
                claims=len(claims))
     # final 直接存结构化结果，不再 json.dumps。
@@ -2343,6 +2361,25 @@ def _merge_conflicts(*lists):
     return list(seen.values())
 
 
+# 工具报告的「查无」状态 → (归到哪一类缺口, 给人看的一句话)
+#
+# 提到模块级（原来在 _unknown_from_evidence 里当局部变量），是为了让测试能读它：
+# `HelpfulErrorResponseTest` 拿这张表和 `app/tools/hints.py` 的 HINT 交叉校验——
+# 这里出现的每个 state 都必须有一条 hint，否则模型只知道"没查到"、
+# 不知道"所以别再查"（实测会在查无之后再去查另一个工具）。
+#
+# bad_args 刻意不在表里：它是参数写错，不是查无。把它记成 unknown，
+# 就等于给了模型一个假的拒答理由——"这台设备没有日志"实际是模型把参数拼错了。
+STATE_KIND = {
+    ("query_work_order", "no_order"): ("no_work_order", "该设备在台账中，但没有任何工单记录"),
+    ("query_work_order", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
+    ("query_device_profile", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
+    ("query_defect_log", "no_defect_log"): ("no_defect_log", "该设备没有误判日志"),
+    ("query_calibration", "no_calibration"): ("no_calibration", "该设备没有标定记录"),
+    ("query_light_usage", "no_light_record"): ("no_light_record", "该设备没有光源使用记录"),
+}
+
+
 def _unknown_from_evidence(ev):
     """从工具证据里回收"查了、正常返回、结果就是空"的条目。
 
@@ -2363,15 +2400,6 @@ def _unknown_from_evidence(ev):
     参数校验失败，猜错就把「参数写错」记成「库里没有」，拒答依据本身是假的）。
     工具自己声明状态，调用方就不用猜。
     """
-    # state → (kind, 给人看的一句话)
-    STATE_KIND = {
-        ("query_work_order", "no_order"): ("no_work_order", "该设备在台账中，但没有任何工单记录"),
-        ("query_work_order", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
-        ("query_device_profile", "device_not_found"): ("device_not_found", "设备编号不在台账里"),
-        ("query_defect_log", "no_defect_log"): ("no_defect_log", "该设备没有误判日志"),
-        ("query_calibration", "no_calibration"): ("no_calibration", "该设备没有标定记录"),
-        ("query_light_usage", "no_light_record"): ("no_light_record", "该设备没有光源使用记录"),
-    }
     out = []
     for e in ev or []:
         tool = e.get("tool")
@@ -2575,11 +2603,30 @@ def finalize(state):
     # 查无与冲突也进摘要：下一轮模型看到"上一轮那本手册里确实没有这个参数"，
     # 就不会再搜一遍、也不会自己把数补上；看到"有两处取值打架"，就不会随便挑一个当真。
     # 只写前 3 条：摘要是给模型读的一句话，不是清单的副本。
+    #
+    # 措辞从"查无 X"改成"已排除：X（原因，别再查）"。原来那句只陈述了事实，
+    # 没给动作，实测不生效——`probe_unknown_multiturn`：第 1 轮摘要写了
+    # 「查无 CX-999」，第 2 轮模型照样去查了一次 profile。
+    # 依据 Anthropic《Effective context engineering》：只有事实没有 guidance 时，
+    # agent 会 "waste context by misusing tools, chasing dead-ends"。
+    # 事实进摘要，动作也要进摘要，否则等于把判断又推回给模型。
+    KIND_HINT = {
+        "device_not_found": "设备不在台账，别再查它",
+        "no_work_order": "工单确实没有，别再查",
+        "no_defect_log": "误判日志确实没有，别再查",
+        "no_calibration": "标定记录确实没有，别再查",
+        "no_light_record": "光源记录确实没有，别再查",
+        "manual_empty": "手册里确实没有，别再搜",
+    }
     lookups = state.get("unknown") or []
     gap = ""
     if lookups:
-        what = "、".join(str(u.get("what") or u.get("kind") or "") for u in lookups[:3])
-        gap = f"；查无 {what}"
+        items = []
+        for u in lookups[:3]:
+            what = str(u.get("what") or u.get("kind") or "")
+            why = KIND_HINT.get(str(u.get("kind") or ""), "已确认没有")
+            items.append(f"{what}（{why}）")
+        gap = "；已排除：" + "、".join(items)
     clashes = state.get("conflicts") or []
     clash = f"；冲突 {len(clashes)} 处" if clashes else ""
     line = (f"\n[{turn}] 用户「{user_head}」→ {state.get('intent') or '?'}；"

@@ -12,6 +12,7 @@ import os
 import httpx
 
 from app.tools.db import connect
+from app.tools.hints import HINT
 
 QMS_URL = os.environ.get("FDE_QMS_URL", "http://127.0.0.1:8010")
 
@@ -184,6 +185,11 @@ def query_work_order(device_id: str = "", status: str = "", limit: int = 10) -> 
                             "orders": [],
                             "state": "device_not_found",
                             "note": f"设备 {did} 不在设备台账里，无法查其工单。请确认编号是否正确。",
+                            # hint 是按 Anthropic《Writing effective tools for agents》的做法：
+                            # 错误响应要写"具体且可行动的改进"，而不是只给一个不透明的事实。
+                            # 只说"设备不存在"，模型只能猜下一步——实测它去查了
+                            # query_device_profile，白烧一次调用（probe_unknown_multiturn）。
+                            "hint": HINT["device_not_found"],
                         }
 
                 sql = ("select order_id, device_id, root_cause, severity, status, "
@@ -225,6 +231,7 @@ def query_work_order(device_id: str = "", status: str = "", limit: int = 10) -> 
             "orders": [],
             "state": "no_order",
             "note": f"{scope}{extra}没有任何工单记录。这是查询结果，不是建单记录缺失。",
+            "hint": HINT["no_order"],
         }
 
     return {

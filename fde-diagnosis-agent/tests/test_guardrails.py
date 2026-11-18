@@ -1905,13 +1905,19 @@ class CiteFailDetailTest(unittest.TestCase):
     def test_finalize_summary_mentions_gap_and_clash(self):
         # 摘要给下一轮模型读。"查无"和"冲突"不出现，下一轮就会再搜一遍，
         # 或者从两个打架的值里随便挑一个当真。
+        #
+        # 措辞是"已排除：X（原因，别再搜）"而不是"查无 X"：
+        # 实测只陈述事实不生效（probe_unknown_multiturn 里第 2 轮照旧查了一次）。
+        # 所以这里连**动作**一起断言，不然把动作删掉、只留事实，测试仍然绿。
         out = nodes.finalize({"turn": 2, "intent": "knowledge",
                               "user_msg": "标定周期是多少",
                               "tool_names": ["search_manual"],
                               "unknown": [{"kind": "manual_empty", "what": "标定周期"}],
                               "conflicts": [{"param": "标定周期", "values": []}]})
         line = out["session_summary"]
-        self.assertIn("查无", line, f"摘要里没提查无：{line}")
+        self.assertIn("已排除", line, f"摘要里没提查无项：{line}")
+        self.assertIn("标定周期", line, f"摘要里没写排除的是哪一项：{line}")
+        self.assertIn("别再搜", line, f"摘要只陈述了事实，没给动作：{line}")
         self.assertIn("冲突 1 处", line, f"摘要里没提冲突：{line}")
 
     def test_finalize_summary_stays_clean_when_nothing_missing(self):
@@ -2039,6 +2045,51 @@ class CiteFailDetailTest(unittest.TestCase):
              {"kind": "manual_empty", "what": "标定周期"}]
         merged = nodes._merge_unknown(a, b)
         self.assertEqual(len(merged), 2)
+
+class HelpfulErrorResponseTest(unittest.TestCase):
+    """查无类返回必须带一条可行动的 hint。
+
+    依据 Anthropic《Writing effective tools for agents》(2025-09-11)：
+    > if a tool call raises an error ... you can prompt-engineer your error
+    > responses to clearly communicate **specific and actionable improvements**,
+    > rather than opaque error codes or tracebacks.
+
+    只给 `state` 不够——实测（`scripts/probe_unknown_multiturn.py`）：把 state
+    拆出来之后，模型在「设备不存在」之后仍然去查了 `query_device_profile`，
+    白烧一次调用。state 是给程序分辨类别用的，hint 才是给模型指出下一步的。
+    """
+
+    def test_every_missing_state_has_a_hint(self):
+        from app.tools.hints import HINT
+
+        # STATE_KIND 覆盖的每个 state 都必须有 hint，两者交叉校验。
+        states = {state for (_, state) in nodes.STATE_KIND}
+        missing = sorted(states - set(HINT))
+        self.assertEqual(missing, [],
+                         f"这些 state 没有 hint，模型只能猜下一步：{missing}")
+        # bad_args 不在 STATE_KIND 里（它不是查无），但同样需要 hint——
+        # 它是最容易被当成「查无」汇报给用户的那一类。
+        self.assertIn("bad_args", HINT)
+
+    def test_hint_says_what_to_do_not_only_what_happened(self):
+        from app.tools.hints import HINT
+
+        for state, text in HINT.items():
+            self.assertGreaterEqual(len(text), 15, f"{state} 的 hint 太短：{text}")
+            self.assertTrue(
+                any(w in text for w in ("不要", "别再", "请")),
+                f"{state} 的 hint 只陈述了事实没给动作：{text}")
+
+    def test_tools_use_the_shared_hint_table(self):
+        # hint 文案集中在 hints.py，不在工具里内联。
+        # 散在 7 个返回点上时，改一处漏一处不会有测试报错。
+        import inspect
+        from app.tools import diagnosis, workorder
+
+        for mod in (diagnosis, workorder):
+            src = inspect.getsource(mod)
+            self.assertIn("HINT[", src, f"{mod.__name__} 没有引用共享 hint 表")
+
 
 class CiteStatsKeyBudgetTest(unittest.TestCase):
     """cite_stats 的 key 上限。

@@ -9,6 +9,7 @@
 from datetime import datetime, timedelta
 
 from app.tools.db import connect
+from app.tools.hints import HINT
 
 GROUP_EXPR = {
     "hour": "date_trunc('hour', ts)",
@@ -45,7 +46,7 @@ def query_device_profile(device_id: str) -> dict:
             # 同时用于参数校验失败，猜错就会把「参数写错」记成「库里没有」，
             # 于是拒答依据本身是假的。工具自己声明状态，调用方就不用猜。
             return {"error": f"设备 {device_id} 不存在", "state": "device_not_found",
-                    "known_devices": known}
+                    "known_devices": known, "hint": HINT["device_not_found"]}
         cur.execute("""SELECT count(*) AS n, max(ts) AS m
                        FROM defect_logs WHERE device_id = %s""", (device_id,))
         agg = cur.fetchone()
@@ -69,7 +70,8 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
     if group_by not in GROUP_EXPR:
         # bad_args 和 no_defect_log 必须分开：一个是模型参数写错（该改参数再查），
         # 一个是库里确实没有（该拒答）。都用 error 字符串时上游分不出来。
-        return {"error": f"group_by 只支持 {sorted(GROUP_EXPR)}", "state": "bad_args"}
+        return {"error": f"group_by 只支持 {sorted(GROUP_EXPR)}", "state": "bad_args",
+                "hint": HINT["bad_args"]}
 
     tf, tt = _parse_ts(time_from), _parse_ts(time_to)
 
@@ -77,7 +79,7 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
         cur.execute("SELECT count(*) AS n FROM defect_logs WHERE device_id = %s", (device_id,))
         if cur.fetchone()["n"] == 0:
             return {"error": f"设备 {device_id} 没有误判日志", "state": "no_defect_log",
-                    "device_id": device_id}
+                    "device_id": device_id, "hint": HINT["no_defect_log"]}
 
         cur.execute("SELECT max(ts) AS m FROM defect_logs WHERE device_id = %s", (device_id,))
         latest = cur.fetchone()["m"]
@@ -154,7 +156,8 @@ def query_calibration(device_id: str, limit: int = 5) -> dict:
         records = cur.fetchall()
         if not records:
             return {"device_id": device_id, "records": [], "state": "no_calibration",
-                    "message": "该设备无标定记录"}
+                    "message": "该设备无标定记录",
+                    "hint": HINT["no_calibration"]}
         cur.execute("SELECT max(ts) AS m FROM defect_logs WHERE device_id = %s", (device_id,))
         latest = cur.fetchone()["m"]
 
@@ -219,7 +222,7 @@ def query_light_usage(device_id: str) -> dict:
         row = cur.fetchone()
         if not row:
             return {"error": f"设备 {device_id} 无光源记录", "state": "no_light_record",
-                    "device_id": device_id}
+                    "device_id": device_id, "hint": HINT["no_light_record"]}
         cur.execute("""SELECT ts, value FROM light_brightness_history
                        WHERE device_id = %s ORDER BY ts""", (device_id,))
         hist = cur.fetchall()

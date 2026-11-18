@@ -7,6 +7,7 @@ START → intake（正则抽候选实体，不判意图）
           ├─ action    → plan ⇄ act        │   （check 不通过就回 plan 一次）
           ├─ lookup    → lookup ───────────┘
           ├─ knowledge → knowledge ─────────┘
+          ├─ refuse    → refuse ────────────┘   （用户要凭经验编数：直接拒答，不取证）
           └─ clarify   → ask_user → END
 
 check 是 verify 前面的自查闸口：把"哪条规则、为什么失败"回喂给模型，让它自己改一次。
@@ -31,6 +32,7 @@ from app.graph.nodes import (
     knowledge,
     lookup,
     plan,
+    refuse,
     route_after_check,
     route_after_plan,
     route_after_understand,
@@ -48,6 +50,7 @@ def build_graph(use_checkpoint: bool = True):
     g.add_node("ask_user", ask_user)
     g.add_node("lookup", lookup)
     g.add_node("knowledge", knowledge)
+    g.add_node("refuse", refuse)
     g.add_node("plan", plan)
     g.add_node("act", act)
     g.add_node("check", check)
@@ -58,7 +61,8 @@ def build_graph(use_checkpoint: bool = True):
     g.add_edge("intake", "understand")
     g.add_conditional_edges(
         "understand", route_after_understand,
-        {"plan": "plan", "lookup": "lookup", "knowledge": "knowledge", "ask_user": "ask_user"},
+        {"plan": "plan", "lookup": "lookup", "knowledge": "knowledge",
+         "refuse": "refuse", "ask_user": "ask_user"},
     )
     g.add_conditional_edges(
         "plan", route_after_plan,
@@ -75,6 +79,9 @@ def build_graph(use_checkpoint: bool = True):
     g.add_edge("act", "plan")
     g.add_edge("lookup", "verify")
     g.add_edge("knowledge", "verify")
+    # 拒答也过 verify：它同样是"一条对外的结论"，不该有哪条出口绕过校验。
+    # 空 claims 是诚实的（拒答里没有可引用的事实），不是豁免。
+    g.add_edge("refuse", "verify")
     g.add_edge("verify", "finalize")
     g.add_edge("finalize", END)
     g.add_edge("ask_user", END)

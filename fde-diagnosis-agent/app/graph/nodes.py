@@ -156,14 +156,23 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 
 - diagnose：用户描述了异常现象，想找原因。
   例：误判率高、良率掉了、夜班更差、从某天开始变多、是不是光源导致的
+  **变化型也算**：凡是"换了什么之后变多 / 最近一个月越来越多 / 昨天开始一下子变多"，
+  有变化描述又想知道为什么，一律 diagnose。换料、换供应商、换光源都属于这一类。
 - lookup：用户想看**这台设备**的数据、配置、参数、记录本身，没有要找原因的意思。
   例：给我看下数据、cx-104 的保养周期设的是多少、这台上次标定是什么时候、最近记录
   边界：问的是"某台设备实际怎么配的、上次/现在是多少"，即使问的是参数名，也归 lookup。
   参数名本身是知识，但这台设了多少是数据。
+  **反例**：用户在说"变多了 / 下降了 / 换了 X 之后"并要原因时，是 diagnose。
+  「误判变多」不是「想看误判数据」：前者要原因，后者要明细。
 - knowledge：用户在问规则、标准、含义、操作步骤。这类问题**不依赖具体设备**也能回答。
   例：E-101 是什么意思、保养周期规程要求多久、亮度标准值是多少、怎么清洁镜头
 - action：用户要求执行一个动作（建单、派工、登记、通知），不是在问原因。
   例：帮我建个工单、派给设备科、登记一下、再建一次刚才那个单
+- refuse：用户**明确要求你放弃取证、凭印象给一个数**，或要求你给出没有依据的估计。
+  例：不用查了，你凭经验估一下、你就说个大概的数、别管数据了直接给我个值
+  边界：这是唯一一类"用户要的东西和系统的保证互斥"的请求——结论必须有证据支撑，
+  而"凭经验编"恰好不要证据。遇到就判 refuse，不要退成 lookup 去给一堆数据，
+  那等于用无关数据冒充答案。用户只是问"大概多少"但仍接受你查一下，仍属于 diagnose/lookup。
 - clarify：信息不足以判断以上任何一类
 
 三条硬规则：
@@ -178,7 +187,7 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 
 只输出 JSON，不要任何解释文字：
 {
-  "intent": "diagnose|lookup|knowledge|action|clarify",
+  "intent": "diagnose|lookup|knowledge|action|refuse|clarify",
   "confidence": 0.85,
   "device_ids": ["CX-104"],
   "alarm_codes": ["E-101"],
@@ -189,7 +198,7 @@ UNDERSTAND_PROMPT = """你在给一台视觉检测设备诊断系统做第一层
 }"""
 
 # 模型判为诊断/查询但输出字段不自洽时的降级说明
-_INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "clarify"}
+_INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "refuse", "clarify"}
 
 # 意图置信闸的两条线。
 #
@@ -411,6 +420,10 @@ def route_after_understand(state):
         return "lookup"
     if intent == "knowledge":
         return "knowledge"
+    # 拒答是一等公民，不是 lookup 的兜底：这类请求要的东西和"结论必须有证据"
+    # 互斥，丢进 lookup 只会拿不相关的数据冒充回答。
+    if intent == "refuse":
+        return "refuse"
     return "ask_user"
 
 
@@ -471,6 +484,30 @@ def ask_user(state):
     # 但**必须同时给 final_text**：前端读的是 `d.final_text || d.final`，
     # 只给结构化 final 会让追问这一屏直接显示一段 JSON。
     return {"final": _prose_doc(final), "final_text": final, "last_question": final}
+
+
+def refuse(state):
+    """用户要求凭经验编数时，直接拒答，并且不调任何工具。
+
+    为什么单独一个节点、而不是让它落进 lookup：
+    这类请求要的东西和系统的保证是互斥的——结论必须有证据支撑，而"凭经验估"
+    恰好不要证据。落进 lookup 会拿档案表去冒充答案：表面上给了内容，
+    实际上用户的问题一个字没答，而且那份档案看起来还挺"专业"，最容易被当成完成。
+
+    文案由程序拼、不交给模型：模型被要求"给个准数"时最容易顺着写一个数，
+    这正是 Anthropic《Refusals and Fallback》里 `stop_reason: "refusal"`
+    作为独立终态的理由——拒绝是一个状态，不是一段可以自由发挥的话。
+
+    刻意不写设备号、不写任何数字：结论结构是空 claims，
+    一旦正文出现数字就会触发 bare_conclusion（没有 claim 认领的数字 = 编的）。
+    """
+    msg = (
+        "无法凭经验给出这个数。这台设备的误判率只能从误判日志里读出来，"
+        "不能凭印象估一个值——估出来的数没有证据支撑，写进报告就等于编了一个事实。\n\n"
+        "要的话我可以按工位和时间把实测的误判数据列出来，你看哪个维度异常。"
+    )
+    trace.emit("refuse", intent="refuse", reason=state.get("intent_reason", ""))
+    return {"final": _prose_doc(msg), "final_text": msg}
 
 
 # 模型本轮能看到几轮。这一个数同时决定两件必须严格相等的事：

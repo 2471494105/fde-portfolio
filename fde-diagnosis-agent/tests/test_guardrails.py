@@ -1887,6 +1887,145 @@ class CiteFailDetailTest(unittest.TestCase):
         self.assertEqual(graph_state.RESET_EACH_TURN["cite_fail"], [])
 
 
+    def test_result_event_carries_unknown_and_conflicts(self):
+        # 进了 state 但出口不带，等于只有单元测试知道它存在——
+        # 这正是 result_event 存在的理由：一份字段定义，两个出口共用。
+        st = {"unknown": [{"kind": "manual_empty", "what": "光源亮度"}],
+              "conflicts": [{"param": "标定周期",
+                             "values": [{"source": "厂商手册", "value": 90},
+                                        {"source": "厂内 SOP", "value": 30}]}]}
+        ev = build.result_event(st)
+        self.assertEqual(ev["unknown"], st["unknown"])
+        self.assertEqual(ev["conflicts"], st["conflicts"])
+        # 没这两个值时必须是空列表而不是 None：下游 `for x in ev["unknown"]` 不该崩
+        ev2 = build.result_event({})
+        self.assertEqual(ev2["unknown"], [])
+        self.assertEqual(ev2["conflicts"], [])
+
+    def test_finalize_summary_mentions_gap_and_clash(self):
+        # 摘要给下一轮模型读。"查无"和"冲突"不出现，下一轮就会再搜一遍，
+        # 或者从两个打架的值里随便挑一个当真。
+        out = nodes.finalize({"turn": 2, "intent": "knowledge",
+                              "user_msg": "标定周期是多少",
+                              "tool_names": ["search_manual"],
+                              "unknown": [{"kind": "manual_empty", "what": "标定周期"}],
+                              "conflicts": [{"param": "标定周期", "values": []}]})
+        line = out["session_summary"]
+        self.assertIn("查无", line, f"摘要里没提查无：{line}")
+        self.assertIn("冲突 1 处", line, f"摘要里没提冲突：{line}")
+
+    def test_finalize_summary_stays_clean_when_nothing_missing(self):
+        # 反向钉死：一切正常时不许凭空多出这两句，否则摘要噪声会盖掉真信号。
+        out = nodes.finalize({"turn": 1, "intent": "lookup", "user_msg": "查 CX-101",
+                              "tool_names": ["query_device_profile"]})
+        line = out["session_summary"]
+        self.assertNotIn("查无", line)
+        self.assertNotIn("冲突", line)
+
+
+    def test_conflicts_recovered_from_evidence(self):
+        # 模型直接调 check_doc_conflict（plan→act 路径），不经过 knowledge。
+        # 修复前这条路径上 conflicts 恒为空——2026-11-18 真实链路测出来的。
+        ev = [{"tool": "check_doc_conflict", "turn": 1,
+               "args": {"param_name": "光源亮度设定"},
+               "result": {"param_name": "光源亮度设定", "has_conflict": True,
+                          "conflicts": [{"source": "厂商手册", "value": 80},
+                                        {"source": "厂内SOP", "value": 65}]}},
+              {"tool": "query_device_profile", "turn": 1, "args": {}, "result": {}}]
+        got = nodes._conflicts_from_evidence(ev)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["param"], "光源亮度设定")
+        self.assertEqual(len(got[0]["values"]), 2)
+
+    def test_conflicts_from_evidence_survives_string_result(self):
+        # evidence 里的 result 可能是 dict，也可能是序列化过的字符串（历史轨迹）
+        ev = [{"tool": "check_doc_conflict", "turn": 1,
+               "args": {"param_name": "标定周期"},
+               "result": json.dumps({"param_name": "标定周期", "has_conflict": True,
+                                     "conflicts": [{"source": "厂商手册", "value": 90},
+                                                   {"source": "厂内SOP", "value": 30}]},
+                                    ensure_ascii=False)}]
+        got = nodes._conflicts_from_evidence(ev)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["values"][0]["value"], 90)
+
+    def test_conflicts_merge_dedupes_by_param(self):
+        a = [{"param": "光源亮度设定", "values": [{"source": "厂商手册", "value": 80}]}]
+        b = [{"param": "光源亮度设定", "values": [{"source": "厂内SOP", "value": 65}]}]
+        merged = nodes._merge_conflicts(a, b)
+        self.assertEqual(len(merged), 1, "同一参数两条来源应合并成一条")
+        c = nodes._merge_conflicts(a, [{"param": "标定周期", "values": []}])
+        self.assertEqual(len(c), 2)
+
+    def test_conflicts_parsed_through_payload_prefix(self):
+        # evidence 里存的是 "[工具名{参数}] 正文"，不是裸 JSON。
+        # 直接 json.loads 会失败并静默 continue——2026-11-18 真实链路就是这么空的：
+        # 模型明明调了 check_doc_conflict、返回 has_conflict=true，state 里却是 []。
+        # 这条钉的是"必须走 _load_obj 的剥前缀逻辑"。
+        slim, _ = nodes._payload(
+            {"param_name": "光源亮度设定", "has_conflict": True,
+             "conflicts": [{"source": "厂商手册", "value": 80},
+                           {"source": "厂内SOP", "value": 65}]},
+            tool="check_doc_conflict", sig="param_name=光源亮度设定")
+        self.assertTrue(slim.startswith("[check_doc_conflict"), f"压缩格式变了：{slim[:40]}")
+        ev = [{"tool": "check_doc_conflict", "args": {"param_name": "光源亮度设定"},
+               "result": slim, "turn": 1}]
+        got = nodes._conflicts_from_evidence(ev)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(len(got[0]["values"]), 2)
+        self.assertEqual(got[0]["values"][0]["value"], 80)
+
+
+class CheckReadsFinalFromMessagesTest(unittest.TestCase):
+    """check 必须和 verify 看到同一份结论。
+
+    修复前的链路：`plan` 从不写 `final` → `check` 读 `state["final"]` 拿到空串
+    → `_parse_claims("")` 返回 `None` → 走"没按契约输出"的 pass 分支 →
+    **回环在诊断路径上从未执行过，`check_rounds` 恒 0**。
+    而 `verify` 自己有一层兜底（从最后一条 assistant 消息取），所以照样判出了伪引用。
+
+    这条测试在修复前会红：它断言 check 能读到 messages 里的结论并要求回环。
+    """
+
+    EV = [{"ev_no": 1, "tool": "query_defect_log", "turn": 1,
+           "result": json.dumps(
+               {"groups": [{"key": "1号工位", "rate": 0.5882}]},
+               ensure_ascii=False)}]
+
+    FINAL = json.dumps(
+        {"conclusion": "结论",
+         "claims": [{"text": "1号工位误判率 6.25%", "value": 0.0625,
+                     "ref": "query_defect_log#groups[0].rate"}],
+         "advice": []}, ensure_ascii=False)
+
+    def test_check_finds_conclusion_in_last_assistant_message(self):
+        # 真实图的形态：plan 只写 messages，不写 final
+        st = {"final": "", "messages": [{"role": "assistant", "content": self.FINAL}],
+              "evidence": self.EV, "turn": 1, "check_retry": 0}
+        out = nodes.check(st)
+        self.assertEqual(out["check_action"], "retry",
+                         f"check 没读到 messages 里的结论，回环还是死的：{out}")
+        self.assertEqual(out["check_retry"], 1)
+        self.assertIn("引用未通过", out["messages"][0]["content"])
+
+    def test_check_still_passes_a_clean_conclusion(self):
+        # 反向：修好之后不能变成"什么都拦"。同一份结论把值改对，必须放行。
+        ok = json.dumps(
+            {"conclusion": "结论",
+             "claims": [{"text": "1号工位误判率 58.82%", "value": 0.5882,
+                         "ref": "query_defect_log#groups[0].rate"}],
+             "advice": []}, ensure_ascii=False)
+        st = {"final": "", "messages": [{"role": "assistant", "content": ok}],
+              "evidence": self.EV, "turn": 1, "check_retry": 0}
+        out = nodes.check(st)
+        self.assertEqual(out["check_action"], "pass")
+
+    def test_check_and_verify_see_the_same_final(self):
+        # 两边取结论必须同源。只要各写一份，就一定会有"check 放行、verify 判死"的窗口。
+        st = {"final": "", "messages": [{"role": "assistant", "content": self.FINAL}]}
+        self.assertEqual(nodes._current_final(st), self.FINAL.strip())
+
+
 class LookupClaimsTest(unittest.TestCase):
     """lookup 的每个数字都要有 claim，且 ref 必须和取值出自同一处。
 
@@ -2126,7 +2265,11 @@ class ResultEventContractTest(unittest.TestCase):
 
     REQUIRED = {"turn", "intent", "intent_conf", "steps", "stop_reason", "check_rounds",
                 "tools", "blocked", "misquoted",
-                "device_ids", "slots", "final", "final_head", "final_text", "cite"}
+                "device_ids", "slots", "final", "final_head", "final_text", "cite",
+                # 这三个是 2026-11-18 加的。加进这个集合的意思是：
+                # 以后谁再往 state 里加"审计要看"的字段，也得同步进出口契约，
+                # 否则就是又一份"只有 CLI 能看、Web 看不到"的证据。
+                "cite_fail", "unknown", "conflicts"}
 
     def test_all_audit_fields_present(self):
         st = {"turn": 2, "intent": "diagnose", "steps": 5, "tool_names": ["a"],

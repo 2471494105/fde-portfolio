@@ -842,6 +842,28 @@ def route_after_plan(state):
     return "check"
 
 
+def _current_final(state):
+    """本轮结论文本的唯一取法。check 与 verify 共用。
+
+    plan 节点只写 messages、从不写 final；verify 原来自己兜了一层
+    "final 空了就从最后一条 assistant 消息取"，而 check 没有这层兜底。
+    后果是 check 读到空串 → _parse_claims("") 返回 None → 走"没按契约输出"
+    的 pass 分支 → **整个回环在诊断路径上从未执行过**（check_rounds 恒 0）。
+    单测测不出：它们直接把构造好的 state["final"] 喂给 check，
+    绕过了"final 从哪来"这一环。
+
+    修法不是给 check 再抄一份兜底——那是把同一件事写两遍，下次改一处忘一处。
+    收成一个函数，两边看到的是同一份结论，这类差异结构性消失。
+    """
+    text = final_to_text(state.get("final")).strip()
+    if text:
+        return text
+    msgs = state.get("messages") or []
+    if msgs and msgs[-1].get("role") == "assistant":
+        return (msgs[-1].get("content") or "").strip()
+    return ""
+
+
 MAX_CHECK_RETRY = 1
 
 
@@ -865,7 +887,7 @@ def check(state):
     retry = int(state.get("check_retry") or 0)
     notes = list(state.get("check_notes") or [])
     unsourced0 = int(state.get("check_unsourced0") or 0)
-    doc = _parse_claims(state.get("final") or "")
+    doc = _parse_claims(_current_final(state))
     # 和 verify 同一批证据。check_ev 也一并交出去：两边取的条数一旦不同，
     # "check 放行、verify 判死"就会发生，而它只在不同轮数下才显形。
     used = _visible_evidence(state)
@@ -1948,15 +1970,11 @@ def verify(state):
     # final 可能是 dict（写入端已解析）也可能是字符串（历史 checkpoint / 模型原文）。
     # 这里必须先归一成字符串再判空：dict 没有 .strip()，直接调会 AttributeError。
     raw_final = state.get("final")
-    final = final_to_text(raw_final).strip()
+    final = _current_final(state)
     # verify 不改 final 的形态：写入端已经是 dict 的，原样带回（下游 result_event
     # 统一序列化）；字符串的也原样带回。只在内存里用归一后的字符串做校验和渲染。
     # 否则"写入端解析成 dict"这一步会被 verify 又变回字符串，等于白做。
     out_final = raw_final if isinstance(raw_final, dict) else final
-    if not final:
-        msgs = state.get("messages") or []
-        if msgs and msgs[-1].get("role") == "assistant":
-            final = (msgs[-1].get("content") or "").strip()
     no_final = False
     if not final:
         names = ", ".join(state.get("tool_names", []))
@@ -1971,6 +1989,11 @@ def verify(state):
     # 取证据的规则收在 _visible_evidence 一处：check 也调它，两边口径必须一致，
     # 否则 check 会放行一条模型读不到的旧返回，verify 再判 cite_oob。
     ev = _visible_evidence(state)
+
+    # 冲突从证据里回收，不只靠 knowledge 节点：模型可以直接调 check_doc_conflict，
+    # 那条路根本不经过 knowledge。2026-11-18 实测踩过——模型第 8 步直接调了、
+    # 返回 has_conflict=true，result 里 conflicts 却是空。绑节点只覆盖走那个节点的路径。
+    conflicts = _merge_conflicts(state.get("conflicts"), _conflicts_from_evidence(ev))
 
     blocked = []
     # 未溯源 ≠ 伪引用。两个列表装的是两类东西：
@@ -2030,7 +2053,8 @@ def verify(state):
         # 同一个 doc 在内存里被编解码两次，且下游任何一处忘了 parse 就崩。
         return {"final": doc, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted,
-                "cite_stats": stats, "cite_fail": cite_fail}
+                "cite_stats": stats, "cite_fail": cite_fail,
+                "conflicts": conflicts}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
     # 而没校验的结论被当成通过，才是真正危险的地方。
@@ -2043,7 +2067,8 @@ def verify(state):
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
     return {"final": out_final, "final_text": final, "blocked": blocked,
-            "misquoted": misquoted, "cite_stats": stats, "cite_fail": cite_fail}
+            "misquoted": misquoted, "cite_stats": stats, "cite_fail": cite_fail,
+            "conflicts": conflicts}
 
 
 def _pct(v, digits=2):
@@ -2272,6 +2297,48 @@ def _conflict_records(conflicts):
     ]
 
 
+def _conflicts_from_evidence(ev):
+    """从工具证据里回收文档冲突。
+
+    为什么不只靠 knowledge 节点：模型可以直接调 `check_doc_conflict`
+    （plan→act 路径），这时 knowledge 里的 `_conflict_records` 根本不会执行。
+    2026-11-18 实测就是这样——模型第 8 步直接调了它、返回 `has_conflict=true`，
+    result 事件里 `conflicts` 却是 `[]`。留痕绑在某个节点上，就只覆盖走该节点的路径，
+    而主路径恰恰不走它。
+
+    改成扫证据：谁调的、走哪条路都不重要，只要结果在 evidence 里就能收回来。
+    """
+    out = []
+    for e in ev or []:
+        if e.get("tool") != "check_doc_conflict":
+            continue
+        # 必须走 _load_obj：evidence 里存的是 "[工具名{参数}] 正文" 的压缩串，
+        # 直接 json.loads 一定失败。失败了就 continue，于是冲突永远收不到——
+        # 这是一次静默失效，不是报错，只能靠真实链路的数据才看得出来。
+        r = _load_obj(e)
+        if not isinstance(r, dict) or not r.get("has_conflict"):
+            continue
+        out.append({"param": r.get("param_name") or (e.get("args") or {}).get("param_name"),
+                    "values": [{"source": x.get("source"), "value": x.get("value")}
+                               for x in (r.get("conflicts") or [])]})
+    return out
+
+
+def _merge_conflicts(*lists):
+    """按参数名合并冲突记录，先出现的为准。
+
+    knowledge 那份和 evidence 扫出来的那份都要留着：
+    前者可能发生在更早的轮次、已滑出可见窗口，只扫证据会漏。
+    """
+    seen = {}
+    for lst in lists:
+        for c in lst or []:
+            key = c.get("param") or ""
+            if key not in seen:
+                seen[key] = c
+    return list(seen.values())
+
+
 def knowledge(state):
     """知识查询：查手册并回答，明确标注出处。
 
@@ -2439,6 +2506,16 @@ def finalize(state):
     # lookup / knowledge 不走 plan，自然没有这个值，写成"未跑循环"而不是空——
     # 空字符串和"没跑过"在事后统计里长得一样，又是一份分不出来的事实。
     stop = state.get("stop_reason") or "未跑循环"
+    # 查无与冲突也进摘要：下一轮模型看到"上一轮那本手册里确实没有这个参数"，
+    # 就不会再搜一遍、也不会自己把数补上；看到"有两处取值打架"，就不会随便挑一个当真。
+    # 只写前 3 条：摘要是给模型读的一句话，不是清单的副本。
+    lookups = state.get("unknown") or []
+    gap = ""
+    if lookups:
+        what = "、".join(str(u.get("what") or u.get("kind") or "") for u in lookups[:3])
+        gap = f"；查无 {what}"
+    clashes = state.get("conflicts") or []
+    clash = f"；冲突 {len(clashes)} 处" if clashes else ""
     line = (f"\n[{turn}] 用户「{user_head}」→ {state.get('intent') or '?'}；"
-            f"工具 {tools}；结束={stop}；结论「{final_head}」")
+            f"工具 {tools}；结束={stop}{gap}{clash}；结论「{final_head}」")
     return {"final": state.get("final", ""), "session_summary": line}

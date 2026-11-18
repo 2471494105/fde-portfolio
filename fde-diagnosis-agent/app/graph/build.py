@@ -129,6 +129,13 @@ def result_event(state):
         "final_text": state.get("final_text", ""),
         "cite": state.get("cite_stats", {}),
         "cite_fail": state.get("cite_fail", []),
+        # 本轮"查了、工具正常、结果就是空"的清单。
+        # 和 missing 分开：missing 缺的能从用户那里要，这里缺的是库里确实没有——
+        # 报告上要能看见"哪些事是查不到"，而不只是"哪些事没查"。
+        "unknown": state.get("unknown", []),
+        # 本轮查出的文档冲突。原来只在 evidence 的原始返回里，
+        # 报告上看不出这次回答里有两处参数取值打架。
+        "conflicts": state.get("conflicts", []),
     }
 
 

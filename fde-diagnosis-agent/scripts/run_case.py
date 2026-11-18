@@ -51,6 +51,21 @@ def main():
     else:
         print("\n=== 校验：结论中的百分比均可溯源 ===")
 
+    # 查无与冲突分开打：前者是"库里确实没有"，后者是"库里有两种说法"。
+    # 混成一句"信息不足"，读的人就不知道下一步该换台设备、还是该找人确认口径。
+    lookups = state.get("unknown") or []
+    if lookups:
+        print("\n=== 查无（工具正常返回，但结果为空） ===")
+        for u in lookups:
+            print(f"- [{u.get('kind')}] {u.get('what')}：{u.get('note') or ''}")
+    clashes = state.get("conflicts") or []
+    if clashes:
+        print("\n=== 文档冲突（同一参数两处取值） ===")
+        for c in clashes:
+            vals = " / ".join(
+                f"{v.get('source')}={v.get('value')}" for v in (c.get("values") or []))
+            print(f"- {c.get('param')}：{vals}")
+
 
 if __name__ == "__main__":
     main()

@@ -1302,6 +1302,10 @@ def _new_stats():
             # multi_ok   多值 claim（items 数组）：每条「标识+数值」都在返回里找到了对应记录
             # multi_bad  多值 claim 但至少一条配不上：值不在那条记录里，或记录里没这个 key
             "multi_ok": 0, "multi_bad": 0,
+            # qual_ok        定性 claim（没有数字、没有 items、没有引文）：ref 指得到
+            # qual_bad       定性 claim 但 ref 指不到——没有值可比时，ref 是唯一凭据
+            # qual_unsourced 定性 claim 没写出处 → 标灰不判死（同"有数字没出处"）
+            "qual_ok": 0, "qual_bad": 0, "qual_unsourced": 0,
             # quote_ok   引文型 claim：模型抄的原文确实在 ref 指向的那段里
             # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
             # bare_conclusion  结论里写了数字、claims 为空 → 没有一个数字可核验
@@ -1489,16 +1493,27 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         # 多值型：`value` 为空但有 items，交给下面的 items 分支逐条配对
         items = c.get("items")
         has_items = isinstance(items, list) and bool(items)
-        if v is None and not has_items:
-            continue          # 纯论述型 claim，既没数字也没引文，无从核对
-        stats["qty"] += 1
-        if unit == "%":
-            stats["pct"] += 1
+        # 定性型：没有数字、没有 items、没有引文。
+        # 以前这里直接 continue —— 等于这句话判据完全不看，连 ref 都不校验。
+        # 可没有值可以核的时候，ref 恰恰是唯一凭据：这句话说的是哪个工位、
+        # 哪条记录、哪次标定，全在 ref 里。所以它要往下走完整的路径检查，
+        # 只是到了比值那一步停下（没有值可比）。
+        qual = (v is None and not has_items)
+        if not qual:
+            stats["qty"] += 1
+            if unit == "%":
+                stats["pct"] += 1
 
         ref = c.get("ref")
         if not ref:
-            stats["unsourced"] += 1
-            blocked.append(text or str(v))
+            if qual:
+                # 定性断言没写出处：和"有数字没出处"同性质——提供了无法核验的
+                # 断言，但没说假话。标灰不判死，否则纯推理型 claim 就没法写了。
+                stats["qual_unsourced"] += 1
+                blocked.append(text or "（空）")
+            else:
+                stats["unsourced"] += 1
+                blocked.append(text or str(v))
             continue
 
         m = _REF_PAT.match(str(ref))
@@ -1573,6 +1588,14 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             if any_truncated:
                 stats["cite_cut"] += 1
                 blocked.append(f"{text}（{tool} 返回体过大已压缩，该字段未保留）")
+            elif qual:
+                # 定性 claim 的 ref 取不到：这句断言就悬空了，没有东西能说明
+                # 它针对哪条记录。单独计数——数值路径缺失和定性出处缺失，
+                # 一个是"数字没出处"，一个是"结论没落点"，修法完全不同。
+                stats["qual_bad"] += 1
+                misquoted.append(
+                    f"{text}（定性结论的出处 {tool}#{path} 取不到，"
+                    f"无法核对这句话针对哪条记录）")
             else:
                 stats["path_miss"] += 1
                 # 必须带上工具名。只写"字段不存在:xxx"，读起来就是"模型编了个
@@ -1582,6 +1605,15 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 misquoted.append(
                     f"{text}（{tool} 的返回里没有字段 {path}）"
                 )
+            continue
+
+        if qual:
+            # 定性 claim：ref 指得到就算站住，不比较值。
+            # 计入 path_ok 是刻意的——它的语义是"引用路径成立"，
+            # 定性也在引用，只是没有值可比。不记进去，报告上"可追溯"的比例
+            # 就只覆盖数字部分，定性那半截是隐形的。
+            stats["qual_ok"] += 1
+            stats["path_ok"] += 1
             continue
 
         # ---- 多值 claim：一条 claim 装 N 个「标识 + 数值」对 ----

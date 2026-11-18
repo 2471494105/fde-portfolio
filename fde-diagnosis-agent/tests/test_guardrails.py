@@ -637,6 +637,44 @@ class ClaimContractTest(unittest.TestCase):
         self.assertTrue(any("99 条" in m for m in res["misquoted"]))
         self.assertGreaterEqual(res["cite_stats"]["path_bad"], 1)
 
+    def test_qualitative_claim_with_dead_ref_is_caught(self):
+        """定性 claim 没有数字，也必须有能指得着的 ref。
+
+        现状是 v 为空且无 items/quote 时直接 continue——连 ref 都不看。
+        模型写 `{"text": "1 号工位是主因", "ref": "query_defect_log#groups[99]"}`，
+        判据一句话都不说。可"这句话针对哪条记录"在没有数字时反而更要紧：
+        没有值可以核，ref 就是唯一凭据。
+        """
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "1 号工位是主要问题工位",
+             "ref": "query_defect_log#groups[99]"}]}, self.GROUPS)
+        self.assertEqual(res["cite_stats"]["qual_bad"], 1, "ref 指不到要单独记失败")
+        self.assertEqual(res["cite_stats"]["path_miss"], 0,
+                         "不能混进数值路径缺失的计数，两类修法不同")
+        self.assertTrue(any("groups[99]" in m for m in res["misquoted"]))
+
+    def test_qualitative_claim_with_live_ref_passes(self):
+        """反向：ref 指得到就算站住，不比较值——本来就没有值可比。"""
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "1 号工位是主要问题工位",
+             "ref": "query_defect_log#groups[0]"}]}, self.GROUPS)
+        self.assertEqual(res["cite_stats"]["qual_ok"], 1)
+        self.assertEqual(res["misquoted"], [])
+        self.assertEqual(res["cite_stats"]["qty"], 0, "定性不是数字，不进数字分母")
+
+    def test_qualitative_claim_without_ref_is_grey(self):
+        """定性 claim 没写出处 → 标灰，不判死。
+
+        它和"有数字没出处"同性质：都提供了无法核验的断言，但都没说假话。
+        判死会让纯推理型 claim（"因此判断为光源老化"）没法写，
+        而这类推理本来就该留在 claims 里接受审视。
+        """
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "因此判断为光源老化"}]}, self.GROUPS)
+        self.assertEqual(len(res["blocked"]), 1)
+        self.assertEqual(res["misquoted"], [])
+        self.assertIn("[无出处]", res["final_text"])
+
     def test_ref_to_text_field_matches_number_inside(self):
         # 工具返回的评估说明是整段文字（"上升 10%-25%"），模型引用这段里的 25。
         # 字段不是数字，但里面有这个数——不能因为类型不是 float 就判成引用写错。

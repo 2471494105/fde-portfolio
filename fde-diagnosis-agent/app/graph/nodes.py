@@ -1094,6 +1094,45 @@ def _owned_device_ids(state):
     return {str(x).strip().upper() for x in (state.get("device_ids") or []) if str(x).strip()}
 
 
+# 会对外产生副作用的工具。目前只有建单一个：它写 QMS，事后撤单要比事前拦一次贵得多。
+# 以后加"派工""改状态"这类工具，必须同时加进这个集合，否则闸形同不存在。
+WRITE_TOOLS = {"create_work_order"}
+
+# 写意图关键词。**这是启发式，不是分类器**：它会漏（用户说"这得处理一下"）、
+# 也会误（用户说"上次那张单后来怎样了"其实是查）。
+# 两个方向的代价不对称才这么选：
+#   漏 → 模型被拒一次，hint 让它回头问用户"要我建单吗"，代价是多一轮对话；
+#   误 → 用户只是提问却被建了单，代价是一张脏工单加一次撤单。
+# 所以宁可收紧。只在"动词+单据"连写的形态上命中，单说"工单"不算——
+# "查一下工单"里有"工单"，但那是在读。
+WRITE_INTENT_KW = (
+    "建单", "开单", "开工单", "建工单", "创建工单", "提交工单", "新建工单",
+    "报修", "上报", "登记",
+)
+
+
+def _current_question(state):
+    """本轮用户原话，用于判断写意图。
+
+    倒序找最后一条 role=user。**拿不到就返回空串，也就是"没有写意图"**——
+    这是有意的 fail-closed：不知道用户说过什么的时候，不允许执行写操作。
+    反过来的 fail-open 会把"上下文缺失"变成"可以建单"，那正是这个闸要防的事。
+    """
+    for m in reversed(list(state.get("messages") or [])):
+        if isinstance(m, dict):
+            role, content = m.get("role"), m.get("content")
+        else:
+            role, content = getattr(m, "role", None), getattr(m, "content", "")
+        if role == "user":
+            return str(content or "")
+    return ""
+
+
+def _has_write_intent(state):
+    q = _current_question(state)
+    return any(kw in q for kw in WRITE_INTENT_KW)
+
+
 def act(state):
     last = state["messages"][-1]
     out_msgs, evidence, names = [], [], []
@@ -1117,6 +1156,19 @@ def act(state):
             impl = TOOL_IMPLS.get(name)
             if not impl:
                 res = {"error": f"未知工具 {name}"}
+            elif name in WRITE_TOOLS and not _has_write_intent(state):
+                # 写意图硬开关。放在归属校验之前：这是"该不该做这件事"，
+                # 归属是"能不能对这台设备做"，前者不成立后者没有意义。
+                # 被拒后仍走正常的 evidence / trace 记账，模型能看到拒绝理由，
+                # 审计里也能看到"模型尝试过建单、被闸拦下"。
+                res = {
+                    "error": f"用户没有要求建单或上报，本次不执行 {name}",
+                    "blocked_by": "write_intent",
+                    "hint": (
+                        "如果确实需要建单，先向用户确认一遍再调。"
+                        "用户没有提出建单/报修/上报时，不要自行建单。"
+                    ),
+                }
             else:
                 owned = _owned_device_ids(state)
                 want = str(args.get("device_id") or "").strip().upper()

@@ -184,6 +184,101 @@ class WorkOrderGuardTest(unittest.TestCase):
         self.assertEqual(res.get("state"), "system_unavailable")
         self.assertEqual(self.posts, [])
 
+    def test_problem_codes_are_structured(self):
+        """驳回理由必须有一份能按 code 聚合的：结论层 cite_fail 早就是结构化的，
+        动作层只有自由文案就等于两边不一致——文案改一个字，看板就断了。"""
+        res = self._call(evidence_refs=[], severity="严重")
+        self.assertIn("problem_codes", res)
+        got = {(c["code"], c["field"]) for c in res["problem_codes"]}
+        self.assertIn(("empty_list", "evidence_refs"), got)
+        self.assertIn(("not_in_enum", "severity"), got)
+        # 人读的那份必须同时保留：现有消费方和工程师都按文案看
+        self.assertTrue(res["problems"])
+        self.assertEqual(len(res["problems"]), len(res["problem_codes"]),
+                         "两份不能漏配——每一条问题都要既有文案又有码")
+
+
+class WriteIntentGuardTest(unittest.TestCase):
+    """写意图硬开关：用户只是提问，act 不许替他把单建了。
+
+    这是 W0 做过、正式图里丢掉的防线（见 fde-rag-demo/02_进阶 的同名实现）。
+    丢掉的后果不是"架构不优雅"，而是"一句诊断变成一张脏工单"。
+    """
+
+    def setUp(self):
+        self._orig = dict(nodes.TOOL_IMPLS)
+        self.calls = []
+
+        def fake_impl(**kw):
+            self.calls.append(kw)
+            return {"ok": True, "order_id": "WO-FAKE"}
+
+        nodes.TOOL_IMPLS["create_work_order"] = fake_impl
+
+    def tearDown(self):
+        nodes.TOOL_IMPLS.clear()
+        nodes.TOOL_IMPLS.update(self._orig)
+
+    def _run(self, question, device="CX-101"):
+        """question=None 表示 state 里没有 user 消息。"""
+        msgs = []
+        if question is not None:
+            msgs.append({"role": "user", "content": question})
+        msgs.append({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "c1",
+                "function": {
+                    "name": "create_work_order",
+                    "arguments": json.dumps({
+                        "device_id": device,
+                        "root_cause": "标定漂移超阈值",
+                        "root_cause_code": "calibration_drift",
+                        "severity": "high",
+                        "actions": ["重新标定"],
+                        "evidence_refs": ["query_calibration#last"],
+                    }, ensure_ascii=False),
+                },
+            }],
+        })
+        state = {
+            "messages": msgs,
+            "device_ids": [device],
+            "device_id": device,
+            "turn": 1,
+        }
+        out = nodes.act(state)
+        res = nodes._load_obj({"result": out["messages"][0]["content"]})
+        return res, out
+
+    def test_diagnose_question_cannot_create_order(self):
+        """用户问"为什么误判率高"，模型却想建单——必须拦在建单之前。"""
+        res, out = self._run("CX-101 的夜班误判率为什么一直偏高，帮我查下")
+        self.assertIn("error", res)
+        self.assertEqual(res.get("blocked_by"), "write_intent")
+        self.assertEqual(self.calls, [], "没提建单就不能真的落到 QMS")
+        # 拦了也要记账：轨迹里必须看得出"模型尝试过建单"
+        self.assertEqual(out["tool_names"], ["create_work_order"])
+
+    def test_explicit_write_request_passes(self):
+        res, _ = self._run("帮 CX-101 建个单报修，标定漂移了")
+        self.assertNotIn("error", res)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_reading_orders_is_not_write_intent(self):
+        """"查一下工单"里有"工单"两个字，但它是在读，不能当写意图放行。"""
+        res, _ = self._run("CX-101 之前那张工单后来处理得怎么样了")
+        self.assertIn("error", res)
+        self.assertEqual(res.get("blocked_by"), "write_intent")
+        self.assertEqual(self.calls, [])
+
+    def test_missing_user_message_fails_closed(self):
+        """拿不到用户原话时不许猜：宁可拦一次让模型回头问，也不能放行写操作。"""
+        res, _ = self._run(None)
+        self.assertIn("error", res)
+        self.assertEqual(res.get("blocked_by"), "write_intent")
+        self.assertEqual(self.calls, [])
+
 
 class IdemKeyTest(unittest.TestCase):
     """幂等键的稳定性：同一件还没处理完的事，必须永远算出同一个键。

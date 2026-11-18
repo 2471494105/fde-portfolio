@@ -28,10 +28,15 @@ SEVERITIES = {"high", "medium", "low"}
 
 
 def _check_order_args(device_id, root_cause, root_cause_code, severity, actions, evidence_refs):
-    """建单前置校验。返回 (归一后的字段, 问题列表)。
+    """建单前置校验。返回 (归一后的字段, 人读问题列表, 机读问题码)。
 
     为什么必须在客户端做：mock QMS 不校验业务字段，真实 QMS 也大多只校验格式。
     "证据为空也建单"在系统里是能成功的，只是事后没人能复核这张单为什么存在。
+
+    为什么同时给两份：`problems` 是自由文案，人读得懂但按不住（"root_cause_code 不在枚举内"
+    改一个字就匹配不上了）；`problem_codes` 是 {"code","field","note"}，能被程序和看板聚合。
+    结论层（verify 的 cite_fail）早就是带 code 的结构，动作层却只有字符串——
+    同一个失败信号两种承载，这两份一起给就是为了让动作层对齐结论层。
     """
     did = str(device_id or "").strip().upper()
     cause = str(root_cause or "").strip()
@@ -41,21 +46,27 @@ def _check_order_args(device_id, root_cause, root_cause_code, severity, actions,
     refs = [str(r).strip() for r in (evidence_refs or []) if str(r).strip()]
 
     problems = []
+    codes = []
+
+    def _add(code_name, field, note):
+        problems.append(note)
+        codes.append({"code": code_name, "field": field, "note": note})
+
     if not did:
-        problems.append("device_id 为空")
+        _add("empty_field", "device_id", "device_id 为空")
     if not cause:
-        problems.append("root_cause 为空")
+        _add("empty_field", "root_cause", "root_cause 为空")
     if code not in ROOT_CAUSE_CODES:
-        problems.append(f"root_cause_code 不在枚举内：{code!r}")
+        _add("not_in_enum", "root_cause_code", f"root_cause_code 不在枚举内：{code!r}")
     if sev not in SEVERITIES:
-        problems.append(f"severity 不在枚举内：{sev!r}")
+        _add("not_in_enum", "severity", f"severity 不在枚举内：{sev!r}")
     if not acts:
-        problems.append("actions 为空，没有处置动作不该建单")
+        _add("empty_list", "actions", "actions 为空，没有处置动作不该建单")
     if not refs:
-        problems.append("evidence_refs 为空，没有证据的工单事后无法复核")
+        _add("empty_list", "evidence_refs", "evidence_refs 为空，没有证据的工单事后无法复核")
 
     return {"device_id": did, "root_cause": cause, "root_cause_code": code,
-            "severity": sev, "actions": acts, "evidence_refs": refs}, problems
+            "severity": sev, "actions": acts, "evidence_refs": refs}, problems, codes
 
 
 def _device_exists(did):
@@ -75,12 +86,13 @@ def _device_exists(did):
 
 def create_work_order(device_id: str, root_cause: str, root_cause_code: str, severity: str,
                       actions: list, evidence_refs: list) -> dict:
-    fields, problems = _check_order_args(device_id, root_cause, root_cause_code,
-                                         severity, actions, evidence_refs)
+    fields, problems, problem_codes = _check_order_args(device_id, root_cause, root_cause_code,
+                                                        severity, actions, evidence_refs)
     if problems:
         return {
             "error": "建单参数校验未通过，工单未创建",
             "problems": problems,
+            "problem_codes": problem_codes,
             "allowed_root_cause_code": sorted(ROOT_CAUSE_CODES),
             "allowed_severity": sorted(SEVERITIES),
             "hint": (

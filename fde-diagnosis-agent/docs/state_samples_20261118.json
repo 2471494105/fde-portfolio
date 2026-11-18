@@ -1,0 +1,1213 @@
+{
+  "generated_for": "State 字段分工表 的数据结构列",
+  "cases": {
+    "diagnose_ok": {
+      "query": "CX-101 的夜班误判率为什么一直偏高，帮我查下",
+      "thread": "state-sample-a9f0909e",
+      "intent": "diagnose",
+      "steps": 12,
+      "stop_reason": "enough",
+      "tool_names": [
+        "query_device_profile",
+        "query_defect_log",
+        "query_defect_log",
+        "query_light_usage",
+        "query_calibration",
+        "query_defect_log",
+        "query_defect_log",
+        "search_manual",
+        "check_doc_conflict",
+        "query_defect_log",
+        "query_defect_log",
+        "query_light_usage"
+      ],
+      "state": {
+        "blocked": [
+          "按小时聚合时单个时段样本仅2~4条，最大一档为2026-11-07 21:00的66.67%（3条中2条），样本量不足以支撑「夜班单独恶化」的判断"
+        ],
+        "check_action": "pass",
+        "check_ev": 12,
+        "check_notes": [],
+        "check_retry": 0,
+        "check_unsourced0": 1,
+        "cite_fail": [],
+        "cite_stats": {
+          "qty": 22,
+          "pct": 9,
+          "cited_ok": 21,
+          "cited_path": 21,
+          "cite_oob": 0,
+          "path_ok": 21,
+          "path_bad": 0,
+          "path_miss": 0,
+          "json_bad": 0,
+          "unsourced": 1,
+          "ref_bad": 0,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 1,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 1,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 0,
+          "quote_bad": 0,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 21,
+          "ev": 12
+        },
+        "conflicts": [
+          {
+            "param": "光源亮度设定",
+            "values": [
+              {
+                "source": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+                "value": "80"
+              },
+              {
+                "source": "视觉检测作业指导书 WI-QC-015",
+                "value": "65"
+              },
+              {
+                "source": "现场调试记录 2026-09",
+                "value": "80"
+              }
+            ]
+          }
+        ],
+        "device_id": "CX-101",
+        "device_ids": [
+          "CX-101"
+        ],
+        "evidence": [
+          {
+            "tool": "query_device_profile",
+            "args": {
+              "device_id": "CX-101"
+            },
+            "sig": "device_id=CX-101",
+            "result": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"20…(+107)",
+            "truncated": false,
+            "ev_no": 1,
+            "turn": 1
+          },
+          {
+            "tool": "query_defect_log",
+            "args": {
+              "device_id": "CX-101",
+              "group_by": "hour"
+            },
+            "sig": "device_id=CX-101,group_by=hour",
+            "result": "[query_defect_log{device_id=CX-101,group_by=hour}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-11-07 17:19:52\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"hour\", \"total\": 113, \"false_positive_count\":…(+1292)",
+            "truncated": false,
+            "ev_no": 2,
+            "turn": 1
+          },
+          {
+            "tool": "query_defect_log",
+            "args": {
+              "device_id": "CX-101",
+              "group_by": "station"
+            },
+            "sig": "device_id=CX-101,group_by=station",
+            "result": "[query_defect_log{device_id=CX-101,group_by=station}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-11-07 17:19:52\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"station\", \"total\": 113, \"false_positive_c…(+845)",
+            "truncated": false,
+            "ev_no": 3,
+            "turn": 1
+          }
+        ],
+        "final": {
+          "conclusion": "误判并非夜班独有，真正集中在1号工位：该工位光源已超额定寿命、亮度被两次下调，成像衰减导致尺寸类过杀偏高；算法侧（缺陷类型分布分散、最近标定通过）不像主因，但亮度设定与标定周期各存在两套相互矛盾的口径，需人工定口径。",
+          "claims": [
+            {
+              "text": "近7天总检测113条、过杀27条，整体误判率23.89%",
+              "value": 23.89,
+              "unit": "%",
+              "ref": "query_defect_log{group_by=station}#false_positive_rate"
+            },
+            {
+              "text": "1号工位34条中过杀20条，误判率58.82%",
+              "value": 58.82,
+              "unit": "%",
+              "ref": "query_defect_log{group_by=station}#groups[0].rate"
+            },
+            {
+              "text": "3号工位47条中过杀5条，误判率10.64%",
+              "value": 10.64,
+              "unit": "%",
+              "ref": "query_defect_log{group_by=station}#groups[1].rate"
+            }
+          ],
+          "advice": [
+            "先处理1号工位：清洁镜头并重新标定，复测一轮确认误判率是否回落，再判断是否需换镜头/调整安装位置",
+            "光源累计8620小时已超额定8000小时，亮度又被从85一路下调到65，建议直接更换光源，这是当前最可能的光学根因",
+            "亮度设定存在两套口径（厂商手册80 / 厂内SOP 65），换光源后按哪个值设定请工艺或质量确认，不要沿用现在被反复下调的65"
+          ]
+        },
+        "final_text": "误判并非夜班独有，真正集中在1号工位：该工位光源已超额定寿命、亮度被两次下调，成像衰减导致尺寸类过杀偏高；算法侧（缺陷类型分布分散、最近标定通过）不像主因，但亮度设定与标定周期各存在两套相互矛盾的口径，需人工定口径。\n- 近7天总检测113条、过杀27条，整体误判率23.89%[query_defect_log{group_by=station}]\n- 1号工位34条中过杀20条，误判率58.82%[query_defect_log{g…(+1365)",
+        "intent": "diagnose",
+        "intent_conf": 0.92,
+        "intent_note": "",
+        "intent_reason": "用户明确描述“夜班误判率偏高”这一异常并追问原因、要求排查，属于找原因而非单纯取数。",
+        "messages": [
+          {
+            "role": "user",
+            "content": "CX-101 的夜班误判率为什么一直偏高，帮我查下"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_00_zlcPTsov5eMnwpK1HZ2H6799",
+                "type": "function",
+                "function": "{'name': 'query_device_profile', 'arguments': '{\"device_id\": \"CX-101\"}'}"
+              },
+              {
+                "id": "call_01_5t4zEmj81Pol9x8eIofd9341",
+                "type": "function",
+                "function": "{'name': 'query_defect_log', 'arguments': '{\"device_id\": \"CX-101\", \"group_by\": \"hour\"}'}"
+              },
+              {
+                "id": "call_02_De9ZPvjXaRIspcMmIWxv4728",
+                "type": "function",
+                "function": "{'name': 'query_defect_log', 'arguments': '{\"device_id\": \"CX-101\", \"group_by\": \"station\"}'}"
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_00_zlcPTsov5eMnwpK1HZ2H6799",
+            "name": "query_device_profile",
+            "content": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"20…(+107)"
+          }
+        ],
+        "misquoted": [],
+        "missing": [
+          "偏高从什么时候开始、持续多久",
+          "误判的具体类型或典型样本",
+          "夜班与白班的参数/环境差异（光源、温度、换班操作等）"
+        ],
+        "param_names": [],
+        "phenomenon": "夜班误判率一直偏高",
+        "plan_retry": 0,
+        "session_summary": "[1] 用户「CX-101 的夜班误判率为什么一直偏高，帮我查下」→ diagnose；工具 query_device_profile,query_defect_log,query_defect_log,query_light_usage,query_calibration,query_defect_log,query_defect_log,search_manual,check_doc_conflict,query_defect_lo…(+138)",
+        "slots": {
+          "device_id": "CX-101",
+          "phenomenon": "夜班误判率一直偏高"
+        },
+        "state_ver": 2,
+        "steps": 12,
+        "stop_reason": "enough",
+        "svc_fail": "",
+        "thread_id": "state-sample-a9f0909e",
+        "tool_names": [
+          "query_device_profile",
+          "query_defect_log",
+          "query_defect_log"
+        ],
+        "trace_id": "20261118_203746_c349",
+        "turn": 1,
+        "unknown": [],
+        "user_msg": "CX-101 的夜班误判率为什么一直偏高，帮我查下"
+      }
+    },
+    "diagnose_unknown": {
+      "query": "CX-999 的夜班误判率为什么一直偏高",
+      "thread": "state-sample-21bfb387",
+      "intent": "diagnose",
+      "steps": 1,
+      "stop_reason": "enough",
+      "tool_names": [
+        "query_device_profile"
+      ],
+      "state": {
+        "blocked": [],
+        "check_action": "pass",
+        "check_ev": 1,
+        "check_notes": [],
+        "check_retry": 0,
+        "check_unsourced0": 0,
+        "cite_fail": [],
+        "cite_stats": {
+          "qty": 0,
+          "pct": 0,
+          "cited_ok": 0,
+          "cited_path": 0,
+          "cite_oob": 0,
+          "path_ok": 0,
+          "path_bad": 0,
+          "path_miss": 0,
+          "json_bad": 0,
+          "unsourced": 0,
+          "ref_bad": 0,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 0,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 0,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 0,
+          "quote_bad": 0,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 0,
+          "ev": 1
+        },
+        "conflicts": [],
+        "device_id": "CX-999",
+        "device_ids": [
+          "CX-999"
+        ],
+        "evidence": [
+          {
+            "tool": "query_device_profile",
+            "args": {
+              "device_id": "CX-999"
+            },
+            "sig": "device_id=CX-999",
+            "result": "[query_device_profile{device_id=CX-999}] {\"error\": \"设备 CX-999 不存在\", \"state\": \"device_not_found\", \"known_devices\": [\"CX-101\", \"CX-102\", \"CX-103\", \"CX-104\", \"CX-105\"], \"hint\": \"该编号不在设备台账。不要再改查它的工单、标定或光源记录——那些工具会返回同一个「查无」。请…(+11)",
+            "truncated": false,
+            "ev_no": 1,
+            "turn": 1
+          }
+        ],
+        "final": {
+          "conclusion": "设备编号 CX-999 不在台账中，无法做任何误判率分析，因此「夜班误判率偏高」这个前提目前无法核实",
+          "claims": [],
+          "advice": [
+            "请先核对设备编号，台账中的可用设备为 CX-101、CX-102、CX-103、CX-104、CX-105",
+            "确认正确编号后，再按「工位分布 → 缺陷类型/批次 → 按天趋势」的顺序取证：若集中在单工位则查该工位光源与标定，若集中在批次或缺陷类型则偏算法",
+            "若确实存在夜班偏高的情况，需要补一份白班与夜班的对比口径（时段划分、班次产量），否则误判率无法归一化比较"
+          ]
+        },
+        "final_text": "设备编号 CX-999 不在台账中，无法做任何误判率分析，因此「夜班误判率偏高」这个前提目前无法核实\n* 请先核对设备编号，台账中的可用设备为 CX-101、CX-102、CX-103、CX-104、CX-105\n* 确认正确编号后，再按「工位分布 → 缺陷类型/批次 → 按天趋势」的顺序取证：若集中在单工位则查该工位光源与标定，若集中在批次或缺陷类型则偏算法\n* 若确实存在夜班偏高的情况，需要补一份白班与夜班的对比口径（时段划分、班次…(+16)",
+        "intent": "diagnose",
+        "intent_conf": 0.93,
+        "intent_note": "",
+        "intent_reason": "用户描述了异常现象，并明确问「为什么」，是要查原因，属于诊断类。",
+        "messages": [
+          {
+            "role": "user",
+            "content": "CX-999 的夜班误判率为什么一直偏高"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_bf244dc010cd45e98221512c",
+                "type": "function",
+                "function": "{'name': 'query_device_profile', 'arguments': '{\"device_id\": \"CX-999\"}'}"
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_bf244dc010cd45e98221512c",
+            "name": "query_device_profile",
+            "content": "[query_device_profile{device_id=CX-999}] {\"error\": \"设备 CX-999 不存在\", \"state\": \"device_not_found\", \"known_devices\": [\"CX-101\", \"CX-102\", \"CX-103\", \"CX-104\", \"CX-105\"], \"hint\": \"该编号不在设备台账。不要再改查它的工单、标定或光源记录——那些工具会返回同一个「查无」。请…(+11)"
+          }
+        ],
+        "misquoted": [],
+        "missing": [
+          "误判率的具体数值与基线对比",
+          "偏高从什么时候开始、是否只在夜班出现",
+          "夜班与白班的产线、物料、光照条件是否有差异"
+        ],
+        "param_names": [],
+        "phenomenon": "CX-999 夜班误判率一直偏高",
+        "plan_retry": 0,
+        "session_summary": "[1] 用户「CX-999 的夜班误判率为什么一直偏高」→ diagnose；工具 query_device_profile；结束=enough；已排除：CX-999（设备不在台账，别再查它）；结论「{\"conclusion\": \"设备编号 CX-999 不在台账中，无法做任何误判率分析，因此「夜班误判率偏高」这个前提目前无法核实\", \"claims\": [」",
+        "slots": {
+          "device_id": "CX-999",
+          "phenomenon": "CX-999 夜班误判率一直偏高"
+        },
+        "state_ver": 2,
+        "steps": 1,
+        "stop_reason": "enough",
+        "svc_fail": "",
+        "thread_id": "state-sample-21bfb387",
+        "tool_names": [
+          "query_device_profile"
+        ],
+        "trace_id": "20261118_203833_f7af",
+        "turn": 1,
+        "unknown": [
+          {
+            "kind": "device_not_found",
+            "what": "CX-999",
+            "note": "设备编号不在台账里"
+          }
+        ],
+        "user_msg": "CX-999 的夜班误判率为什么一直偏高"
+      }
+    },
+    "knowledge": {
+      "query": "标定周期是多少天",
+      "thread": "state-sample-34fc0172",
+      "intent": "knowledge",
+      "steps": 2,
+      "stop_reason": "",
+      "tool_names": [
+        "search_manual",
+        "check_doc_conflict"
+      ],
+      "state": {
+        "blocked": [],
+        "check_action": "",
+        "check_ev": null,
+        "check_notes": [],
+        "check_retry": 0,
+        "check_unsourced0": 0,
+        "cite_fail": [
+          {
+            "code": "quote_not_found",
+            "note": "CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。（引文在 search_manual#chunks[0].text 里找不到：出处：CV-X系列视觉检测系统操作手册（厂商版·摘录） ）"
+          },
+          {
+            "code": "quote_not_found",
+            "note": "视觉检测作业指导书 WI-QC-015 的 3.2 节规定了标定周期。（引文在 search_manual#chunks[1].text 里找不到：出处：视觉检测作业指导书 WI-QC-015 / 3.2）"
+          }
+        ],
+        "cite_stats": {
+          "qty": 0,
+          "pct": 0,
+          "cited_ok": 0,
+          "cited_path": 0,
+          "cite_oob": 0,
+          "path_ok": 0,
+          "path_bad": 0,
+          "path_miss": 0,
+          "json_bad": 0,
+          "unsourced": 0,
+          "ref_bad": 0,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 0,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 0,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 2,
+          "quote_bad": 2,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 0,
+          "ev": 2
+        },
+        "conflicts": [
+          {
+            "param": "标定周期(天)",
+            "values": [
+              {
+                "source": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+                "value": "90"
+              },
+              {
+                "source": "视觉检测作业指导书 WI-QC-015",
+                "value": "30"
+              }
+            ]
+          }
+        ],
+        "device_id": "",
+        "device_ids": [],
+        "evidence": [
+          {
+            "tool": "search_manual",
+            "args": {
+              "query": "标定周期是多少天"
+            },
+            "result": {
+              "query": "标定周期是多少天",
+              "chunks": [
+                "{'text': '4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。', 'source_doc': 'CV-X系列视觉检测系统操作手册（厂商版·摘录）', 'doc_type': '厂商手册', 'section': '4.1 标定周期', 'score': 0.8183}",
+                "{'text': '3.2 标定周期\\n标定周期为 30 天一次。每次换型、换料、调整工装后须重新标定并留存记录。', 'source_doc': '视觉检测作业指导书 WI-QC-015', 'doc_type': '厂内SOP', 'section': '3.2 标定周期', 'score': 0.7651}",
+                "{'text': 'E-301 标定数据无效或过期\\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。', 'source_doc': '告警码对照表 ALM-2026', 'doc_type': '告警码表', 'section': 'E-301 标定数据无效或…(+21)"
+              ]
+            },
+            "turn": 1,
+            "ev_no": 1
+          },
+          {
+            "tool": "check_doc_conflict",
+            "args": {
+              "param_name": "标定周期"
+            },
+            "result": {
+              "param_name": "标定周期(天)",
+              "has_conflict": true,
+              "value_count": 2,
+              "conflicts": [
+                "{'source': 'CV-X系列视觉检测系统操作手册（厂商版·摘录）', 'doc_type': '厂商手册', 'section': '4.1 标定周期', 'value': 90}",
+                "{'source': '视觉检测作业指导书 WI-QC-015', 'doc_type': '厂内SOP', 'section': '3.2 标定周期', 'value': 30}"
+              ],
+              "likely_authoritative": "厂商手册",
+              "note": "参数名「标定周期」已按「标定周期(天)」归一化后查询。存在冲突，两类文档取值不同：厂商手册=90、厂内SOP=30。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。",
+              "normalized_from": "标定周期"
+            },
+            "turn": 1,
+            "ev_no": 2
+          }
+        ],
+        "final": {
+          "conclusion": "手册中关于标定周期存在冲突，未给出统一数值：\n1. CV-X系列视觉检测系统操作手册（厂商版·摘录）4.1 规定设备标定周期为 90 天。\n2. 视觉检测作业指导书 WI-QC-015 3.2 规定标定周期为 30 天一次。\n两处取值不一致，应确认实际适用的文件，不能自行选定其一作为标准值。",
+          "claims": [
+            {
+              "text": "CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。",
+              "quote": "出处：CV-X系列视觉检测系统操作手册（厂商版·摘录） / 4.1 标定周期",
+              "ref": "search_manual#chunks[0].text"
+            },
+            {
+              "text": "该手册规定设备标定周期为 90 天。",
+              "quote": "设备标定周期为 90 天。",
+              "ref": "search_manual#chunks[0].text"
+            },
+            {
+              "text": "视觉检测作业指导书 WI-QC-015 的 3.2 节规定了标定周期。",
+              "quote": "出处：视觉检测作业指导书 WI-QC-015 / 3.2 标定周期",
+              "ref": "search_manual#chunks[1].text"
+            }
+          ]
+        },
+        "final_text": "手册中关于标定周期存在冲突，未给出统一数值：\n1. CV-X系列视觉检测系统操作手册（厂商版·摘录）4.1 规定设备标定周期为 90 天。\n2. 视觉检测作业指导书 WI-QC-015 3.2 规定标定周期为 30 天一次。\n两处取值不一致，应确认实际适用的文件，不能自行选定其一作为标准值。\n- CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。[search_manual]\n- 该手册规定设备标定周期为 9…(+111)",
+        "intent": "knowledge",
+        "intent_conf": 0.88,
+        "intent_note": "",
+        "intent_reason": "询问标定周期的规定天数，属规则标准类问题，不依赖具体设备，也未涉及异常现象或要查这台设备的实际配置。",
+        "messages": [
+          {
+            "role": "user",
+            "content": "标定周期是多少天"
+          }
+        ],
+        "misquoted": [
+          "CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。（引文在 search_manual#chunks[0].text 里找不到：出处：CV-X系列视觉检测系统操作手册（厂商版·摘录） ）",
+          "视觉检测作业指导书 WI-QC-015 的 3.2 节规定了标定周期。（引文在 search_manual#chunks[1].text 里找不到：出处：视觉检测作业指导书 WI-QC-015 / 3.2）"
+        ],
+        "missing": [],
+        "param_names": [
+          "标定周期"
+        ],
+        "phenomenon": "",
+        "plan_retry": 0,
+        "session_summary": "[1] 用户「标定周期是多少天」→ knowledge；工具 search_manual,check_doc_conflict；结束=未跑循环；冲突 1 处；结论「{\"conclusion\": \"手册中关于标定周期存在冲突，未给出统一数值：\\n1. CV-X系列视觉检测系统操作手册（厂商版·摘录）4.1 规定设备标定周期为」",
+        "slots": {
+          "device_id": "",
+          "phenomenon": ""
+        },
+        "state_ver": 2,
+        "steps": 2,
+        "stop_reason": "",
+        "svc_fail": "",
+        "thread_id": "state-sample-34fc0172",
+        "tool_names": [
+          "search_manual",
+          "check_doc_conflict"
+        ],
+        "trace_id": "20261118_204038_0513",
+        "turn": 1,
+        "unknown": [],
+        "user_msg": "标定周期是多少天"
+      }
+    },
+    "clarify": {
+      "query": "夜班误判率偏高怎么办",
+      "thread": "state-sample-0b812843",
+      "intent": "clarify",
+      "steps": 0,
+      "stop_reason": "",
+      "tool_names": [],
+      "state": {
+        "blocked": [],
+        "check_action": "",
+        "check_ev": null,
+        "check_notes": [],
+        "check_retry": 0,
+        "check_unsourced0": 0,
+        "cite_fail": [],
+        "cite_stats": {},
+        "conflicts": [],
+        "device_id": "",
+        "device_ids": [],
+        "evidence": [],
+        "final": {
+          "conclusion": "你提到「夜班误判率偏高」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+          "claims": [],
+          "advice": []
+        },
+        "final_text": "你提到「夜班误判率偏高」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+        "intent": "clarify",
+        "intent_conf": 0.9,
+        "intent_note": "",
+        "intent_reason": "判为诊断但没有设备号，无法确定诊断对象，降级为追问",
+        "last_question": "你提到「夜班误判率偏高」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+        "messages": [
+          {
+            "role": "user",
+            "content": "夜班误判率偏高怎么办"
+          }
+        ],
+        "misquoted": [],
+        "missing": [
+          "具体是哪台设备",
+          "从什么时候开始、误判率具体是多少",
+          "误判的具体表现（过杀/漏检、哪个工位或产品型号）"
+        ],
+        "param_names": [],
+        "phenomenon": "夜班误判率偏高",
+        "plan_retry": 0,
+        "session_summary": "",
+        "slots": {
+          "device_id": "",
+          "phenomenon": "夜班误判率偏高"
+        },
+        "state_ver": 2,
+        "steps": 0,
+        "stop_reason": "",
+        "svc_fail": "",
+        "thread_id": "state-sample-0b812843",
+        "tool_names": [],
+        "trace_id": "20261118_204051_edcb",
+        "turn": 1,
+        "unknown": [],
+        "user_msg": "夜班误判率偏高怎么办"
+      }
+    }
+  },
+  "fields": {
+    "blocked": {
+      "shape": "list[str]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        "按小时聚合时单个时段样本仅2~4条，最大一档为2026-11-07 21:00的66.67%（3条中2条），样本量不足以支撑「夜班单独恶化」的判断"
+      ]
+    },
+    "check_action": {
+      "shape": "str",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "pass"
+    },
+    "check_ev": {
+      "shape": "int",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 12
+    },
+    "check_notes": {
+      "shape": "list[]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": []
+    },
+    "check_retry": {
+      "shape": "int",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 0
+    },
+    "check_unsourced0": {
+      "shape": "int",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 1
+    },
+    "cite_fail": {
+      "shape": "list[code, note]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "knowledge",
+      "sample": [
+        {
+          "code": "quote_not_found",
+          "note": "CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。（引文在 search_manual#chunks[0].text 里找不到：出处：CV-X系列视觉检测系统操作手册（厂商版·摘录） ）"
+        },
+        {
+          "code": "quote_not_found",
+          "note": "视觉检测作业指导书 WI-QC-015 的 3.2 节规定了标定周期。（引文在 search_manual#chunks[1].text 里找不到：出处：视觉检测作业指导书 WI-QC-015 / 3.2）"
+        }
+      ]
+    },
+    "cite_stats": {
+      "shape": "dict{bare_conclusion, cite_cut, cite_oob, cited, cited_ok, cited_path, ev, ev_mismatch, json_bad, json_fixed, multi_bad, mult}",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": {
+        "qty": 22,
+        "pct": 9,
+        "cited_ok": 21,
+        "cited_path": 21,
+        "cite_oob": 0,
+        "path_ok": 21,
+        "path_bad": 0,
+        "path_miss": 0,
+        "json_bad": 0,
+        "unsourced": 1,
+        "ref_bad": 0,
+        "cite_cut": 0,
+        "json_fixed": 0,
+        "range_ok": 1,
+        "range_bad": 0,
+        "ref_ambiguous": 0,
+        "multi_ok": 1,
+        "multi_bad": 0,
+        "qual_ok": 0,
+        "qual_bad": 0,
+        "qual_unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "bare_conclusion": 0,
+        "svc_fail": 0,
+        "ev_mismatch": 0,
+        "cited": 21,
+        "ev": 12
+      }
+    },
+    "conflicts": {
+      "shape": "list[param, values]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        {
+          "param": "光源亮度设定",
+          "values": [
+            {
+              "source": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+              "value": "80"
+            },
+            {
+              "source": "视觉检测作业指导书 WI-QC-015",
+              "value": "65"
+            },
+            {
+              "source": "现场调试记录 2026-09",
+              "value": "80"
+            }
+          ]
+        }
+      ]
+    },
+    "device_id": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "CX-101"
+    },
+    "device_ids": {
+      "shape": "list[str]",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        "CX-101"
+      ]
+    },
+    "evidence": {
+      "shape": "list[args, ev_no, result, sig, tool, truncated, turn]",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        {
+          "tool": "query_device_profile",
+          "args": {
+            "device_id": "CX-101"
+          },
+          "sig": "device_id=CX-101",
+          "result": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"20…(+107)",
+          "truncated": false,
+          "ev_no": 1,
+          "turn": 1
+        },
+        {
+          "tool": "query_defect_log",
+          "args": {
+            "device_id": "CX-101",
+            "group_by": "hour"
+          },
+          "sig": "device_id=CX-101,group_by=hour",
+          "result": "[query_defect_log{device_id=CX-101,group_by=hour}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-11-07 17:19:52\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"hour\", \"total\": 113, \"false_positive_count\":…(+1292)",
+          "truncated": false,
+          "ev_no": 2,
+          "turn": 1
+        },
+        {
+          "tool": "query_defect_log",
+          "args": {
+            "device_id": "CX-101",
+            "group_by": "station"
+          },
+          "sig": "device_id=CX-101,group_by=station",
+          "result": "[query_defect_log{device_id=CX-101,group_by=station}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-11-07 17:19:52\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"station\", \"total\": 113, \"false_positive_c…(+845)",
+          "truncated": false,
+          "ev_no": 3,
+          "turn": 1
+        }
+      ]
+    },
+    "final": {
+      "shape": "dict{advice, claims, conclusion}",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": {
+        "conclusion": "误判并非夜班独有，真正集中在1号工位：该工位光源已超额定寿命、亮度被两次下调，成像衰减导致尺寸类过杀偏高；算法侧（缺陷类型分布分散、最近标定通过）不像主因，但亮度设定与标定周期各存在两套相互矛盾的口径，需人工定口径。",
+        "claims": [
+          {
+            "text": "近7天总检测113条、过杀27条，整体误判率23.89%",
+            "value": 23.89,
+            "unit": "%",
+            "ref": "query_defect_log{group_by=station}#false_positive_rate"
+          },
+          {
+            "text": "1号工位34条中过杀20条，误判率58.82%",
+            "value": 58.82,
+            "unit": "%",
+            "ref": "query_defect_log{group_by=station}#groups[0].rate"
+          },
+          {
+            "text": "3号工位47条中过杀5条，误判率10.64%",
+            "value": 10.64,
+            "unit": "%",
+            "ref": "query_defect_log{group_by=station}#groups[1].rate"
+          }
+        ],
+        "advice": [
+          "先处理1号工位：清洁镜头并重新标定，复测一轮确认误判率是否回落，再判断是否需换镜头/调整安装位置",
+          "光源累计8620小时已超额定8000小时，亮度又被从85一路下调到65，建议直接更换光源，这是当前最可能的光学根因",
+          "亮度设定存在两套口径（厂商手册80 / 厂内SOP 65），换光源后按哪个值设定请工艺或质量确认，不要沿用现在被反复下调的65"
+        ]
+      }
+    },
+    "final_text": {
+      "shape": "str",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "误判并非夜班独有，真正集中在1号工位：该工位光源已超额定寿命、亮度被两次下调，成像衰减导致尺寸类过杀偏高；算法侧（缺陷类型分布分散、最近标定通过）不像主因，但亮度设定与标定周期各存在两套相互矛盾的口径，需人工定口径。\n- 近7天总检测113条、过杀27条，整体误判率23.89%[query_defect_log{group_by=station}]\n- 1号工位34条中过杀20条，误判率58.82%[query_defect_log{g…(+1365)"
+    },
+    "intent": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "diagnose"
+    },
+    "intent_conf": {
+      "shape": "float",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 0.92
+    },
+    "intent_note": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": ""
+    },
+    "intent_reason": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "用户明确描述“夜班误判率偏高”这一异常并追问原因、要求排查，属于找原因而非单纯取数。"
+    },
+    "last_question": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "clarify"
+      ],
+      "sample_case": "clarify",
+      "sample": "你提到「夜班误判率偏高」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。"
+    },
+    "messages": {
+      "shape": "list[content, role]",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        {
+          "role": "user",
+          "content": "CX-101 的夜班误判率为什么一直偏高，帮我查下"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "call_00_zlcPTsov5eMnwpK1HZ2H6799",
+              "type": "function",
+              "function": "{'name': 'query_device_profile', 'arguments': '{\"device_id\": \"CX-101\"}'}"
+            },
+            {
+              "id": "call_01_5t4zEmj81Pol9x8eIofd9341",
+              "type": "function",
+              "function": "{'name': 'query_defect_log', 'arguments': '{\"device_id\": \"CX-101\", \"group_by\": \"hour\"}'}"
+            },
+            {
+              "id": "call_02_De9ZPvjXaRIspcMmIWxv4728",
+              "type": "function",
+              "function": "{'name': 'query_defect_log', 'arguments': '{\"device_id\": \"CX-101\", \"group_by\": \"station\"}'}"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call_00_zlcPTsov5eMnwpK1HZ2H6799",
+          "name": "query_device_profile",
+          "content": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"20…(+107)"
+        }
+      ]
+    },
+    "misquoted": {
+      "shape": "list[str]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "knowledge",
+      "sample": [
+        "CV-X系列视觉检测系统操作手册（厂商版·摘录）的 4.1 节规定了标定周期。（引文在 search_manual#chunks[0].text 里找不到：出处：CV-X系列视觉检测系统操作手册（厂商版·摘录） ）",
+        "视觉检测作业指导书 WI-QC-015 的 3.2 节规定了标定周期。（引文在 search_manual#chunks[1].text 里找不到：出处：视觉检测作业指导书 WI-QC-015 / 3.2）"
+      ]
+    },
+    "missing": {
+      "shape": "list[str]",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        "偏高从什么时候开始、持续多久",
+        "误判的具体类型或典型样本",
+        "夜班与白班的参数/环境差异（光源、温度、换班操作等）"
+      ]
+    },
+    "param_names": {
+      "shape": "list[str]",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "knowledge",
+      "sample": [
+        "标定周期"
+      ]
+    },
+    "phenomenon": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "夜班误判率一直偏高"
+    },
+    "plan_retry": {
+      "shape": "int",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 0
+    },
+    "session_summary": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "[1] 用户「CX-101 的夜班误判率为什么一直偏高，帮我查下」→ diagnose；工具 query_device_profile,query_defect_log,query_defect_log,query_light_usage,query_calibration,query_defect_log,query_defect_log,search_manual,check_doc_conflict,query_defect_lo…(+138)"
+    },
+    "slots": {
+      "shape": "dict{device_id, phenomenon}",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": {
+        "device_id": "CX-101",
+        "phenomenon": "夜班误判率一直偏高"
+      }
+    },
+    "state_ver": {
+      "shape": "int",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 2
+    },
+    "steps": {
+      "shape": "int",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 12
+    },
+    "stop_reason": {
+      "shape": "str",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "enough"
+    },
+    "svc_fail": {
+      "shape": "str",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": ""
+    },
+    "thread_id": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "state-sample-a9f0909e"
+    },
+    "tool_names": {
+      "shape": "list[str]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": [
+        "query_device_profile",
+        "query_defect_log",
+        "query_defect_log"
+      ]
+    },
+    "trace_id": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "20261118_203746_c349"
+    },
+    "turn": {
+      "shape": "int",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": 1
+    },
+    "unknown": {
+      "shape": "list[kind, note, what]",
+      "in_reset": true,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_unknown",
+      "sample": [
+        {
+          "kind": "device_not_found",
+          "what": "CX-999",
+          "note": "设备编号不在台账里"
+        }
+      ]
+    },
+    "user_msg": {
+      "shape": "str",
+      "in_reset": false,
+      "seen_in": [
+        "diagnose_ok",
+        "diagnose_unknown",
+        "knowledge",
+        "clarify"
+      ],
+      "sample_case": "diagnose_ok",
+      "sample": "CX-101 的夜班误判率为什么一直偏高，帮我查下"
+    }
+  }
+}

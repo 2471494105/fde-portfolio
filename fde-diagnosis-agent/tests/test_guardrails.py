@@ -582,6 +582,37 @@ class ClaimContractTest(unittest.TestCase):
         # 小数 ↔ 百分比的换算是这里最容易错的一环，单独断言
         self.assertGreaterEqual(res["cite_stats"]["path_ok"], 1)
 
+    BRIGHT = ('{"brightness_history": [{"ts": "2024-11-08 09:00:00", "value": 78}],'
+              ' "brightness_set": 78}')
+
+    def test_single_value_pointing_at_array_asks_for_items(self):
+        """ref 指数组、claim 是单值 → 要说"结构装不下"，不许说成"值不存在"。
+
+        A4 的原话是「候选值 [{'ts': '2024-11-08 09:00:00', 'value': 78}] 都不是 78」。
+        读数的人得自己反推出"哦这是数组引用"——判据明明知道真相（ref 是数组、
+        claim 是单值），却把它说成"你编了个数"。
+        """
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "亮度设定自装机以来一直是 78", "value": 78,
+             "ref": "query_light_usage#brightness_history"}]},
+            self.BRIGHT, tool="query_light_usage")
+        self.assertEqual(res["cite_stats"]["path_bad"], 1, "判定不变：仍然是失败")
+        msg = res["misquoted"][0]
+        self.assertIn("items", msg)
+        self.assertNotIn("都不是 78", msg)
+
+    def test_single_value_on_scalar_ref_keeps_old_wording(self):
+        """反向断言：同一个数、同一个工具，指到标量字段时仍按"值不对"报。
+
+        改话术不能把"值真对不上"也顺带说成"结构装不下"——那是换了个说法骗自己。
+        """
+        res = self._verify({"conclusion": "x", "claims": [
+            {"text": "亮度设定 80", "value": 80,
+             "ref": "query_light_usage#brightness_set"}]},
+            self.BRIGHT, tool="query_light_usage")
+        self.assertEqual(res["cite_stats"]["path_bad"], 1)
+        self.assertIn("都不是 80", res["misquoted"][0])
+
     def test_null_ref_is_grey_not_fatal(self):
         # 自己定的验收目标：有数字、没出处 → 放行但标灰
         res = self._verify({"conclusion": "复位后应回落", "claims": [

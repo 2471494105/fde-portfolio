@@ -1668,6 +1668,20 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             stats["cited_path"] += 1
             stats["cited_ok"] += 1
         else:
+            # ---- 结构不匹配：ref 指着数组，claim 却是单值 ----
+            # A4 就是这样：模型想把"78 属于 2024-11-08 那条记录"塞进一个 value 字段，
+            # 判据只能取到整个数组，float(list) 必然失败，于是报
+            # 「候选值 [{'ts': ..., 'value': 78}] 都不是 78」——读起来像编数。
+            # 但判据自己知道真相：ref 是数组、claim 是单值。这句话该它说，不该让读数的人反推。
+            if hits and all(isinstance(g, (list, dict)) for g in hits):
+                stats["path_bad"] += 1
+                n = len(hits[0]) if isinstance(hits[0], list) else 1
+                misquoted.append(
+                    f"{text}（ref 指向数组/结构：{tool}#{path} 返回 {n} 条记录，"
+                    f"单值 claim 装不下「哪条记录等于多少」。"
+                    f"这种配对请改用 items: [{{\"key\": \"<标识>\", \"value\": {v}}}])")
+                continue
+
             # "值对不上"有两种成因，修法完全不同：
             #   ① 模型真编了数               → 改 prompt / 换模型
             #   ② 它引的是另一组的同一个字段 → 让它补参数指纹

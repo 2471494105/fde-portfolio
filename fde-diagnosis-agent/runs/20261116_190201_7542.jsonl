@@ -1,7 +1,0 @@
-{"t": 0, "event": "run_start", "user_msg": "你是谁", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
-{"t": 7, "event": "node_start", "node": "understand"}
-{"t": 9317, "event": "node_end", "node": "understand", "ms": 9310, "detail": "意图：clarify"}
-{"t": 9318, "event": "node_start", "node": "ask_user"}
-{"t": 9334, "event": "node_end", "node": "ask_user", "ms": 16, "detail": "引用 0 条数据"}
-{"t": 9337, "event": "result", "steps": 0, "intent": "clarify", "blocked": [], "tools": [], "final_head": "请再具体一点：你想让我查什么、看什么？"}
-{"t": 9338, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 9338}

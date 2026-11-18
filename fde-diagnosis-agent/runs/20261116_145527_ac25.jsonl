@@ -1,7 +1,0 @@
-{"t": 0, "event": "run_start", "user_msg": "CX-101 上次那个工单处理了吗", "model": "deepseek-v4.1-flash-1017", "note": "", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
-{"t": 11, "event": "intake", "device_id": "CX-101", "matched": true, "msg_len": 17, "turn": 1}
-{"t": 11003, "event": "understand", "intent": "lookup", "device_ids": ["CX-101"], "phenomenon": "", "missing": ["工单号或大致时间范围"], "reason": "用户在询问已有工单的处理状态，目的是查看记录，并未描述异常或追问原因。"}
-{"t": 11179, "event": "lookup", "device_ids": ["CX-101"], "blocks": 2, "steps": 3}
-{"t": 11181, "event": "verify", "blocked": [], "final_len": 631, "pct_count": 4}
-{"t": 11188, "event": "result", "thread_id": "tmp-webtest02", "turn": 1, "intent": "lookup", "steps": 3, "tools": ["query_device_profile", "query_defect_log", "query_work_order"], "blocked": [], "device_ids": ["CX-101"], "slots": {"device_id": "CX-101", "phenomenon": ""}, "final_head": "### CX-101（3号线 / 1-3号工位）\n\n| 项 | 值 |\n|---|---|\n| 相机 | In-Sight 2801 |\n| 镜头 | 16mm |\n| 光源 | CA-DC21E |\n| 安装日期 | 2025-03-12 00:00:00 |\n| 保养周期 | 90 天 |\n| 日志条数 | 200（最新 2026-11-14 17:19:52） |\n\n最近 7 天（2026-11-07 17:19:52 ~ 2026-11-14 17:19:52）：共判定 113 条，过杀 27 条，整体误判率 23.89%\n\n| 工位 | 判定 | 过杀 | 误判率 |\n|---|--"}
-{"t": 11188, "event": "run_end", "error": null, "tokens_total": 805, "elapsed_ms": 11188}

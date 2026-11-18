@@ -1,8 +1,0 @@
-{"t": 1, "event": "run_start", "user_msg": "CX-104 从 11月8号开始误判突然变多，之前一直好好的", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
-{"t": 8, "event": "node_start", "node": "understand"}
-{"t": 3534, "event": "node_end", "node": "understand", "ms": 3526, "detail": "意图：diagnose"}
-{"t": 3534, "event": "node_start", "node": "plan"}
-{"t": 9244, "event": "node_end", "node": "plan", "ms": 5709, "detail": "决定调用 query_device_profile、search_manual、query_calibration"}
-{"t": 9245, "event": "node_start", "node": "act"}
-{"t": 9727, "event": "node_end", "node": "act", "ms": 482, "detail": "query_device_profile、search_manual、query_calibration 已返回"}
-{"t": 9728, "event": "node_start", "node": "plan"}

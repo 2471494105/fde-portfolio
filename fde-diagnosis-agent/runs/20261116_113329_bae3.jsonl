@@ -1,7 +1,0 @@
-{"t": 1, "event": "run_start", "user_msg": "E-101 这个告警是什么意思", "model": "deepseek-chat", "note": ""}
-{"t": 8, "event": "intake", "device_id": "", "matched": false, "msg_len": 15}
-{"t": 1176, "event": "understand", "intent": "knowledge", "device_ids": [], "phenomenon": "", "missing": [], "reason": "用户在询问告警代码的含义，属于不依赖具体设备的规则/含义类问题。"}
-{"t": 5386, "event": "knowledge", "status": "ok", "chunks": 5, "answer_len": 31}
-{"t": 5387, "event": "verify", "blocked": [], "final_len": 31, "pct_count": 0}
-{"t": 5398, "event": "result", "intent": "knowledge", "steps": 1, "tools": ["search_manual"], "blocked": [], "device_id": "", "final_head": "手册片段中没有收录“E-101”这个告警的含义，无法据此回答。"}
-{"t": 5398, "event": "run_end", "error": null, "tokens_total": 963, "elapsed_ms": 5398}

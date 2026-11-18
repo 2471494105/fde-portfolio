@@ -1,5 +1,0 @@
-{"t": 1, "event": "run_start", "user_msg": "CX-104 从 11月8号开始误判突然变多，之前一直好好的", "model": "deepseek-v4.1-flash-1017", "note": "stream 模式：只记节点节奏，token 未记录", "provider": "openai", "base_url": "https://minekuai.cn/v1"}
-{"t": 17, "event": "node_start", "node": "understand"}
-{"t": 73062, "event": "node_end", "node": "understand", "ms": 73044, "detail": "意图：diagnose"}
-{"t": 73062, "event": "node_start", "node": "plan"}
-{"t": 474848, "event": "run_end", "error": null, "tokens_total": 0, "elapsed_ms": 474848}

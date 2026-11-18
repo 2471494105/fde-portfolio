@@ -28,7 +28,9 @@ def show(tag, state):
     print(f"意图={state.get('intent')}  轮次={state.get('turn')}  "
           f"设备={ids or '无'}  步数={state.get('steps')}")
     print(f"slots={state.get('slots')}")
-    print(f"结论：{(state.get('final') or '')[:220].strip()}")
+    # final 出 state 时是结构化 dict（conclusion/claims/advice），
+    # 直接切片会 KeyError: slice(...)——dict 拿 slice 当 key 查。
+    print(f"结论：{final_to_text(state.get('final'))[:220].strip()}")
 
 
 def case_a():

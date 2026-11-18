@@ -390,7 +390,8 @@ def understand(state):
         # 自己的 hint，读的是 intake 用正则抽的那份（在本次写之前）。
         # 留着只会让"这台设备是哪台"有两个来源，改一个忘一个。
         "device_ids": ids,
-        "phenomenon": phen,
+        # 不写顶层 phenomenon：同一句话在 slots 里已经有一份，存两处就会分叉。
+        # ask_user 改成直接读 slots["phenomenon"]，读到的就是这一轮写进去的那个值。
         "missing": list(data.get("missing") or []),
         "param_names": [str(p).strip() for p in (data.get("param_names") or []) if str(p).strip()],
         "intent_reason": reason,
@@ -424,7 +425,9 @@ def ask_user(state):
     slots = state.get("slots") or {}
     # 本轮没提设备、但上一轮确认过 → 文案里直接用，不再索要
     known_dev = (ids[0] if ids else "") or (slots.get("device_id") or "")
-    phen = (state.get("phenomenon", "") or "").strip()
+    # 现象只读 slots：understand 每轮都会把本轮值写进 slots，顶层不再保留副本。
+    # 原来这里读 state["phenomenon"]，等于同一句话有两个存放位置，写漏一处两边就分叉。
+    phen = str(slots.get("phenomenon") or "").strip()
     phen_show = phen[:30] + ("…" if len(phen) > 30 else "")
     note = (state.get("intent_note") or "").strip()
     missing = [m for m in (state.get("missing") or []) if m]
@@ -2355,6 +2358,30 @@ KNOWLEDGE_PROMPT = """你在回答视觉检测设备的规则/标准/含义类�
 6. 不要编造任何数字。"""
 
 
+def _as_number(v):
+    """把"整串就是数字"的字符串转成数字，其余原样返回。
+
+    为什么需要它：check_doc_conflict 的 value 直接取自 Postgres 的 JSONB，
+    库里的 typeof 取决于当年入库时怎么写的——线上有 "80"/"65" 这种字符串，
+    单测里是数字。读端一旦写 v["value"] > 65 就 TypeError。
+    只在 state 视图层统一类型，evidence 里保留工具返回的原值（那是可审计的原始数据）。
+
+    边界刻意收紧：只认"整串是数字"，所以 "90天" / "90~120" / "" 都不动——
+    把带单位的字符串截成 90 比留成字符串更危险。
+    """
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if re.fullmatch(r"-?\d+", s):
+            return int(s)
+        if re.fullmatch(r"-?\d+\.\d+", s):
+            return float(s)
+    return v
+
+
 def _conflict_records(conflicts):
     """把 check_doc_conflict 的返回压成进 state 的精简形态。
 
@@ -2365,7 +2392,8 @@ def _conflict_records(conflicts):
     """
     return [
         {"param": c.get("param_name"),
-         "values": [{"source": x.get("source"), "value": x.get("value")}
+         "values": [{"source": x.get("source"),
+                     "value": _as_number(x.get("value"))}
                     for x in (c.get("conflicts") or [])]}
         for c in conflicts
     ]

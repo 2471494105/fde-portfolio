@@ -83,7 +83,8 @@ class State(TypedDict, total=False):
     # understand 的输出
     intent: str            # diagnose / lookup / knowledge / action / clarify
     device_ids: list       # 模型从原话里抽到的设备号，可能 0 个或多个
-    phenomenon: str        # 用户实际说出口的现象/猜测，没说就是空串
+    # 现象没有顶层字段：它只活在 slots["phenomenon"]。这里曾存过一份同值副本，
+    # understand 每轮写两处——写漏一处，clarify 与 plan 就会看到两个版本。
     missing: list          # 还缺什么才能继续
     # "查过了，库里确实没有"——和 missing 是两件事，不能混：
     #   missing    还缺信息，所以要追问用户（缺的是**用户能给的**东西）

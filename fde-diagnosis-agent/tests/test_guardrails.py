@@ -1052,8 +1052,10 @@ class AskUserWordingTest(unittest.TestCase):
     """
 
     def test_phenomenon_known_only_asks_for_device(self):
-        out = nodes.ask_user({"device_ids": [], "phenomenon": "误判率有点高",
-                              "slots": {}, "missing": []})
+        # 现象只活在 slots 里（顶层不存副本），"已知现象"要构造在 slots 上
+        out = nodes.ask_user({"device_ids": [],
+                              "slots": {"phenomenon": "误判率有点高"},
+                              "missing": []})
         # 读 final_text（给人看的那份），不读 final：
         # final 是结构化结论（dict），出到人眼前才序列化。
         # 测试若耦合"final 一定是字符串"，改成 dict 时会在四条无关用例上误报。
@@ -1064,21 +1066,21 @@ class AskUserWordingTest(unittest.TestCase):
 
     def test_confirmed_device_in_slots_is_not_asked_again(self):
         # 本轮没提设备、上一轮确认过 → 文案直接用，不再索要
-        out = nodes.ask_user({"device_ids": [], "phenomenon": "夜班更差",
-                              "slots": {"device_id": "CX-104"}, "missing": []})
+        out = nodes.ask_user({"device_ids": [],
+                              "slots": {"device_id": "CX-104", "phenomenon": "夜班更差"},
+                              "missing": []})
         txt = out["final_text"]
         self.assertIn("CX-104", txt)
         self.assertIn("夜班更差", txt)
         self.assertNotIn("还缺一个设备编号", txt)
 
     def test_nothing_known_asks_for_both(self):
-        out = nodes.ask_user({"device_ids": [], "phenomenon": "",
-                              "slots": {}, "missing": []})
+        out = nodes.ask_user({"device_ids": [], "slots": {}, "missing": []})
         self.assertIn("需要两个信息", out["final_text"])
 
     def test_intent_note_is_prefixed(self):
         # 低置信降级时先告诉用户"我是按哪种理解在问"
-        out = nodes.ask_user({"device_ids": ["CX-104"], "phenomenon": "",
+        out = nodes.ask_user({"device_ids": ["CX-104"],
                               "slots": {}, "missing": [],
                               "intent_note": "意图置信度 0.45 低于 0.6，先追问确认再往下走"})
         self.assertTrue(out["final_text"].startswith("意图置信度 0.45"))
@@ -1086,8 +1088,7 @@ class AskUserWordingTest(unittest.TestCase):
     def test_ask_user_gives_readable_text_for_frontend(self):
         # 追问是唯一一条"不经过 verify"的路径，所以它必须自己带上 final_text：
         # 前端读 `final_text || final`，只给结构化 final 会让这一屏显示一段 JSON。
-        out = nodes.ask_user({"device_ids": ["CX-104"], "phenomenon": "",
-                              "slots": {}, "missing": []})
+        out = nodes.ask_user({"device_ids": ["CX-104"], "slots": {}, "missing": []})
         self.assertTrue(out["final_text"].strip(), "ask_user 必须给 final_text")
         self.assertIsInstance(out["final"], dict, "final 应走统一结论结构")
         self.assertEqual(out["final"]["claims"], [], "追问里没有可引用的事实")

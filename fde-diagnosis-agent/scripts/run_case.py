@@ -24,7 +24,7 @@ def main():
     state = run(msg)
 
     ids = state.get("device_ids") or []
-    phen = state.get("phenomenon") or "（未描述）"
+    phen = (state.get("slots") or {}).get("phenomenon") or "（未描述）"
     print(f"=== 意图：{state.get('intent', '') or '（无）'} ===")
     print(f"    设备：{', '.join(ids) if ids else '（未指定）'}")
     print(f"    现象：{phen}")

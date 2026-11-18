@@ -6,6 +6,7 @@
 
 import datetime
 import json
+import os
 import re
 import time
 
@@ -13,13 +14,21 @@ from openai import OpenAI
 
 from app import trace
 from app.graph.llm import CALL_TIMEOUT, MODEL, get_client
-from app.graph.state import fresh_reset_values
+from app.graph.state import STATE_VER, fresh_reset_values
 from app.tools import TOOL_IMPLS, TOOL_SCHEMAS
 from app.tools.diagnosis import query_defect_log, query_device_profile
 from app.tools.manual import check_doc_conflict, search_manual
 from app.tools.workorder import query_work_order
 
-MAX_STEPS = 12
+# 工具调用预算。可用环境变量 FDE_MAX_STEPS 覆盖，默认 12。
+#
+# 为什么要能覆盖：`budget_exhausted` 这条分支必须真实触发过一次才能引用。
+# 默认 12 步时模型几乎总是自己收工——103 条运行记录里 `stop_reason` 有值的
+# 6 条全是 `enough`，`budget_exhausted` 出现 0 次。把它调成 3 跑一次，
+# 就能拿到"被预算掐断时结论长什么样、report 怎么标"的真实样本。
+#
+# 注意它在 import 时求值：改了环境变量要新起进程才生效（本来也该如此）。
+MAX_STEPS = int(os.environ.get("FDE_MAX_STEPS") or 12)
 
 DEVICE_RE = re.compile(r"CX-\d{3}", re.IGNORECASE)
 # 判"结论里有没有数字"之前，先把标识符剥掉。
@@ -118,17 +127,26 @@ def intake(state):
     m = DEVICE_RE.search(msg)
     device_id = m.group(0).upper() if m else ""
     turn = int(state.get("turn") or 0) + 1
+    # 旧会话接着用新代码：记一条迁移。
+    # 不记的话，"这条会话为什么字段对不上"只能靠翻 commit 猜是哪一版。
+    # 全新会话 prev_ver=0，那是从零开始，不是迁移，不产生这条事件——
+    # 否则每次首轮都刷一条噪音，真迁移时反而没人看。
+    prev_ver = int(state.get("state_ver") or 0)
+    if 0 < prev_ver < STATE_VER:
+        trace.emit("migrate", from_ver=prev_ver, to_ver=STATE_VER, turn=turn)
     trace.emit("intake", device_id=device_id, matched=bool(m), msg_len=len(msg), turn=turn)
-    # 本轮字段的清单在 state.RESET_EACH_TURN，这里只补三个每轮现算的：
+    # 本轮字段的清单在 state.RESET_EACH_TURN，这里只补四个每轮现算的：
     #   device_id —— 正则结果，作为 understand 的提示
     #   messages  —— 本轮这条 user 消息（其余历史靠 reducer 累积）
     #   turn      —— 轮次 +1
+    #   state_ver —— 当前 schema 版本（跨轮保留，不重置）
     # 加新字段时去 RESET_EACH_TURN 登记，不要再往这个 return 里抄一遍。
     return {
         **fresh_reset_values(),
         "device_id": device_id,
         "messages": [{"role": "user", "content": msg}],
         "turn": turn,
+        "state_ver": STATE_VER,
     }
 
 
@@ -366,7 +384,11 @@ def understand(state):
         "intent": intent,
         "intent_conf": conf,
         "intent_note": intent_note,
-        "device_id": ids[0] if ids else "",
+        # 不再回写顶层 device_id。它原来写的是 ids[0]，是 device_ids 的副本——
+        # 正是 state.py 开头那句"派生不存"要禁的东西。下游也确实没人读它：
+        # _owned_device_ids 早就改成只读 device_ids 了，唯一的读者是 understand
+        # 自己的 hint，读的是 intake 用正则抽的那份（在本次写之前）。
+        # 留着只会让"这台设备是哪台"有两个来源，改一个忘一个。
         "device_ids": ids,
         "phenomenon": phen,
         "missing": list(data.get("missing") or []),
@@ -1458,7 +1480,7 @@ def _norm_quote(s):
     return s
 
 
-def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
+def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted, fails=None):
     """引文型 claim：模型说"这段原文在这个片段里"，程序回原文核对。
 
     数字型 claim 问的是"这个数在不在这个字段"，引文型问的是"这句话在不在这份原文"。
@@ -1468,7 +1490,16 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
     允许引多段：Anthropic 的做法是模型只给位置、程序去文档里切，所以 cited_text
     永远正确；我们让模型自己抄，就必须接受它引两处的情况。按省略号/换行拆开，
     每一段都必须真是原文——引多段可以，编一段不行。
+
+    fails：失败明细列表。misquoted 里那条是"给人看的句子"，fails 里那条是
+    "给程序分类的记录"。两处必须是同一次决定——所以统一走 _fail()，
+    而不是在两个地方各写一遍。
     """
+    def _fail(code, msg):
+        misquoted.append(msg)
+        if fails is not None:
+            fails.append({"code": code, "note": msg})
+
     ref = c.get("ref")
     if not ref:
         stats["unsourced"] += 1
@@ -1477,7 +1508,7 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
     m = _REF_PAT.match(str(ref))
     if not m:
         stats["ref_bad"] += 1
-        misquoted.append(f"{text}（出处格式错:{ref}，应写 工具名#字段路径）")
+        _fail("ref_format", f"{text}（出处格式错:{ref}，应写 工具名#字段路径）")
         return
     tool, sig_g, path = m.group(1), (m.group(2) or ""), m.group(3)
     sig = sig_g[1:-1] if sig_g else ""
@@ -1488,7 +1519,7 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
             blocked.append(f"{text}（{tool} 的返回不在本轮可见范围）")
         else:
             stats["ref_bad"] += 1
-            misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
+            _fail("tool_unknown", f"{text}（出处写了不存在的工具名 {tool}）")
         return
 
     # 指纹只收窄不排除，理由同 _verify_claims：匹配不上可能是被裁，可能是抄错参数，
@@ -1521,12 +1552,12 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
             blocked.append(f"{text}（{tool} 返回体过大已压缩，该字段未保留）")
         else:
             stats["path_miss"] += 1
-            misquoted.append(f"{text}（{tool} 的返回里没有字段 {path}）")
+            _fail("path_missing", f"{text}（{tool} 的返回里没有字段 {path}）")
         return
     if not any(isinstance(g, str) for g in hits):
         # 引文必须有原文可核。ref 指到一个数值，就没有"原文"这东西可引。
         stats["quote_bad"] += 1
-        misquoted.append(f"{text}（ref 指向的不是原文，撑不住一句引文）")
+        _fail("ref_not_text", f"{text}（ref 指向的不是原文，撑不住一句引文）")
         return
     segs = [s for s in re.split(r"…+|\.{3,}|\n", quote) if s.strip()]
     for g in hits:
@@ -1538,7 +1569,7 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted):
     stats["quote_bad"] += 1
     first = next(g for g in hits if isinstance(g, str))
     bad = [s for s in segs if _norm_quote(s) not in _norm_quote(first)]
-    misquoted.append(f"{text}（引文在 {tool}#{path} 里找不到：{bad[0][:28]}）")
+    _fail("quote_not_found", f"{text}（引文在 {tool}#{path} 里找不到：{bad[0][:28]}）")
 
 
 def _match_item(item, arr, unit):
@@ -1576,14 +1607,24 @@ def _match_item(item, arr, unit):
     return False
 
 
-def _verify_claims(doc, ev, stats, blocked, misquoted):
+def _verify_claims(doc, ev, stats, blocked, misquoted, fails=None):
     """按 claim 逐条校验：一个数字一条，各自带 ref。
 
     这条路把「引用」从文本解析搬到结构字段，所以三类老毛病结构性消失：
       span      一句三个数字共用一个锚点 —— 想写三个就必须写三条 claim
       写错/没写 混在同一个解析失败里 —— ref 空是没写，ref 指不到是写错
       标灰看不见 只能记在报告里     —— 渲染时把标记跟在数字后面
+
+    fails：失败明细。stats 是 27 个计数字段，半年后加一类失败就得再加一个 key，
+    而 key 加完没有人会回头去改 eval / 报告 / UI 的读数——它就慢慢变成第二个 state。
+    明细列表不一样：每项 {code, note}，加一类失败只是多一种 code，读的人不用改。
+    两处必须同一次决定，所以走 _fail()，不在两个地方各写一遍。
     """
+    def _fail(code, msg):
+        misquoted.append(msg)
+        if fails is not None:
+            fails.append({"code": code, "note": msg})
+
     # 证据按工具名建索引。档 C 之后 ref 是"工具名#字段路径"，
     # 同一个工具在一轮里可能调两次，所以每个工具对应一个列表而不是单条。
     # 校验时逐条尝试，任一命中即算引用成立——模型引的是"那次返回里的这个字段"，
@@ -1604,7 +1645,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                           _IDENT_RE.sub(" ", str(doc.get("conclusion") or "")))
         if bare:
             stats["bare_conclusion"] = 1
-            misquoted.append(
+            _fail(
+                "bare_conclusion",
                 f"结论里写了数字（{'、'.join(bare[:5])}）但 claims 为空，没有一个能被核验"
             )
 
@@ -1617,7 +1659,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         quote = str(c.get("quote") or "").strip()
         if v is None and quote:
             # 引文型：没有数字，但有它声称抄来的原文，回原文核对
-            _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted)
+            _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted, fails)
             continue
         # 多值型：`value` 为空但有 items，交给下面的 items 分支逐条配对
         items = c.get("items")
@@ -1648,8 +1690,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
         m = _REF_PAT.match(str(ref))
         if not m:
             stats["ref_bad"] += 1
-            misquoted.append(
-                f"{text}（出处格式错:{ref}，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）")
+            _fail("ref_format",
+                  f"{text}（出处格式错:{ref}，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）")
             continue
         tool, sig_g, path = m.group(1), (m.group(2) or ""), m.group(3)
         sig = sig_g[1:-1] if sig_g else ""
@@ -1666,7 +1708,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             else:
                 # 工具名根本不存在：这是编的出处，和"裁剪"不是一回事
                 stats["ref_bad"] += 1
-                misquoted.append(f"{text}（出处写了不存在的工具名 {tool}）")
+                _fail("tool_unknown", f"{text}（出处写了不存在的工具名 {tool}）")
             continue
 
         # 参数指纹优先：模型写了 `query_defect_log{group_by=defect}#...`，
@@ -1722,7 +1764,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 # 它针对哪条记录。单独计数——数值路径缺失和定性出处缺失，
                 # 一个是"数字没出处"，一个是"结论没落点"，修法完全不同。
                 stats["qual_bad"] += 1
-                misquoted.append(
+                _fail(
+                    "qual_ref_missing",
                     f"{text}（定性结论的出处 {tool}#{path} 取不到，"
                     f"无法核对这句话针对哪条记录）")
             else:
@@ -1731,9 +1774,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 # 不存在的字段"，第一反应会去改 prompt；但这一类的成因可能是
                 # 引错了工具，也可能真是字段名错——两种修法完全不同，
                 # 文案里必须能分开。
-                misquoted.append(
-                    f"{text}（{tool} 的返回里没有字段 {path}）"
-                )
+                _fail("path_missing", f"{text}（{tool} 的返回里没有字段 {path}）")
             continue
 
         if qual:
@@ -1757,8 +1798,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             arrs = [g for g in hits if isinstance(g, list)]
             if not arrs:
                 stats["multi_bad"] += 1
-                misquoted.append(
-                    f"{text}（items 要求 ref 指向数组，实际指向 {hits[0]}，不是多值字段）")
+                _fail("items_not_array",
+                      f"{text}（items 要求 ref 指向数组，实际指向 {hits[0]}，不是多值字段）")
                 continue
             # 多个候选数组逐个试，取对得最多的那个。模型引的是"那次返回里的这条记录"，
             # 不是"第几个数组"；指纹收窄不到时是判据自己分不清是哪次调用，
@@ -1779,7 +1820,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 first = bad[0]
                 k = first.get("key") if isinstance(first, dict) else first
                 vv = first.get("value") if isinstance(first, dict) else None
-                misquoted.append(
+                _fail(
+                    "items_mismatch",
                     f"{text}（items 有 {len(bad)}/{len(items)} 条对不上："
                     f"{k} 对应的值不是 {vv}{unit}，或返回里没有这条记录）")
             continue
@@ -1799,11 +1841,11 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 hi = float(vmax)
             except (TypeError, ValueError):
                 stats["ref_bad"] += 1
-                misquoted.append(f"{text}（区间端点不是数字:{v}/{vmax}）")
+                _fail("range_endpoint", f"{text}（区间端点不是数字:{v}/{vmax}）")
                 continue
             if hi < lo:
                 stats["range_bad"] += 1
-                misquoted.append(f"{text}（区间上下界写反:{lo}>{hi}）")
+                _fail("range_inverted", f"{text}（区间上下界写反:{lo}>{hi}）")
                 continue
             # 文本字段：两端必须同时出现。只找到一端不算——
             # 那说明另一端是模型自己补的，不是原文里的。
@@ -1817,11 +1859,11 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 stats["range_ok"] += 1
             elif not any(isinstance(g, str) for g in hits):
                 stats["range_bad"] += 1
-                misquoted.append(
-                    f"{text}（ref 指向数值字段 {hits[0]}，撑不住区间 {lo}~{hi}）")
+                _fail("range_ref_numeric",
+                      f"{text}（ref 指向数值字段 {hits[0]}，撑不住区间 {lo}~{hi}）")
             else:
                 stats["range_bad"] += 1
-                misquoted.append(f"{text}（区间 {lo}~{hi} 与该字段原文对不上）")
+                _fail("range_mismatch", f"{text}（区间 {lo}~{hi} 与该字段原文对不上）")
             continue
 
         if any(_value_match(v, g, unit) for g in hits):
@@ -1837,7 +1879,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
             if hits and all(isinstance(g, (list, dict)) for g in hits):
                 stats["path_bad"] += 1
                 n = len(hits[0]) if isinstance(hits[0], list) else 1
-                misquoted.append(
+                _fail(
+                    "ref_is_collection",
                     f"{text}（ref 指向数组/结构：{tool}#{path} 返回 {n} 条记录，"
                     f"单值 claim 装不下「哪条记录等于多少」。"
                     f"这种配对请改用 items: [{{\"key\": \"<标识>\", \"value\": {v}}}])")
@@ -1856,7 +1899,8 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 shown = ", ".join(str(g) for g in hits[:3])
                 if len(hits) > 3:
                     shown += f" 等 {len(hits)} 个"
-                misquoted.append(
+                _fail(
+                    "ref_ambiguous",
                     f"{text}（引用歧义：{tool} 本轮按 {len(sigs)} 组参数各调过一次，"
                     f"ref 没写参数指纹，候选值 {shown} 都不是 {v}{unit}。"
                     f"要么补指纹指清那一次，要么这个数确实不在任何一次返回里）"
@@ -1870,7 +1914,7 @@ def _verify_claims(doc, ev, stats, blocked, misquoted):
                 shown = "、".join(str(g) for g in hits[:3])
                 if len(hits) > 3:
                     shown += f" 等 {len(hits)} 个"
-                misquoted.append(f"{text}（候选值 {shown} 都不是 {v}{unit}）")
+                _fail("value_mismatch", f"{text}（候选值 {shown} 都不是 {v}{unit}）")
 
     stats["cited"] = stats["cited_ok"]
     stats["ev"] = len(ev)
@@ -1937,6 +1981,13 @@ def verify(state):
     # check 抓到的额外问题要并进来：那是"回环后用 ref=null 换通过"这类绕法。
     # 不并进来的话，它就是个写了没人读的字段，而且绕法本身会静默通过。
     misquoted = list(state.get("check_notes") or [])
+    # 失败明细：stats 回答"每一类有几个"，这里回答"具体哪几条、为什么、属于哪类"。
+    # 口径是"本轮判据判出来的"，不含上面并进来的 check_notes ——那是上一轮回环时
+    # 留下的提醒，不是这一次 `_verify_claims` 的判断。
+    # 为什么要有它：stats 是 27 个计数字段，每加一类失败就得加一个 key，而 key 加完
+    # 没人会回头改 eval / 报告 / UI 的读数，半年后它就成了第二个 state。
+    # 列表不一样：加一类失败只是多一种 code，读的人不用动。
+    cite_fail = []
     stats = _new_stats()
 
     # check 里也算过一次证据条数（落进 check_ev）。两边调的是同一个
@@ -1960,7 +2011,7 @@ def verify(state):
         # 引号修复救回来的要计数：修复是静默的，不记就看不见模型多不守规矩。
         if doc.pop("_repaired", False):
             stats["json_fixed"] = 1
-        _verify_claims(doc, ev, stats, blocked, misquoted)
+        _verify_claims(doc, ev, stats, blocked, misquoted, cite_fail)
         # 兜底文案形状上是合法结论（claims 空、conclusion 无数字），
         # 光看形状会静默通过；但那段话里没有任何被整理出来的内容，
         # 拿它当"通过"就是把一次基础设施故障记成了成功。
@@ -1968,9 +2019,9 @@ def verify(state):
         svc = str(state.get("svc_fail") or "").strip()
         if svc:
             stats["svc_fail"] = 1
-            misquoted.append(
-                f"整理答案的模型调用失败（{svc}），这一条是半成品，不能当结论用"
-            )
+            msg = (f"整理答案的模型调用失败（{svc}），这一条是半成品，不能当结论用")
+            misquoted.append(msg)
+            cite_fail.append({"code": "svc_fail", "note": msg})
         final_text = preset_text or _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,
                    final_len=len(final), **stats)
@@ -1978,18 +2029,21 @@ def verify(state):
         # 以前是"verify 解析一遍 → 把字符串写回 → 下游再解析一遍"，
         # 同一个 doc 在内存里被编解码两次，且下游任何一处忘了 parse 就崩。
         return {"final": doc, "final_text": final_text,
-                "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
+                "blocked": blocked, "misquoted": misquoted,
+                "cite_stats": stats, "cite_fail": cite_fail}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
     # 而没校验的结论被当成通过，才是真正危险的地方。
     # 唯一例外是步数用尽、压根没形成结论那条，它本来就没声明要溯源。
     stats["json_bad"] = 1
     if not no_final:
-        misquoted.append("结论未按 claims 契约输出，引用无法核验")
+        msg = "结论未按 claims 契约输出，引用无法核验"
+        misquoted.append(msg)
+        cite_fail.append({"code": "json_bad", "note": msg})
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
     return {"final": out_final, "final_text": final, "blocked": blocked,
-            "misquoted": misquoted, "cite_stats": stats}
+            "misquoted": misquoted, "cite_stats": stats, "cite_fail": cite_fail}
 
 
 def _pct(v, digits=2):
@@ -2080,6 +2134,10 @@ def lookup(state):
     """
     ids = (state.get("device_ids") or [])[:3]
     blocks, evidence, names, steps, claims = [], [], [], 0, []
+    # "查过了，确实没有"的清单。lookup 里有两处会命中：设备编号不存在、
+    # 这台设备没有历史工单。两者都不是错误，是**结论本身**——
+    # "这台没建过单"和"我不知道有没有建过"必须能分开，前者是事实，后者是故障。
+    unknown = []
 
     turn = int(state.get("turn") or 1)
     # ev_no 仍然记，但只为审计与报告——引用契约已经改成工具名。
@@ -2097,6 +2155,8 @@ def lookup(state):
         if isinstance(prof, dict) and "error" in prof:
             known = prof.get("known_devices") or []
             blocks.append(f"### {d}\n\n未查到这台设备。当前库里有：{', '.join(known)}")
+            unknown.append({"kind": "device_not_found", "what": d,
+                            "note": "设备库里没有这个编号"})
             continue
         log = query_defect_log(d, group_by="station")
         log_no = base + len(evidence) + 1
@@ -2135,6 +2195,9 @@ def lookup(state):
                            "ref": "query_work_order#count"})
         else:
             blocks.append(f"### {d} 历史工单\n\n{wo.get('note', '没有工单记录')}")
+            # "没建过单"是事实，不是故障。记下来才说得清为什么这一块是空的。
+            unknown.append({"kind": "no_work_order", "what": d,
+                            "note": wo.get("note") or "没有工单记录"})
 
     body = "\n\n".join(blocks) if blocks else "没有可用的设备编号。"
     tail = (
@@ -2156,7 +2219,8 @@ def lookup(state):
     # 等于把"结构化"这件事只做了一半，还多绕一次文本形态。
     return {"final": doc,
             "final_text": body + tail,
-            "evidence": evidence, "tool_names": names, "steps": steps}
+            "evidence": evidence, "tool_names": names, "steps": steps,
+            "unknown": unknown}
 
 
 def _prose_doc(text):
@@ -2190,6 +2254,22 @@ KNOWLEDGE_PROMPT = """你在回答视觉检测设备的规则/标准/含义类�
 4. 片段里没有的不要补。确实没有时，conclusion 写"手册中未收录"，claims 给空数组。
 5. 不同片段对同一参数给出不同数值时，必须在 conclusion 里指出这是冲突并列出各出处，不要自己挑一个。
 6. 不要编造任何数字。"""
+
+
+def _conflict_records(conflicts):
+    """把 check_doc_conflict 的返回压成进 state 的精简形态。
+
+    完整返回留在 evidence 里（那里是可审计的原始数据）；state 只留
+    "哪个参数、哪些文档给了什么值"——判断依据够用，又不把 evidence 复制一份。
+    抽成纯函数是为了能单测：原来它内联在 knowledge 里、位于一次模型调用之后，
+    想验证"冲突有没有落 state"就得真的花一次 token。
+    """
+    return [
+        {"param": c.get("param_name"),
+         "values": [{"source": x.get("source"), "value": x.get("value")}
+                    for x in (c.get("conflicts") or [])]}
+        for c in conflicts
+    ]
 
 
 def knowledge(state):
@@ -2229,10 +2309,15 @@ def knowledge(state):
     chunks = (res or {}).get("chunks") or []
     if not chunks:
         trace.emit("knowledge", status="empty", chunks=0)
+        # "检索跑通了，但手册里没有" —— 这是结论，不是故障。
+        # 归 unknown 不归 svc_fail：svc_fail 的意思是"不知道有没有"，
+        # 这里是"确定没有"，两者对下游的动作要求完全不同。
         return {"final": _prose_doc(
             "手册里没有检索到相关内容。可能是这个说法在文档中不存在，"
             "换个说法再问；也可能这条规则确实没有写进手册。"
-        ), "evidence": evidence, "tool_names": names, "steps": steps}
+        ), "evidence": evidence, "tool_names": names, "steps": steps,
+            "unknown": [{"kind": "manual_empty", "what": q,
+                         "note": "search_manual(top_k=5) 返回 0 条 chunk"}]}
 
     # 问的是参数取值 → 必须查跨文档冲突（L3 的核心，不能只读检索第一条就照抄）
     conflicts = []
@@ -2250,6 +2335,10 @@ def knowledge(state):
             conflicts.append(c)
 
     conflict_note = ""
+    # 冲突记录要落 state，不能只拼成一段人话塞给模型。
+    # 原来它算完就只剩 ctx 里那段文字：事后问"这次回答涉及几处文档冲突、
+    # 具体是哪两个值打架"，只能去翻 evidence 原文自己拼。
+    conflict_records = _conflict_records(conflicts)
     if conflicts:
         rows = []
         for c in conflicts:
@@ -2331,7 +2420,8 @@ def knowledge(state):
     # 不要再 dumps 回字符串让 verify 再 parse 一遍。
     return {"final": doc,
             "final_text": _render_claims(doc), "svc_fail": svc_fail,
-            "evidence": evidence, "tool_names": names, "steps": steps}
+            "evidence": evidence, "tool_names": names, "steps": steps,
+            "conflicts": conflict_records}
 
 
 def finalize(state):

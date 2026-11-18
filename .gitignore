@@ -24,3 +24,8 @@ data/raw_secrets/
 
 # 体积大的临时文件
 *.tmp
+
+# 运行产物：逐次生成的事件流轨迹，不进版本库
+# 有价值的那几次（真实诊断、异常分支样本）在 docs 与 eval 报告里引用，
+# 不靠这里留原始文件。历史 commit 里的旧产物仍可追溯。
+fde-diagnosis-agent/runs/

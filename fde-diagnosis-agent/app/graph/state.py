@@ -10,8 +10,30 @@ understand 判一次，后续节点只读不改。
 slots 是跨轮已确认的事实，用合并写：本轮确认了就覆盖，没确认就留着。
 """
 
-import operator
 from typing import Annotated, TypedDict
+
+# 状态 schema 版本。改了 State 的字段集合就 +1。
+#
+# 为什么需要：会话是持久的（checkpointer + 固定 thread_id）。改完 State 之后，
+# 旧 checkpoint 反序列化出来的 dict **没有新键**。普通读取不受影响（全项目走 .get()），
+# 但**累积型字段的 reducer** 会被拿旧值去合并——旧值缺失时传进来是 None，
+# 而 `operator.add(None, [msg])` 直接 TypeError，整轮起不来。
+#
+# 现在兜底交给 _add_list（它接受 None）；state_ver 只负责"这条会话是哪一版 schema、
+# 迁移过没有"，是可观测性，不是防线。两者分工别搞反。
+STATE_VER = 2
+
+
+def _add_list(a, b):
+    """累积型字段的 reducer：`(a or []) + (b or [])`。
+
+    不能直接用 operator.add：LangGraph 从旧 checkpoint 恢复时，如果这个键
+    在当次持久化的 state 里不存在，传进来的是 None，`None + list` 抛
+    `TypeError: unsupported operand type(s) for +: 'NoneType' and 'list'`。
+    这个错只在"老会话接着用新代码"时出现，新会话永远撞不到——
+    正是最容易在演示当天炸、单测永远绿的那类。
+    """
+    return list(a or []) + list(b or [])
 
 
 def _merge_dict(a, b):
@@ -48,8 +70,14 @@ def _tail_lines(a, b):
 
 
 class State(TypedDict, total=False):
+    # schema 版本。intake 每轮写入当前值，用于回答"这条会话跑的是哪一版 State"。
+    # 不进 RESET_EACH_TURN：它是会话级元数据，不是本轮事实，跨轮必须保留。
+    state_ver: int
     user_msg: str
-    # intake 用正则抽的候选设备号，只作为 understand 的提示，不是判据
+    # intake 用正则抽的候选设备号，只在 understand 那一次当 prompt 提示。
+    # **不是 device_ids[0] 的副本**——来源不同（正则 vs 模型），用处不同（提示 vs 判据）。
+    # understand 之后不再写这个字段：下游一律读 device_ids，写回一份会让
+    # "这台设备是哪台"有两个来源，改一个忘一个。
     device_id: str
 
     # understand 的输出
@@ -57,6 +85,23 @@ class State(TypedDict, total=False):
     device_ids: list       # 模型从原话里抽到的设备号，可能 0 个或多个
     phenomenon: str        # 用户实际说出口的现象/猜测，没说就是空串
     missing: list          # 还缺什么才能继续
+    # "查过了，库里确实没有"——和 missing 是两件事，不能混：
+    #   missing    还缺信息，所以要追问用户（缺的是**用户能给的**东西）
+    #   unknown    已经查了工具，工具也正常返回，但结果就是空（缺的是**库里没有**）
+    #   svc_fail   工具挂了，连"有没有"都不知道（缺的是**系统可用性**）
+    # 三者决定的动作完全不同：追问 / 拒答或说明缺口 / 重试或报故障。
+    # 原来只有 missing 和 svc_fail，中间这一档没有位置——"手册里没检索到"
+    # 只能写进 final_text 的一句人话，报告上只剩 qty=0，看不出是"查无此物"
+    # 还是"模型压根没写 claim"。这正是"拒答"和"编造"之间那道必须留下的痕。
+    # 每项：{"kind": 原因码, "what": 查了什么, "note": 为什么算没有}
+    unknown: list
+    # 本轮查到的文档冲突。param_names 是"要查哪些参数"（输入），这里是
+    # "查出了什么冲突"（输出），两者不能合成一个字段。
+    # 原来冲突只拼成一段人话塞进给模型的 ctx，算完 state 里没有痕迹——
+    # 事后问"这次回答涉及几处冲突、哪两个值打架"只能翻 evidence 原文。
+    # 每项：{"param": 参数名, "values": [{"source": 文档, "value": 取值}]}
+    # 完整 check_doc_conflict 返回仍在 evidence 里，这里只留判断依据。
+    conflicts: list
     param_names: list      # 用户问到的参数名（用于知识分支查文档冲突）
     intent_reason: str     # 模型或程序给出的判断依据（降级时会被程序改写）
     # 意图判断的自报置信度与处置说明。原来这一步是 temperature=0 的五选一，
@@ -74,8 +119,8 @@ class State(TypedDict, total=False):
     session_summary: Annotated[str, _tail_lines]
 
     # 累积字段
-    messages: Annotated[list, operator.add]
-    evidence: Annotated[list, operator.add]
+    messages: Annotated[list, _add_list]
+    evidence: Annotated[list, _add_list]
 
     # 本轮字段（每轮重写）
     tool_names: list
@@ -88,6 +133,13 @@ class State(TypedDict, total=False):
     # cite_oob / ref_bad / cite_cut / unsourced / quote_ok / quote_bad /
     # range_ok / range_bad / bare_conclusion / svc_fail（完整清单见 nodes._new_stats）
     cite_stats: dict
+    # 引用失败的明细，每项 {"code": 失败类型, "note": 给人看的那句话}。
+    # cite_stats 是"每类几个"（27 个计数字段），这里是"具体哪几条、为什么"。
+    # 为什么另开一列而不是继续往 cite_stats 加 key：计数字段每加一类就要加一个 key，
+    # 而 key 加完没人会回头改 eval / 报告 / UI 的读数——半年后 cite_stats 就成了第二个 state。
+    # 明细列表加一类失败只是多一种 code，读的人不用改。
+    # 口径：只装本轮 verify 判出来的，不含上一轮回环留下的 check_notes。
+    cite_fail: list
     steps: int
     final: str
     # 结论的可读版本：结构化契约（claims）渲染成人话，ref 为空的数字后面带[无出处]。
@@ -143,11 +195,17 @@ RESET_EACH_TURN = {
     "final_text": "",
     "blocked": [],
     "tool_names": [],
+    # unknown 是本轮"查过了确实没有"的清单，必须每轮清——
+    # 不清的话第 1 轮"手册里没这条"，第 2 轮问别的东西还挂着，
+    # 报告上会变成"这一轮也查无此物"。
+    "unknown": [],
+    "conflicts": [],
     "plan_retry": 0,
     "stop_reason": "",
     "svc_fail": "",
     "misquoted": [],
     "cite_stats": {},
+    "cite_fail": [],
     "check_notes": [],
     "check_retry": 0,
     "check_action": "",

@@ -128,6 +128,7 @@ def result_event(state):
         # 前端显示这个，不显示原始 JSON。
         "final_text": state.get("final_text", ""),
         "cite": state.get("cite_stats", {}),
+        "cite_fail": state.get("cite_fail", []),
     }
 
 

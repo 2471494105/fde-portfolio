@@ -8,6 +8,7 @@
 工具实现被替换成假函数，QMS 的 httpx.post 被替换成记录器。
 """
 
+import inspect
 import json
 import sys
 import tempfile
@@ -1743,6 +1744,149 @@ class EvidenceNumberingTest(unittest.TestCase):
                              f"lookup 的 ref 应写工具名，实际是 {r}")
 
 
+class UnknownAndConflictTest(unittest.TestCase):
+    """三种"没有"必须分得开：
+
+        missing    还缺信息 → 追问用户（用户能给）
+        unknown    查了、工具正常、结果就是空 → 拒答或说明缺口（库里没有）
+        svc_fail   工具挂了 → 重试或报故障（不知道有没有）
+
+    守的是"拒答"和"编造"之间那个位置。原来 knowledge 的"手册里没检索到"
+    只写进一句人话，state 里没有任何结构痕迹，报告上只剩 qty=0——
+    分不出是"查无此物"还是"模型压根没写 claim"。
+    """
+
+    def test_lookup_records_device_not_found(self):
+        def fake_prof(device_id):
+            return {"error": "设备不存在", "known_devices": ["CX-101"]}
+
+        with mock.patch.object(nodes, "query_device_profile", fake_prof):
+            out = nodes.lookup({"device_ids": ["CX-999"], "turn": 1})
+        self.assertEqual([u["kind"] for u in out["unknown"]], ["device_not_found"])
+        self.assertEqual(out["unknown"][0]["what"], "CX-999")
+
+    def test_lookup_records_no_work_order(self):
+        def fake_prof(device_id):
+            return {"device_id": device_id, "maintenance_cycle_days": 90}
+
+        def fake_log(device_id, group_by="station"):
+            return {"total": 10, "groups": []}
+
+        def fake_wo(device_id):
+            return {"state": "empty", "note": "没有工单记录"}
+
+        with mock.patch.object(nodes, "query_device_profile", fake_prof), \
+                mock.patch.object(nodes, "query_defect_log", fake_log), \
+                mock.patch.object(nodes, "query_work_order", fake_wo):
+            out = nodes.lookup({"device_ids": ["CX-104"], "turn": 1})
+        kinds = [u["kind"] for u in out["unknown"]]
+        self.assertEqual(kinds, ["no_work_order"],
+                         f"这台没建过单，必须记成 unknown 而不是沉默：{kinds}")
+
+    def test_knowledge_empty_records_unknown(self):
+        def fake_search(q, top_k=5):
+            return {"chunks": []}
+
+        with mock.patch.object(nodes, "search_manual", fake_search):
+            out = nodes.knowledge({"user_msg": "光源亮度的标准值是多少", "turn": 1})
+        self.assertEqual([u["kind"] for u in out["unknown"]], ["manual_empty"])
+        # 检索跑通了、只是没内容，和"检索没跑起来"是两件事
+        self.assertNotIn("svc_fail", out)
+
+    def test_knowledge_service_failure_is_not_unknown(self):
+        # 反过来钉死：服务不可用时不许写 unknown，否则"手册没有"和"服务挂了"
+        # 在报告上又会变成同一行。
+        def boom(q, top_k=5):
+            raise RuntimeError("connection refused")
+
+        with mock.patch.object(nodes, "search_manual", boom):
+            out = nodes.knowledge({"user_msg": "误差上限是多少", "turn": 1})
+        self.assertNotIn("unknown", out,
+                         "服务不可用不代表查无此物，不能写进 unknown")
+
+    def test_conflict_records_keep_param_and_values(self):
+        raw = [{"param_name": "光源亮度设定", "has_conflict": True,
+                "value_count": 2,
+                "conflicts": [{"source": "厂商手册", "value": 80},
+                              {"source": "厂内 SOP", "value": 65}]}]
+        recs = nodes._conflict_records(raw)
+        self.assertEqual(
+            recs, [{"param": "光源亮度设定",
+                    "values": [{"source": "厂商手册", "value": 80},
+                               {"source": "厂内 SOP", "value": 65}]}])
+
+    def test_new_fields_are_per_turn(self):
+        # 不清的话：第 1 轮"手册里没这条"，第 2 轮问别的东西还挂着 unknown，
+        # 报告上会变成"这一轮也查无此物"。
+        for k in ("unknown", "conflicts"):
+            self.assertIn(k, graph_state.RESET_EACH_TURN, f"{k} 必须每轮重置")
+            self.assertEqual(graph_state.RESET_EACH_TURN[k], [])
+
+
+class CiteFailDetailTest(unittest.TestCase):
+    """cite_stats 的 27 个计数回答"每类几个"，cite_fail 回答"具体哪条、为什么"。
+
+    守两件事：
+      1) 每条判失败都必须同时留下一条明细。若某处只 append 了 misquoted 忘了
+         fails，报告上就会出现"失败 3 条、明细 2 条"而没人发现——这正是
+         "结构靠注释承诺"的老毛病。
+      2) 明细要带 code。没有 code 就只能拿 note 文案去匹配分类，
+         等于又退回正则时代。
+    """
+
+    EV = [{"ev_no": 1, "tool": "query_defect_log",
+           "result": json.dumps(
+               {"groups": [{"key": "1号工位", "rate": 0.5882}]},
+               ensure_ascii=False)}]
+
+    def _run(self, claims, ev=None):
+        stats, blocked, misquoted, fails = nodes._new_stats(), [], [], []
+        nodes._verify_claims({"claims": claims}, ev or self.EV,
+                             stats, blocked, misquoted, fails)
+        return stats, blocked, misquoted, fails
+
+    def test_every_failure_has_a_detail_entry(self):
+        claims = [
+            # 值对不上
+            {"text": "1号工位误判率 6.25%", "value": 0.0625,
+             "ref": "query_defect_log#groups[0].rate"},
+            # 字段路径在返回里取不到
+            {"text": "1号工位误判率 58.82%", "value": 0.5882,
+             "ref": "query_defect_log#groups[0].false_positive_rate"},
+            # 编了个不存在的工具名
+            {"text": "温度 45 度", "value": 45,
+             "ref": "query_temperature#value"},
+        ]
+        _, _, misquoted, fails = self._run(claims)
+        self.assertEqual(len(fails), len(misquoted),
+                         f"判失败 {len(misquoted)} 条，明细只有 {len(fails)} 条：{fails}")
+        self.assertEqual({f["code"] for f in fails},
+                         {"value_mismatch", "path_missing", "tool_unknown"})
+
+    def test_quote_failure_also_lands_in_details(self):
+        ev = [{"ev_no": 1, "tool": "search_manual",
+               "result": json.dumps(
+                   {"chunks": [{"text": "光源亮度低于 70 时对比度下降"}]},
+                   ensure_ascii=False)}]
+        claims = [{"text": "手册说亮度要低于 70",
+                   "quote": "光源亮度必须高于 200 才合格",
+                   "ref": "search_manual#chunks[0].text"}]
+        _, _, misquoted, fails = self._run(claims, ev)
+        self.assertEqual(len(fails), len(misquoted))
+        self.assertEqual(fails[0]["code"], "quote_not_found")
+
+    def test_no_failure_means_empty_details(self):
+        claims = [{"text": "1号工位误判率 58.82%", "value": 0.5882,
+                   "ref": "query_defect_log#groups[0].rate"}]
+        _, _, misquoted, fails = self._run(claims)
+        self.assertEqual(misquoted, [])
+        self.assertEqual(fails, [])
+
+    def test_cite_fail_is_per_turn(self):
+        self.assertIn("cite_fail", graph_state.RESET_EACH_TURN)
+        self.assertEqual(graph_state.RESET_EACH_TURN["cite_fail"], [])
+
+
 class LookupClaimsTest(unittest.TestCase):
     """lookup 的每个数字都要有 claim，且 ref 必须和取值出自同一处。
 
@@ -2251,6 +2395,47 @@ class StateResetManifestTest(unittest.TestCase):
         # check_ev 的初值必须是 None 而不是 0：0 是"跑过 check、看到 0 条证据"，
         # 清成 0 会让 verify 在 lookup / knowledge 路径上误记一条 ev_mismatch。
         self.assertIsNone(b["check_ev"])
+
+
+class SchemaVersionTest(unittest.TestCase):
+    """checkpoint 兼容：旧会话接着用新代码时不能崩。
+
+    守的是"改完 State 之后老会话还能不能开"。原来这条单测永远绿，
+    因为它只跑新会话——"旧 checkpoint 缺键"这条路从没走过，
+    而它恰恰只在演示当天、接上一条昨天的会话时才会炸。
+    """
+
+    def test_add_list_tolerates_a_missing_side(self):
+        # 旧 checkpoint 里没有这个键 → LangGraph 拿旧值来合并时传进来是 None。
+        # operator.add(None, [x]) 直接 TypeError，整轮起不来（实测确认）。
+        self.assertEqual(graph_state._add_list(None, [1]), [1])
+        self.assertEqual(graph_state._add_list([0], None), [0])
+        self.assertEqual(graph_state._add_list(None, None), [])
+
+    def test_add_list_does_not_mutate_inputs(self):
+        a, b = [1], [2]
+        graph_state._add_list(a, b)
+        self.assertEqual((a, b), ([1], [2]))
+
+    def test_accumulative_reducers_take_exactly_two_positional_args(self):
+        # 和 _tail_lines 同一条约束：LangGraph 的 _is_field_binop 只认 (a, b)。
+        # 这里把它扩到三个累积字段，免得将来改 messages/evidence 的 reducer 时再踩。
+        for name in ("messages", "evidence", "session_summary"):
+            ann = graph_state.State.__annotations__[name]
+            reducer = ann.__metadata__[0]
+            params = list(inspect.signature(reducer).parameters.values())
+            self.assertEqual(
+                [p.name for p in params], ["a", "b"],
+                f"{name} 的 reducer 签名必须是严格两参，实际 {params}")
+
+    def test_intake_stamps_current_version(self):
+        out = nodes.intake({"user_msg": "CX-101 夜班误判率高", "turn": 0})
+        self.assertEqual(out["state_ver"], graph_state.STATE_VER)
+
+    def test_state_ver_is_not_a_per_turn_field(self):
+        # 会话级元数据。每轮重置就等于每轮丢掉"这条会话跑的是哪一版"，
+        # 迁移日志也就接不上了。
+        self.assertNotIn("state_ver", graph_state.RESET_EACH_TURN)
 
 
 class SessionSummaryCapTest(unittest.TestCase):

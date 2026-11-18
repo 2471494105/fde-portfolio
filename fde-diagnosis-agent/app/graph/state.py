@@ -29,15 +29,22 @@ def _merge_dict(a, b):
 SESSION_SUMMARY_KEEP = 8
 
 
-def _tail_lines(a, b, keep=SESSION_SUMMARY_KEEP):
-    """session_summary 的 reducer：拼接，但只保留最近 keep 行。
+def _tail_lines(a, b):
+    """session_summary 的 reducer：拼接，但只保留最近 SESSION_SUMMARY_KEEP 行。
+
+    **签名必须严格是两个位置参数。** LangGraph 在 `_add_schema` 里检查
+    `_is_field_binop`，签名不是 `(a, b) -> c` 就直接抛
+    `ValueError: Invalid reducer signature. Expected (a, b) -> c`，
+    **连有默认值的第三个参数也不接受**——图在编译期就挂，整个服务起不来。
+    所以 keep 只能读模块常量，不能做成参数。这个坑吃过一次：单测全绿，
+    因为没有任何一条测试真的调用过 StateGraph(State)。
 
     不能直接裁成"最后 keep 个字符"：那是按长度切，会把某一轮摘要的
     后半句留在开头，读起来像一条完整记录，实际上是半句话——比缺行更糟。
     按行切，丢就整行丢。
     """
     lines = [ln for ln in ((a or "") + (b or "")).splitlines() if ln.strip()]
-    return "\n".join(lines[-keep:])
+    return "\n".join(lines[-SESSION_SUMMARY_KEEP:])
 
 
 class State(TypedDict, total=False):

@@ -1361,18 +1361,23 @@ class ToolResultFoldTest(unittest.TestCase):
         return {"messages": msgs, "evidence": [], "turn": 1}
 
     def test_last_k_results_stay_intact(self):
-        st = self._state(6)
+        # 条数必须超过 keep，否则 old 为空、循环空转，测试变成空跑。
+        # 之前写死 6，keep 一改成 6 就退化成空测试（断言仍绿）。
+        n = nodes.KEEP_RAW_TOOL_RESULTS + 3
+        st = self._state(n)
         out = nodes._context_messages(st)
         tools = [m for m in out if m.get("role") == "tool"]
         # 折叠只改内容，不改条数：条数变了 k 索引就整体错位（见上一个测试类）
-        self.assertEqual(len(tools), 6)
+        self.assertEqual(len(tools), n)
         for m in tools[-nodes.KEEP_RAW_TOOL_RESULTS:]:
             self.assertNotIn("已折叠", m["content"])
-        for m in tools[:-nodes.KEEP_RAW_TOOL_RESULTS]:
+        folded = tools[:-nodes.KEEP_RAW_TOOL_RESULTS]
+        self.assertTrue(folded, "没有需要折叠的条目，这条测试没测到东西")
+        for m in folded:
             self.assertIn("已折叠", m["content"])
 
     def test_fold_keeps_tool_name_and_sig_in_head(self):
-        st = self._state(5)
+        st = self._state(nodes.KEEP_RAW_TOOL_RESULTS + 2)
         out = nodes._context_messages(st)
         first = [m for m in out if m.get("role") == "tool"][0]["content"]
         # 头部必留 "[工具名{参数指纹}]"：模型得知道"这条我调过、参数是什么"，
@@ -1384,7 +1389,7 @@ class ToolResultFoldTest(unittest.TestCase):
         # 投影不是真相。消息是 dict，直接改 content 会改到 state 里同一批对象
         #（list() 只浅拷贝列表，元素是同一批 dict）。这条防的是
         # "跑完一轮，state 里的工具全文没了"——evidence 和报告会跟着崩。
-        st = self._state(6)
+        st = self._state(nodes.KEEP_RAW_TOOL_RESULTS + 2)
         before = [m["content"] for m in st["messages"] if m.get("role") == "tool"]
         nodes._context_messages(st)
         after = [m["content"] for m in st["messages"] if m.get("role") == "tool"]
@@ -1397,7 +1402,9 @@ class ToolResultFoldTest(unittest.TestCase):
                 {"role": "tool", "tool_call_id": "a", "content": "old " + "y" * 800},
                 {"role": "assistant", "content": "t1 结论"},
                 {"role": "user", "content": "t2"}]
-        for i in range(5):
+        # 本轮要造到超过 keep，否则根本不会有折叠动作，
+        # "上一轮没被折"就成了真空断言（它本来也不会被折）。
+        for i in range(nodes.KEEP_RAW_TOOL_RESULTS + 2):
             msgs.append({"role": "tool", "tool_call_id": f"b{i}",
                          "content": "new " + "z" * 800})
         st = {"messages": msgs, "evidence": [], "turn": 2}
@@ -1405,12 +1412,53 @@ class ToolResultFoldTest(unittest.TestCase):
         old = [m for m in out if m.get("tool_call_id") == "a"]
         self.assertTrue(old)
         self.assertNotIn("已折叠", old[0]["content"])
+        # 本轮确实发生了折叠，否则上一条断言没有对照
+        cur = [m for m in out if str(m.get("tool_call_id", "")).startswith("b")]
+        self.assertTrue(any("已折叠" in m["content"] for m in cur))
+        # 而且**不能**被"同参数覆盖"：这 8 条都没有 [工具名{指纹}] 头部，
+        # 若身份退化成 ("","")，它们会被判成同一个查询，只剩最后一条。
+        self.assertFalse(any("取代" in m["content"] for m in cur),
+                         "无头部的消息被误认成同一个查询，证据整轮丢失")
 
     def test_short_bodies_are_left_alone(self):
         st = self._state(6, body_len=50)
         out = nodes._context_messages(st)
         for m in [m for m in out if m.get("role") == "tool"]:
             self.assertNotIn("已折叠", m["content"], "太短的折了反而更长")
+
+    def test_repeated_same_params_keep_only_the_latest(self):
+        # 实测逼出来的规则。真实 12 步诊断里模型把 group_by=hour 调了 3 次，
+        # 按位置折叠后它的结论写着"按小时维度的明细未能读出"——它知道自己缺，
+        # 又调了一遍，还是看不到。按参数覆盖后，只剩最后一条完整，
+        # 更早的两条明写"已被第 N 条取代"，模型立刻知道读哪一条。
+        msgs = [{"role": "user", "content": "CX-101 查原因"}]
+        for i, sig in enumerate(["a", "b", "a", "a"]):
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}",
+                         "content": f"[query_defect_log{{{sig}}}] " + ("x" * 800)})
+        st = {"messages": msgs, "evidence": [], "turn": 1}
+        out = nodes._context_messages(st)
+        tools = [m for m in out if m.get("role") == "tool"]
+
+        # 最后一次同参数（第 4 条）必须完整
+        self.assertNotIn("取代", tools[3]["content"])
+        self.assertIn("x" * 100, tools[3]["content"])
+        # 前两次同参数的必须被标成取代，且指向第 4 条
+        for i in (0, 2):
+            self.assertIn("已被后一次调用取代", tools[i]["content"])
+            self.assertIn("读第 4 条", tools[i]["content"])
+        # 参数不同的那条不受影响（它是 b，只有一条）
+        self.assertNotIn("取代", tools[1]["content"])
+
+    def test_superseded_entries_fold_even_when_short(self):
+        # 被取代的条目没有"值不值得折"的问题——它本来就多余，短也照标。
+        msgs = [{"role": "user", "content": "q"}]
+        for i, sig in enumerate(["a", "a"]):
+            msgs.append({"role": "tool", "tool_call_id": f"c{i}",
+                         "content": f"[t{{{sig}}}] " + ("y" * 60)})
+        st = {"messages": msgs, "evidence": [], "turn": 1}
+        out = nodes._context_messages(st)
+        tools = [m for m in out if m.get("role") == "tool"]
+        self.assertIn("已被后一次调用取代", tools[0]["content"])
 
 
 class BareQuoteRepairTest(unittest.TestCase):
@@ -2131,6 +2179,50 @@ class JudgeAttributionTest(unittest.TestCase):
         self.assertTrue(all(f["code"] for f in r["failure"]))
         self.assertTrue(all(f["owner"] in ("model", "case", "uncertain")
                             for f in r["failure"]))
+
+
+class GraphCompilesTest(unittest.TestCase):
+    """真的建一次图。这条比任何状态层单元断言都重要。
+
+    LangGraph 在编译期校验 reducer 签名（`_is_field_binop` 要求严格
+    `(a, b) -> c`），**带默认值的第三个参数也不接受**。签名不合法时
+    `StateGraph(State)` 直接抛 ValueError，整个服务起不来。
+
+    而所有只调 reducer 函数的单测都会绿——`_tail_lines` 曾经带
+    `keep=SESSION_SUMMARY_KEEP`，145 条单测全过，跑真实入口才发现图建不起来。
+    缺的不是断言，是"有没有一条测试碰过编译期"。
+
+    用 use_checkpoint=False：不碰 PG，秒出，也不依赖 mock QMS。
+    """
+
+    def test_build_graph_without_checkpointer(self):
+        from app.graph.build import build_graph
+
+        g = build_graph(use_checkpoint=False)
+        self.assertIsNotNone(g)
+
+    def test_every_annotated_reducer_takes_exactly_two_args(self):
+        # 逐个检查 State 上挂了 reducer 的字段：签名必须能被调用成 (a, b)。
+        # 建图那条已经覆盖了后果，这条给出原因，坏了能立刻看出是哪个字段。
+        import inspect
+        from typing import get_type_hints
+
+        from app.graph import state as gs
+
+        hints = get_type_hints(gs.State, include_extras=True)
+        checked = 0
+        for name, hint in hints.items():
+            for meta in getattr(hint, "__metadata__", ()):
+                if not callable(meta):
+                    continue
+                params = list(inspect.signature(meta).parameters.values())
+                self.assertEqual(
+                    len(params), 2,
+                    f"{name} 的 reducer {getattr(meta, '__name__', meta)} "
+                    f"有 {len(params)} 个参数；LangGraph 要求严格 (a, b) -> c，"
+                    f"默认参数也不接受")
+                checked += 1
+        self.assertGreater(checked, 0, "State 上一个 reducer 都没找到，测试失去意义")
 
 
 class StateResetManifestTest(unittest.TestCase):

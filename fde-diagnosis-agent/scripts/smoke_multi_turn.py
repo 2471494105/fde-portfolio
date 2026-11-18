@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.graph.build import run  # noqa: E402
+from app.graph.nodes import final_to_text  # noqa: E402
 
 
 def show(tag, state):
@@ -38,7 +39,7 @@ def case_a():
 
     s1 = run("帮我看看最近怎么样", thread_id=tid)
     show("第1轮", s1)
-    ask1 = s1.get("final", "")
+    ask1 = final_to_text(s1.get("final"))
 
     s2 = run("CX-101", thread_id=tid)
     show("第2轮", s2)
@@ -46,14 +47,18 @@ def case_a():
     s3 = run("看数据", thread_id=tid)
     show("第3轮", s3)
 
+    # 三处都要 final_to_text：state 里的 final 是结构化 dict。
+    # 在 dict 上做 `"设备编号" in final` 查的是 **key**，永远 False ——
+    # 断言不会报错，只会一直"通过"，这比崩掉更坏。
+    t2, t3 = final_to_text(s2.get("final")), final_to_text(s3.get("final"))
     problems = []
-    if "设备编号" in s2.get("final", ""):
+    if "设备编号" in t2:
         problems.append("第2轮又问了设备编号——指令没接上")
-    if "设备编号" in s3.get("final", ""):
+    if "设备编号" in t3:
         problems.append("第3轮又问了设备编号——槽位没记住")
     if s3.get("steps", 0) == 0:
         problems.append("第3轮没有查任何数据")
-    if "误判率" not in s3.get("final", ""):
+    if "误判率" not in t3:
         problems.append("第3轮没出数据表")
 
     print("\n【A 判定】", "通过" if not problems else "失败：" + "；".join(problems))

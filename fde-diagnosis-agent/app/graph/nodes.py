@@ -505,36 +505,77 @@ def _context_messages(state):
     return _fold_old_tool_results(head + msgs[cut:])
 
 
-# 同一轮内保留几条完整工具结果。诊断链的自然形状是 档案 → 缺陷统计 → 工单 三联，
-# 三次之后的调用基本是补充查询，而这三份往往要反复对照着读。
-KEEP_RAW_TOOL_RESULTS = 3
+# 同一轮内保留几条完整工具结果。
+#
+# 最初取 3，理由是"诊断链是 档案 → 统计 → 工单 三联"。实测推翻了它：
+# 真实一轮 12 步诊断里，模型在写结论时仍需要第 4 步那次 group_by=hour 的明细，
+# 而 keep=3 正好把它折掉，于是结论里出现「本轮未取到按小时的夜班/白班明细，
+# 故夜班更重这一点未作为定因依据」——模型如实承认缺了它，但它已经没法再补，
+# 因为它不知道"还有一条被折的"。
+#
+# 根因是折叠按**位置**算"深"，而诊断 agent 的调用顺序不按重要性排：
+# 第 4 步的维度统计可能就是定因的关键，第 12 步只是复核。
+# 同参数覆盖（_fold_old_tool_results 的第 ① 条）解决了一部分（重复调用的旧值），
+# 解决不了"每个维度只调一次"的情况——那才是常见形状。
+#
+# 6 是实测折中：12 步里保住前 6 条不同参数的调用，超出部分才折。
+# 真正长链（20+ 步）仍会收紧；此时模型多半已经看到过各维度，折的代价变小。
+KEEP_RAW_TOOL_RESULTS = 6
 # 折叠时保住开头的字符数。_payload 把 "[工具名{参数指纹}]" 印在头部，
 # 保住它，模型就仍然知道"这条我调过、参数是什么"，只是看不到明细。
 FOLD_HEAD_CHARS = 180
 # 短于这个长度的不折叠：折叠标记本身就有几十字，硬折反而更长。
 FOLD_MIN_BODY = 400
 
+# _payload 把 "[工具名{参数指纹}] " 印在每条工具结果的开头，这里按它分身份。
+_TOOL_HEAD_PAT = re.compile(r"^\[([^\{]+)\{([^\}]*)\}\] ")
+
+
+def _tool_identity(msg):
+    """(工具名, 参数指纹)，用来判断"这两条是不是同一个查询"。
+
+    解析头部拿到；拿不到时退回消息自带的身份——**绝不能退化成 ("", "")**。
+    退成空串的后果是灾难性的：所有"没有头部"的工具结果会被认成同一个查询，
+    于是除最后一条外全被标成"已被后一次调用取代"，模型一下子丢掉整轮证据。
+    这不是假想：任何不走 _payload 格式化、或不带 [工具名{指纹}] 头的消息
+    都会踩到（历史数据、将来某个新工具、手工构造的测试夹具）。
+    """
+    m = _TOOL_HEAD_PAT.match(str(msg.get("content") or ""))
+    if m:
+        return m.group(1), m.group(2)
+    return (str(msg.get("name") or ""),
+            str(msg.get("tool_call_id") or id(msg)))
+
 
 def _fold_old_tool_results(msgs, keep=KEEP_RAW_TOOL_RESULTS):
-    """本轮内较早的工具结果折叠成「头部 + 折叠标记」。
+    """本轮内较早的工具结果折叠，规则有两条。
 
-    依据是 Anthropic context engineering 里那句：
-    「once a tool has been called deep in the message history, why would the
-    agent need to see the raw result again?」——判据是**深**，不是旧。
-    同一轮里第 4 次调用时回看第 1 次的完整返回，通常只是找一个已经在头部的事实。
+    **① 同参数重复调用：只留最后一次完整。**
+    这一条是实测逼出来的，不是设计时想到的。真实跑一轮 12 步诊断，模型把
+    `query_defect_log(group_by=hour)` 调了 3 次（第 3、8 次）；按"第几条"折叠后
+    它的结论里出现了「本次按小时维度的明细数字未能读出，你提到的夜班更重尚无
+    量化证据」——模型自己知道还缺这块，又调了一遍，还是拿不到。
+    按位置折叠的隐含假设是"越早越不重要"，可它重复调用恰恰说明"越早的还不够"。
+    改用参数覆盖后，同参数的三条只剩最后一条完整，另外两条明写"已被第 N 条取代"，
+    模型立刻知道该看哪一条。
 
-    三条边界，都是原文的限制句划出来的：
+    **② 其余按位置折叠，保留最近 keep 条完整。**
+    依据是 Anthropic 那句「once a tool has been called deep in the message
+    history, why would the agent need to see the raw result again?」——判据是深。
 
-    - 只折叠**最后一轮之内**的。跨轮的整轮裁剪已经由 _context_messages 做完，
-      这里再动会削掉"上一轮结论所依据的证据"——那正是原文警告的
-      "importance only becomes apparent later"。
-    - 最近 keep 条保持完整。更早的才折。
-    - **折叠不是清空**：头部留着，标记里写明原文多长、要明细怎么拿。
-      模型看不见的字段引用不出来，这是折叠该付的代价，不是 bug。
+    三条边界（都是原文的限制句划出来的）：
 
-    **不改 state**：这是投影，不是真相。消息对象是 dict，直接改 content
-    会污染 state 里同一批对象（list() 只浅拷贝列表）。所以每条折叠都新建 dict。
-    evidence 里的明细一字不动，verify 溯源、报告、traces 全都读 evidence。
+    - 只处理**最后一轮之内**的。跨轮整轮裁剪 _context_messages 已经做完，
+      这里再动会削掉"上一轮结论所依据的证据"——原文警告的
+      "importance only becomes apparent later" 就是这个。
+    - 折叠不是清空：头部 "[工具名{指纹}]" 留着，标记里写明原文多长、怎么拿明细。
+      看不见的字段引用不出来，这是折叠该付的代价。
+    - 短于 FOLD_MIN_BODY 的按位置折叠跳过（折了反而更长）；但**被后一次
+      调用取代的条目不受此限**——它没有"值不值得折"的问题，它本来就多余。
+
+    **不改 state**：这是投影，不是真相。消息是 dict，直接改 content 会改到
+    state 里同一批对象（list() 只浅拷贝列表）。所以每条都新建 dict。
+    evidence 明细一字不动，verify 溯源、报告、traces 全读 evidence。
     """
     last_user = None
     for i, m in enumerate(msgs):
@@ -545,11 +586,32 @@ def _fold_old_tool_results(msgs, keep=KEEP_RAW_TOOL_RESULTS):
 
     tool_idx = [i for i in range(last_user + 1, len(msgs))
                 if msgs[i].get("role") == "tool"]
-    old = tool_idx[:-keep] if keep else tool_idx
-    if not old:
+    if not tool_idx:
         return msgs
 
     out = list(msgs)
+
+    # ① 同参数覆盖
+    latest = {}
+    for i in tool_idx:
+        latest[_tool_identity(out[i])] = i
+    superseded = set()
+    for pos, i in enumerate(tool_idx, start=1):
+        key = _tool_identity(out[i])
+        newer = latest.get(key)
+        if newer is None or newer == i:
+            continue
+        newer_pos = tool_idx.index(newer) + 1
+        out[i] = {**out[i], "content": (
+            f"[{key[0]}{{{key[1]}}}] "
+            f"（本轮第 {pos} 条，与第 {newer_pos} 条参数相同，已被后一次调用取代；"
+            f"要看数据请读第 {newer_pos} 条）"
+        )}
+        superseded.add(i)
+
+    # ② 其余按位置折叠
+    rest = [i for i in tool_idx if i not in superseded]
+    old = rest[:-keep] if keep else rest
     for pos, i in enumerate(old, start=1):
         body = str(out[i].get("content") or "")
         if len(body) <= FOLD_MIN_BODY:

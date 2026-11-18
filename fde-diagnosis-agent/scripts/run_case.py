@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.graph.build import run  # noqa: E402
+from app.graph.nodes import final_to_text  # noqa: E402
 
 DEFAULT = "3号线 CX-101 夜班误判率飙升，白班还好一点，帮我查下原因"
 
@@ -40,7 +41,9 @@ def main():
 
     print(f"\n=== 步数：{state.get('steps', 0)} ===")
     print("\n=== 结论 ===")
-    print(state.get("final", ""))
+    # final 在 state 里是结构化 dict（序列化推迟到 result_event 出口），
+    # 脚本要给人看，走 final_to_text；直接 print(fn) 会打出 dict 的 repr。
+    print(final_to_text(state.get("final")))
 
     blocked = state.get("blocked", [])
     if blocked:

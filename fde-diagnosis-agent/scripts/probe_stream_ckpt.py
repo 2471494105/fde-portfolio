@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.graph.build import build_graph  # noqa: E402
+from app.graph.nodes import final_to_text  # noqa: E402
 
 NODES = {"intake", "understand", "ask_user", "lookup", "knowledge",
          "plan", "act", "verify", "finalize"}
@@ -29,7 +30,8 @@ async def one(g, msg, thread_id, tag):
         async for ev in g.astream_events({"user_msg": msg}, cfg, version="v2"):
             if ev["event"] == "on_chain_end" and ev.get("name") == "finalize":
                 out = ev.get("data", {}).get("output") or {}
-                final = (out.get("final") or "")[:60]
+                # final 是结构化 dict，直接切片会 TypeError；走 final_to_text 归一
+                final = final_to_text(out.get("final"))[:60]
     except Exception as exc:
         print(f"[{tag}] 异常 {type(exc).__name__}: {exc}")
         return False

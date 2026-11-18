@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import trace
 from app.graph import build, nodes
+from app.graph import state as graph_state
 from app.tools import diagnosis, manual, workorder
 from eval import run_eval
 from mock_qms import server
@@ -957,29 +958,43 @@ class AskUserWordingTest(unittest.TestCase):
     def test_phenomenon_known_only_asks_for_device(self):
         out = nodes.ask_user({"device_ids": [], "phenomenon": "误判率有点高",
                               "slots": {}, "missing": []})
-        self.assertIn("误判率有点高", out["final"])
-        self.assertIn("CX-101 ~ CX-105", out["final"])
-        self.assertNotIn("需要两个信息", out["final"])
+        # 读 final_text（给人看的那份），不读 final：
+        # final 是结构化结论（dict），出到人眼前才序列化。
+        # 测试若耦合"final 一定是字符串"，改成 dict 时会在四条无关用例上误报。
+        txt = out["final_text"]
+        self.assertIn("误判率有点高", txt)
+        self.assertIn("CX-101 ~ CX-105", txt)
+        self.assertNotIn("需要两个信息", txt)
 
     def test_confirmed_device_in_slots_is_not_asked_again(self):
         # 本轮没提设备、上一轮确认过 → 文案直接用，不再索要
         out = nodes.ask_user({"device_ids": [], "phenomenon": "夜班更差",
                               "slots": {"device_id": "CX-104"}, "missing": []})
-        self.assertIn("CX-104", out["final"])
-        self.assertIn("夜班更差", out["final"])
-        self.assertNotIn("还缺一个设备编号", out["final"])
+        txt = out["final_text"]
+        self.assertIn("CX-104", txt)
+        self.assertIn("夜班更差", txt)
+        self.assertNotIn("还缺一个设备编号", txt)
 
     def test_nothing_known_asks_for_both(self):
         out = nodes.ask_user({"device_ids": [], "phenomenon": "",
                               "slots": {}, "missing": []})
-        self.assertIn("需要两个信息", out["final"])
+        self.assertIn("需要两个信息", out["final_text"])
 
     def test_intent_note_is_prefixed(self):
         # 低置信降级时先告诉用户"我是按哪种理解在问"
         out = nodes.ask_user({"device_ids": ["CX-104"], "phenomenon": "",
                               "slots": {}, "missing": [],
                               "intent_note": "意图置信度 0.45 低于 0.6，先追问确认再往下走"})
-        self.assertTrue(out["final"].startswith("意图置信度 0.45"))
+        self.assertTrue(out["final_text"].startswith("意图置信度 0.45"))
+
+    def test_ask_user_gives_readable_text_for_frontend(self):
+        # 追问是唯一一条"不经过 verify"的路径，所以它必须自己带上 final_text：
+        # 前端读 `final_text || final`，只给结构化 final 会让这一屏显示一段 JSON。
+        out = nodes.ask_user({"device_ids": ["CX-104"], "phenomenon": "",
+                              "slots": {}, "missing": []})
+        self.assertTrue(out["final_text"].strip(), "ask_user 必须给 final_text")
+        self.assertIsInstance(out["final"], dict, "final 应走统一结论结构")
+        self.assertEqual(out["final"]["claims"], [], "追问里没有可引用的事实")
 
 
 class CheckLoopTest(unittest.TestCase):
@@ -1259,6 +1274,43 @@ class ContextEvidenceAlignmentTest(unittest.TestCase):
                          "check 会放行一条模型读不到的旧证据，"
                          "verify 再把它算成不在可见范围")
         self.assertEqual(v["cite_stats"]["ev"], 1)   # 反向：不能是"一律看全量"
+
+    def test_check_ev_mismatch_is_recorded_not_blocked(self):
+        # check_ev 以前只写不读：注释里写着"两边取的条数一旦不同，
+        # check 放行、verify 判死"，代码里没人比对过。现在 verify 比了。
+        # 不一致是程序口径自相矛盾，不是模型编造 → 记一个数，不判失败。
+        def run(check_ev):
+            st = {
+                "turn": 3,
+                "messages": [{"role": "assistant", "content": ""}],
+                "evidence": [
+                    {"result": '{"cnt": 7}', "turn": 1, "ev_no": 1},
+                    {"result": '{"cnt": 5}', "turn": 2, "ev_no": 2},
+                ],
+                "final": json.dumps({"conclusion": "x", "claims": [], "advice": []},
+                                    ensure_ascii=False),
+                "user_msg": "", "tool_names": [], "steps": 0,
+                "check_retry": 0, "check_notes": [], "check_unsourced0": 0,
+                "check_ev": check_ev,
+            }
+            old = trace.RUNS_DIR
+            trace.RUNS_DIR = Path(tempfile.mkdtemp())
+            try:
+                with trace.Tracer("chk", model="m", provider="p", base_url="b"):
+                    return nodes.verify(st)
+            finally:
+                trace.RUNS_DIR = old
+
+        # 窗口内 1 条，check 却报 2 条 → 口径不一致
+        bad = run(2)
+        self.assertEqual(bad["cite_stats"]["ev_mismatch"], 1)
+        self.assertEqual(bad["misquoted"], [], "口径不一致不该判模型失败")
+
+        # 一致
+        self.assertEqual(run(1)["cite_stats"]["ev_mismatch"], 0)
+
+        # None = 本轮根本没跑 check（lookup / knowledge 路径），不能误报
+        self.assertEqual(run(None)["cite_stats"]["ev_mismatch"], 0)
 
     def test_verify_counts_exactly_the_window(self):
         # verify 的 cite_stats["ev"] 就是它实际拿来校验的证据条数。
@@ -1561,7 +1613,10 @@ class EvidenceNumberingTest(unittest.TestCase):
         self.assertEqual([e["ev_no"] for e in out["evidence"]], [4, 5, 6])
         self.assertEqual(len(out["evidence"]), 3)
         # 但 claims 里的 ref 必须是工具名，不能是这些编号
-        refs = [c.get("ref") for c in json.loads(out["final"])["claims"]]
+        # 用 _parse_claims 而不是 json.loads：final 可能是 dict（写入端已解析）
+        # 也可能是字符串，_parse_claims 两种都吃。测试若耦合"一定是字符串"，
+        # 下一次把某个节点改成存 dict，就会在这里误报成功能坏了。
+        refs = [c.get("ref") for c in nodes._parse_claims(out["final"])["claims"]]
         self.assertTrue(refs, "lookup 必须自产 claims")
         for r in refs:
             self.assertRegex(r, r"^query_(device_profile|defect_log|work_order)#",
@@ -1837,6 +1892,28 @@ class ResultEventContractTest(unittest.TestCase):
                           f"{name}:{line_no} 又手写了一份 result 字段：{line}")
 
 
+    def test_done_frame_derives_from_result_event(self):
+        # done 帧原来手抄 12 个字段，和 result_event 重合 9 个：
+        # state 改一个名字要记得改两处，漏了不报错，只静默少一个字段。
+        # 这条测的是"派生"——逐字段比对公共部分，抄一遍过不了。
+        from app.web import server as web_server
+        st = {"turn": 3, "intent": "diagnose", "steps": 4, "tool_names": ["a"],
+              "blocked": ["x"], "misquoted": [], "device_ids": ["CX-104"],
+              "slots": {"device_id": "CX-104"}, "final": "{}", "final_text": "x",
+              "cite_stats": {"qty": 1, "cited_ok": 1},
+              "stop_reason": "budget_exhausted", "check_retry": 1}
+        audit = build.result_event(st)
+        frame = web_server._done_event(st, trace_id="r1", thread_id="t1", elapsed_ms=7)
+        self.assertEqual(frame["type"], "done")
+        for k, v in audit.items():
+            self.assertEqual(frame[k], v, f"done 帧的 {k} 与 result_event 不一致")
+        # 前端真的会读这几个（index.html 的 renderDone）
+        for k in ("evidence", "trace_id", "total_ms", "cite", "blocked", "final_text"):
+            self.assertIn(k, frame, f"done 帧少了前端要读的 {k}")
+        # stop_reason 以前到不了 UI，于是分不清"完整结论"和"被预算掐断的半成品"
+        self.assertEqual(frame["stop_reason"], "budget_exhausted")
+
+
 class StopReasonTest(unittest.TestCase):
     """结束原因必须能把三件事分开：还要查 / 够了 / 被预算掐断。
 
@@ -1982,6 +2059,73 @@ class JudgeAttributionTest(unittest.TestCase):
         self.assertTrue(all(f["code"] for f in r["failure"]))
         self.assertTrue(all(f["owner"] in ("model", "case", "uncertain")
                             for f in r["failure"]))
+
+
+class StateResetManifestTest(unittest.TestCase):
+    """本轮字段的清单只有一份：state.RESET_EACH_TURN。
+
+    守的是"加字段时忘了登记"。原来 intake 手抄 14 行，漏一个的代价是
+    上一轮的值污染本轮——而指标全绿，只有人看文本才知道答的不是同一件事。
+    """
+
+    def test_every_reset_key_is_declared_in_state(self):
+        declared = set(graph_state.State.__annotations__)
+        missing = set(graph_state.RESET_EACH_TURN) - declared
+        self.assertEqual(
+            missing, set(),
+            f"这些字段在 RESET_EACH_TURN 里，但 State 没声明：{sorted(missing)}")
+
+    def test_reset_values_are_fresh_each_call(self):
+        # list / dict 必须每次是新对象。共享一份的话，下游 append 一次，
+        # 下一轮一开跑就带着上一轮的内容——正是这张表要防的事。
+        a = graph_state.fresh_reset_values()
+        b = graph_state.fresh_reset_values()
+        a["blocked"].append("x")
+        a["cite_stats"]["k"] = 1
+        self.assertEqual(b["blocked"], [])
+        self.assertEqual(b["cite_stats"], {})
+        # check_ev 的初值必须是 None 而不是 0：0 是"跑过 check、看到 0 条证据"，
+        # 清成 0 会让 verify 在 lookup / knowledge 路径上误记一条 ev_mismatch。
+        self.assertIsNone(b["check_ev"])
+
+
+class SessionSummaryCapTest(unittest.TestCase):
+    """跨轮摘要必须有上限：它是唯一一个"每轮加一行、从不清理"的字段，
+    而 plan 又整段塞进 prompt —— 会话一长，每一轮都在为很久以前付 token。
+    """
+
+    def test_keeps_only_last_n_lines(self):
+        text = ""
+        for i in range(1, 21):
+            text = graph_state._tail_lines(text, f"\n[{i}] 轮{i}")
+        lines = text.splitlines()
+        self.assertEqual(len(lines), graph_state.SESSION_SUMMARY_KEEP)
+        self.assertEqual(lines[0], f"[{20 - graph_state.SESSION_SUMMARY_KEEP + 1}] "
+                                   f"轮{20 - graph_state.SESSION_SUMMARY_KEEP + 1}")
+        self.assertEqual(lines[-1], "[20] 轮20")
+
+    def test_dropping_is_by_line_not_by_chars(self):
+        # 按字符切会把某行的后半句留在开头，读起来像一条完整记录，其实是半句话。
+        text = graph_state._tail_lines("", "\n[1] " + "长" * 300)
+        for i in range(2, 11):
+            text = graph_state._tail_lines(text, f"\n[{i}] y")
+        self.assertTrue(text.startswith("[3]"), text[:12])
+        self.assertNotIn("长", text, "旧行必须整行消失，不能留半句")
+
+    def test_under_limit_is_untouched(self):
+        text = ""
+        for i in range(1, 4):
+            text = graph_state._tail_lines(text, f"\n[{i}] 轮{i}")
+        self.assertEqual(text.splitlines(), ["[1] 轮1", "[2] 轮2", "[3] 轮3"])
+
+    def test_state_annotation_actually_points_to_this_reducer(self):
+        # 上面三条测的是函数本身。这条测"LangGraph 合并时拿到的确实是它"——
+        # 改了函数却忘了改 Annotated，三条全绿而运行时仍是无限拼接。
+        import typing
+        hints = typing.get_type_hints(graph_state.State, include_extras=True)
+        meta = hints["session_summary"].__metadata__
+        self.assertTrue(meta, "session_summary 没有 reducer，LangGraph 会直接覆盖")
+        self.assertIs(meta[0], graph_state._tail_lines)
 
 
 if __name__ == "__main__":

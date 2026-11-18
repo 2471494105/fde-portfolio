@@ -25,6 +25,7 @@ from app.graph.nodes import (
     act,
     ask_user,
     check,
+    final_to_text,
     finalize,
     intake,
     knowledge,
@@ -94,8 +95,12 @@ def result_event(state):
 
     final 必须存全文：blocked 的判定依赖结论全文，只存前 300 字符，
     事后重算拿到的是另一个题目的答案。
+
+    final 在状态里可能是 dict（写入端已解析）也可能是字符串（历史 checkpoint）。
+    出口统一序列化成字符串：这里是唯一该做 json.dumps 的地方，
+    节点里再 dumps 一遍等于把"结构化"这件事只做了一半。
     """
-    final = state.get("final") or ""
+    final = final_to_text(state.get("final"))
     return {
         "turn": state.get("turn", 1),
         "intent": state.get("intent", ""),

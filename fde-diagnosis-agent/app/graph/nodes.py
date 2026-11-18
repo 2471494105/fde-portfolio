@@ -13,6 +13,7 @@ from openai import OpenAI
 
 from app import trace
 from app.graph.llm import CALL_TIMEOUT, MODEL, get_client
+from app.graph.state import fresh_reset_values
 from app.tools import TOOL_IMPLS, TOOL_SCHEMAS
 from app.tools.diagnosis import query_defect_log, query_device_profile
 from app.tools.manual import check_doc_conflict, search_manual
@@ -118,39 +119,16 @@ def intake(state):
     device_id = m.group(0).upper() if m else ""
     turn = int(state.get("turn") or 0) + 1
     trace.emit("intake", device_id=device_id, matched=bool(m), msg_len=len(msg), turn=turn)
-    # 这几个每轮重写：不清的话上一轮的结论/告警/步数会污染本轮判断。
-    # messages 和 evidence 相反，靠 reducer 累积——多轮必须保留。
-    # stop_reason 也必须清：lookup/knowledge 这类路径根本不跑 plan，
-    # 不清就会把上一轮诊断留下的停止原因，当成本轮的结论报出去。
+    # 本轮字段的清单在 state.RESET_EACH_TURN，这里只补三个每轮现算的：
+    #   device_id —— 正则结果，作为 understand 的提示
+    #   messages  —— 本轮这条 user 消息（其余历史靠 reducer 累积）
+    #   turn      —— 轮次 +1
+    # 加新字段时去 RESET_EACH_TURN 登记，不要再往这个 return 里抄一遍。
     return {
+        **fresh_reset_values(),
         "device_id": device_id,
         "messages": [{"role": "user", "content": msg}],
-        "steps": 0,
-        "final": "",
-        # final_text 也必须清。它是"给人看的那份结论"，verify 里
-        # final_text = preset_text or _render_claims(doc) —— 只要上一轮留了值，
-        # 这一轮就会被上一轮的文本盖掉，而 final（claims）是本轮的。
-        # 三轮探针里就撞上了：轮2 走 knowledge 留了文本，轮3 走 diagnose，
-        # 结果 UI 上是"问诊断、答手册"，claims 却全是本轮的、校验还是 ok。
-        # 这种错最难发现：指标全绿，只有人看文本才知道答的不是同一件事。
-        "final_text": "",
-        "blocked": [],
-        "tool_names": [],
         "turn": turn,
-        "plan_retry": 0,
-        "stop_reason": "",
-        # 和 stop_reason 同理：这一轮要是走了 lookup 或 clarify（不碰 knowledge），
-        # 上一轮留下的 svc_fail 会被 verify 当成本轮的失败，凭空多一条半成品。
-        "svc_fail": "",
-        # check 的三个字段同样是本轮状态，不是会话状态：
-        # check_notes 会被 verify 并进 misquoted（"回环后用 null 换通过"那条），
-        # 不清就会让第 1 轮的回环问题在第 2 轮再判一次失败。
-        "misquoted": [],
-        "cite_stats": {},
-        "check_notes": [],
-        "check_retry": 0,
-        "check_action": "",
-        "check_unsourced0": 0,
     }
 
 
@@ -463,7 +441,11 @@ def ask_user(state):
                confidence=state.get("intent_conf"),
                reason=state.get("intent_reason", ""))
     # 记下追问原话：下一轮的 understand 要靠它判断"用户这句在回答什么"
-    return {"final": final, "last_question": final}
+    #
+    # final 也走同一套结论结构（claims 为空是诚实的：追问里没有可引用的事实），
+    # 但**必须同时给 final_text**：前端读的是 `d.final_text || d.final`，
+    # 只给结构化 final 会让追问这一屏直接显示一段 JSON。
+    return {"final": _prose_doc(final), "final_text": final, "last_question": final}
 
 
 # 模型本轮能看到几轮。这一个数同时决定两件必须严格相等的事：
@@ -942,12 +924,12 @@ def _owned_device_ids(state):
     合并进 device_ids（槽位继承只在 diagnose / lookup / action 时生效）。
     所以这里不再单独读 slots——读 slots 会把"用户已经切换对象"的旧设备重新放进来，
     那正是归属校验要挡住的情况。
+
+    也不再读顶层 device_id：understand 返回的就是
+    `{"device_id": ids[0] if ids else ""}`，它不是独立来源，是 device_ids[0] 的副本。
+    读它是同一份事实的第二条通道，两条通道一旦不同步，拦的是哪一条就看运气。
     """
-    ids = {str(x).strip().upper() for x in (state.get("device_ids") or []) if str(x).strip()}
-    d = str(state.get("device_id") or "").strip().upper()
-    if d:
-        ids.add(d)
-    return ids
+    return {str(x).strip().upper() for x in (state.get("device_ids") or []) if str(x).strip()}
 
 
 def act(state):
@@ -1163,13 +1145,39 @@ def _fix_bare_quotes(body):
     return "".join(out)
 
 
+def final_to_text(final):
+    """把 final（可能是 dict，也可能是字符串）变成字符串。
+
+    final 的形态在迁移期有两种：写入端已经解析成 dict 的，
+    和历史 checkpoint 里仍是 JSON 字符串的。所有"需要字符串"的地方都走这里，
+    不要各自取出来就切片或取 len：
+
+      len(dict)    → 静默变成 key 的数量（3、4），报告上看着像个长度
+      dict[:300]   → TypeError，节点崩
+
+    前者最坏：它不报错，只是把"结论多长"变成了"结论有几个字段"。
+    """
+    if isinstance(final, dict):
+        return json.dumps(final, ensure_ascii=False)
+    return str(final or "")
+
+
 def _parse_claims(text):
     """从结论里取出结构化断言。返回 dict 或 None（模型没按契约输出）。
 
     模型有时会把 JSON 包在 ```json ``` 里，先剥掉再解析。
     剥不掉、解析失败、没有 claims 字段，一律返回 None，
     由调用方退回旧的文本解析路径——契约迁移期不能因为一次格式抖动就丢结论。
+
+    **两种输入都接受**：已经是 dict 的（写入端解析过一次，直接存进 final），
+    和仍然是字符串的（模型原始输出、历史 checkpoint 里的旧格式）。
+    这样 final 从"字符串"改成"dict"可以逐点推进，不必一次改完——
+    每改一个写入点，读取端不用跟着动。
     """
+    if isinstance(text, dict):
+        # 已经是解析好的。_repaired 标记只在字符串路径产生，
+        # 这里返回的 dict 不该带它——带了会让 verify 把一次普通解析记成"修复"。
+        return text if isinstance(text.get("claims"), list) else None
     s = (text or "").strip()
     if s.startswith("```"):
         s = re.sub(r"^```[A-Za-z]*\s*", "", s)
@@ -1310,8 +1318,11 @@ def _new_stats():
             # quote_bad  引文型 claim 但抄错了：原文里找不到这句话
             # bare_conclusion  结论里写了数字、claims 为空 → 没有一个数字可核验
             # svc_fail   整理答案那步模型调用失败：形状合法但内容是半成品
+            # ev_mismatch  check 预判用的证据条数 与 verify 终审时的不一致
+            #              → check 是拿一批证据放行的、verify 是拿另一批判死的。
+            #              程序口径自相矛盾，不是模型的问题，所以只记不判死。
             "quote_ok": 0, "quote_bad": 0, "bare_conclusion": 0,
-            "svc_fail": 0}
+            "svc_fail": 0, "ev_mismatch": 0}
 
 
 def _norm_quote(s):
@@ -1772,7 +1783,14 @@ def verify(state):
     设备号 / 告警码 / 日期属于标识符，刻意排除。
     """
     # lookup / knowledge 直接产出 final，不经过 messages；诊断路径才从 assistant 消息取
-    final = (state.get("final") or "").strip()
+    # final 可能是 dict（写入端已解析）也可能是字符串（历史 checkpoint / 模型原文）。
+    # 这里必须先归一成字符串再判空：dict 没有 .strip()，直接调会 AttributeError。
+    raw_final = state.get("final")
+    final = final_to_text(raw_final).strip()
+    # verify 不改 final 的形态：写入端已经是 dict 的，原样带回（下游 result_event
+    # 统一序列化）；字符串的也原样带回。只在内存里用归一后的字符串做校验和渲染。
+    # 否则"写入端解析成 dict"这一步会被 verify 又变回字符串，等于白做。
+    out_final = raw_final if isinstance(raw_final, dict) else final
     if not final:
         msgs = state.get("messages") or []
         if msgs and msgs[-1].get("role") == "assistant":
@@ -1785,7 +1803,6 @@ def verify(state):
 
     # 溯源只用本轮和上一轮的工具返回：更早的证据已经被挤出上下文窗口，
     # 模型本轮根本没读到，拿它兜底等于给未溯源数字开后门。
-    # 下界必须来自 _ctx_window，和 _context_messages 保留的轮数同源——
     # 下界必须来自 _ctx_window，和 _context_messages 保留的轮数同源——
     # 这里原本写死 cur_turn - 1，与 CTX_VISIBLE_TURNS=2 数值巧合相等，
     # 改任一处就会让"模型还能看到的返回"与"校验参与匹配的返回"错开一整个轮次。
@@ -1803,6 +1820,15 @@ def verify(state):
     # 不并进来的话，它就是个写了没人读的字段，而且绕法本身会静默通过。
     misquoted = list(state.get("check_notes") or [])
     stats = _new_stats()
+
+    # check 里也算过一次证据条数（落进 check_ev）。两边调的是同一个
+    # _visible_evidence，中间也没有节点会改 evidence，所以正常必须相等。
+    # 不等只有一种解释：check 和 verify 看到的证据集不一样——那意味着
+    # check 是拿一批证据放行的、verify 是拿另一批判死的，回环那次预判就白做了。
+    # 这是程序口径自相矛盾，不是模型编造，所以只记一个数，不判死。
+    check_ev = state.get("check_ev")
+    if isinstance(check_ev, int) and check_ev != len(ev):
+        stats["ev_mismatch"] = 1
 
     # 结构化契约：结论必须是 claims JSON。引用是字段，不是文本里的字，
     # 所以不用再去正则里猜"这个数属于哪个锚点"。
@@ -1830,7 +1856,10 @@ def verify(state):
         final_text = preset_text or _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,
                    final_len=len(final), **stats)
-        return {"final": final, "final_text": final_text,
+        # 存解析结果，不再把字符串原样带回去。
+        # 以前是"verify 解析一遍 → 把字符串写回 → 下游再解析一遍"，
+        # 同一个 doc 在内存里被编解码两次，且下游任何一处忘了 parse 就崩。
+        return {"final": doc, "final_text": final_text,
                 "blocked": blocked, "misquoted": misquoted, "cite_stats": stats}
 
     # 没按契约输出。这里不放行：放行等于"这条没校验"，
@@ -1841,7 +1870,7 @@ def verify(state):
         misquoted.append("结论未按 claims 契约输出，引用无法核验")
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
-    return {"final": final, "final_text": final, "blocked": blocked,
+    return {"final": out_final, "final_text": final, "blocked": blocked,
             "misquoted": misquoted, "cite_stats": stats}
 
 
@@ -2004,7 +2033,10 @@ def lookup(state):
     }
     trace.emit("lookup", device_ids=ids, blocks=len(blocks), steps=steps,
                claims=len(claims))
-    return {"final": json.dumps(doc, ensure_ascii=False),
+    # final 直接存结构化结果，不再 json.dumps。
+    # 序列化只在 result_event 出口做一次——节点里 dumps 一遍、verify 再 parse 回来，
+    # 等于把"结构化"这件事只做了一半，还多绕一次文本形态。
+    return {"final": doc,
             "final_text": body + tail,
             "evidence": evidence, "tool_names": names, "steps": steps}
 
@@ -2016,9 +2048,11 @@ def _prose_doc(text):
     让它们也长成 {"conclusion", "claims": []} 不是为了让校验放行：
     空 claims 本身是有含义的——"这条结论里没有可引用的具体事实"，
     报告上 qty=0 看得见。豁免才是把这件事藏起来。
+
+    返回 dict 而不是 json.dumps：序列化只在 result_event 出口做一次。
+    这里以前返回字符串，于是每个调用点都把同一个 dict 编码一遍。
     """
-    return json.dumps({"conclusion": text, "claims": [], "advice": []},
-                      ensure_ascii=False)
+    return {"conclusion": text, "claims": [], "advice": []}
 
 
 KNOWLEDGE_PROMPT = """你在回答视觉检测设备的规则/标准/含义类问题。
@@ -2175,7 +2209,9 @@ def knowledge(state):
                claims=len(doc.get("claims") or []))
     # svc_fail 一路传到 verify：兜底文案长得像正常结论（claims 空、conclusion 无数字），
     # 只靠形状分不出来，必须由节点自己说"这一条没跑成"。
-    return {"final": json.dumps(doc, ensure_ascii=False),
+    # 同上：上面已经 _parse_claims 解析过一次，这里直接存解析结果，
+    # 不要再 dumps 回字符串让 verify 再 parse 一遍。
+    return {"final": doc,
             "final_text": _render_claims(doc), "svc_fail": svc_fail,
             "evidence": evidence, "tool_names": names, "steps": steps}
 
@@ -2189,7 +2225,7 @@ def finalize(state):
     turn = int(state.get("turn") or 1)
     tools = ",".join(state.get("tool_names") or []) or "无"
     user_head = (state.get("user_msg") or "").replace("\n", " ")[:50]
-    final_head = (state.get("final") or "").replace("\n", " ")[:80]
+    final_head = final_to_text(state.get("final")).replace("\n", " ")[:80]
     # 结束原因写进跨轮摘要：下一轮模型能看到"上一轮是被预算掐断的"，
     # 就不会把一份半成品结论当成已经查实的事实继续往下推。
     # lookup / knowledge 不走 plan，自然没有这个值，写成"未跑循环"而不是空——

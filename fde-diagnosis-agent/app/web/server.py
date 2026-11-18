@@ -135,19 +135,15 @@ def _validate(req: DiagnoseIn) -> str | None:
 def diagnose(req: DiagnoseIn):
     sid = _validate(req)
     state = run(req.msg, thread_id=sid)
+    # 第三个出口，原来也手抄了一份，和 Web 流式那帧早就对不上：
+    # 这里没有 stop_reason / check_rounds / device_ids / slots 也不全。
+    # 公共字段统一从 result_event 取——final 出去时已经是序列化好的字符串，
+    # 前端拿到的形态和以前一致。
     return {
-        "final": state.get("final", ""),
-        "final_text": state.get("final_text", ""),
-        "blocked": state.get("blocked", []),
-        "misquoted": state.get("misquoted", []),
-        "steps": state.get("steps", 0),
-        "tools": state.get("tool_names", []),
+        **result_event(state),
         "evidence": _brief(state.get("evidence", [])),
         "trace_id": state.get("trace_id", ""),
         "thread_id": state.get("thread_id", ""),
-        "turn": state.get("turn", 1),
-        "intent": state.get("intent", ""),
-        "slots": state.get("slots", {}),
     }
 
 
@@ -225,6 +221,28 @@ def _frame(obj) -> str:
     return "data: " + json.dumps(obj, ensure_ascii=False, default=str) + "\n\n"
 
 
+def _done_event(state, *, trace_id, thread_id, elapsed_ms):
+    """前端收尾帧的字段。
+
+    公共部分从 result_event 取，不手抄——两个出口共用一份定义是它存在的理由，
+    而 done 帧原来又抄了一遍，重合 9 个字段，改一个漏一个不报错。
+
+    抽成独立函数是为了能被单测直接调：写在 _sse 里的话，只能靠读源码断言
+    "包含某个字符串"，那种断言在重构后照样绿。
+
+    私有部分只有这个实时帧需要：evidence 给 UI 画证据列表，trace_id 给"查轨迹"
+    的按钮，total_ms 给耗时。
+    """
+    return {
+        "type": "done",
+        **result_event(state),
+        "evidence": _brief(state.get("evidence", []), state.get("steps", 0)),
+        "trace_id": trace_id,
+        "thread_id": thread_id,
+        "total_ms": elapsed_ms,
+    }
+
+
 def _sse(msg: str, sid: str | None):
     """同步生成器：每个图事件转成一帧 SSE 推给前端。
 
@@ -283,22 +301,11 @@ def _sse(msg: str, sid: str | None):
             # 它们经由 trace.emit 落盘，靠上面每轮的 activate() 才能看到 tracer
 
         state = (g.get_state(cfg).values or {})
-        done = {
-            "type": "done",
-            "final": state.get("final", ""),
-            "final_text": state.get("final_text", ""),
-            "blocked": state.get("blocked", []),
-            "misquoted": state.get("misquoted", []),
-            "cite": state.get("cite_stats", {}),
-            "steps": state.get("steps", 0),
-            "tools": state.get("tool_names", []),
-            "evidence": _brief(state.get("evidence", []), state.get("steps", 0)),
-            "trace_id": t.run_id,
-            "thread_id": thread_id,
-            "turn": state.get("turn", 1),
-            "intent": state.get("intent", ""),
-            "total_ms": round((time.perf_counter() - t0) * 1000),
-        }
+        # 字段定义在 _done_event：公共部分从 result_event 派生，不再手抄。
+        # 顺带补上 stop_reason / check_rounds——前端以前拿不到这两个，
+        # 分不清"结论完整"和"结论是被预算掐断的半成品"。
+        done = _done_event(state, trace_id=t.run_id, thread_id=thread_id,
+                           elapsed_ms=round((time.perf_counter() - t0) * 1000))
         yield _frame(done)
         # 与 run() 共用 result_event：Web 跑的轨迹也必须能离线复算。
         # 之前这里只写 final_head，同一次运行走 Web 就没有结论全文，

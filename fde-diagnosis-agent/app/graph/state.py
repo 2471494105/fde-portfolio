@@ -141,9 +141,12 @@ class State(TypedDict, total=False):
     # 口径：只装本轮 verify 判出来的，不含上一轮回环留下的 check_notes。
     cite_fail: list
     steps: int
-    final: str
+    # 结构化结论：{"conclusion": str, "claims": [{text, value, unit, ref}], "advice": [str]}。
+    # 也允许 JSON 字符串——历史 checkpoint 里存的就是字符串，final_to_text 两种都收。
+    # 早期这里写的是 `final: str`、注释说"保留模型原文"，而四处写入端当时已经全写 dict。
+    final: dict | str
     # 结论的可读版本：结构化契约（claims）渲染成人话，ref 为空的数字后面带[无出处]。
-    # final 保留模型原文，final_text 给人看——两者分开，评测和 UI 各取所需。
+    # final 存结构、final_text 存渲染——评测读前者，UI 读后者。
     final_text: str
     # 因"只写了计划没真调用"而退回重试的次数，防止死循环
     plan_retry: int
@@ -191,7 +194,7 @@ class State(TypedDict, total=False):
 # slots：它们的语义是"保留"，不是"重置"。
 RESET_EACH_TURN = {
     "steps": 0,
-    "final": "",
+    "final": "",  # 必须是空串不是 {}：final_to_text({}) 返回字符串 "{}"，_current_final 会当它非空
     "final_text": "",
     "blocked": [],
     "tool_names": [],

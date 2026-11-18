@@ -630,16 +630,16 @@
       "sample": 12
     },
     "check_notes": {
-      "shape": "list[]",
+      "shape": "list[str]",
       "in_reset": true,
       "seen_in": [
         "diagnose_ok",
-        "diagnose_unknown",
-        "knowledge",
-        "clarify"
+        "construct_nullswap"
       ],
-      "sample_case": "diagnose_ok",
-      "sample": []
+      "sample_case": "construct_nullswap",
+      "sample": [
+        "回环后未溯源数字从 0 条涨到 1 条：把指错的 ref 改成 null 不是修正，是把引用问题换成了没引用"
+      ]
     },
     "check_retry": {
       "shape": "int",
@@ -911,12 +911,10 @@
       "in_reset": false,
       "seen_in": [
         "diagnose_ok",
-        "diagnose_unknown",
-        "knowledge",
-        "clarify"
+        "construct_intent_conf068"
       ],
-      "sample_case": "diagnose_ok",
-      "sample": ""
+      "sample_case": "construct_intent_conf068",
+      "sample": "意图置信度 0.68，按「diagnose」理解，若不对请直接纠正"
     },
     "intent_reason": {
       "shape": "str",
@@ -1116,16 +1114,14 @@
       "sample": "enough"
     },
     "svc_fail": {
-      "shape": "str",
+      "shape": "str（异常类名，空串表示本轮没失败）",
       "in_reset": true,
       "seen_in": [
         "diagnose_ok",
-        "diagnose_unknown",
-        "knowledge",
-        "clarify"
+        "construct_svc_timeout"
       ],
-      "sample_case": "diagnose_ok",
-      "sample": ""
+      "sample_case": "construct_svc_timeout",
+      "sample": "TimeoutError"
     },
     "thread_id": {
       "shape": "str",
@@ -1208,6 +1204,208 @@
       ],
       "sample_case": "diagnose_ok",
       "sample": "CX-101 的夜班误判率为什么一直偏高，帮我查下"
+    }
+  },
+  "programmatic": {
+    "verify_mixed": {
+      "verify": {
+        "blocked": [
+          "推定 3 台"
+        ],
+        "misquoted": [
+          "保养周期 91 天（候选值 90 都不是 91天）",
+          "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）",
+          "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+        ],
+        "cite_stats": {
+          "qty": 5,
+          "pct": 0,
+          "cited_ok": 1,
+          "cited_path": 1,
+          "cite_oob": 0,
+          "path_ok": 1,
+          "path_bad": 1,
+          "path_miss": 1,
+          "json_bad": 0,
+          "unsourced": 1,
+          "ref_bad": 1,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 0,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 0,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 0,
+          "quote_bad": 0,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 1,
+          "ev": 2
+        },
+        "cite_fail": [
+          {
+            "code": "value_mismatch",
+            "note": "保养周期 91 天（候选值 90 都不是 91天）"
+          },
+          {
+            "code": "path_missing",
+            "note": "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）"
+          },
+          {
+            "code": "ref_format",
+            "note": "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+          }
+        ],
+        "unknown": [],
+        "conflicts": [],
+        "final_text": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。\n- 保养周期 90 天[query_device_profile]\n- 保养周期 91 天[query_device_profile]\n- 未知字段 5[query_device_profile]\n- 推定 3 台[无出处]\n- 编号 7[出处格式错]\n* 核对设备编号后重查"
+      },
+      "check": {
+        "check_action": "retry",
+        "check_retry": 1,
+        "check_notes": [],
+        "check_unsourced0": 1,
+        "check_ev": 2
+      }
+    },
+    "check_retry": {
+      "verify": {
+        "blocked": [
+          "推定 3 台"
+        ],
+        "misquoted": [
+          "保养周期 91 天（候选值 90 都不是 91天）",
+          "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）",
+          "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+        ],
+        "cite_stats": {
+          "qty": 5,
+          "pct": 0,
+          "cited_ok": 1,
+          "cited_path": 1,
+          "cite_oob": 0,
+          "path_ok": 1,
+          "path_bad": 1,
+          "path_miss": 1,
+          "json_bad": 0,
+          "unsourced": 1,
+          "ref_bad": 1,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 0,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 0,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 0,
+          "quote_bad": 0,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 1,
+          "ev": 2
+        },
+        "cite_fail": [
+          {
+            "code": "value_mismatch",
+            "note": "保养周期 91 天（候选值 90 都不是 91天）"
+          },
+          {
+            "code": "path_missing",
+            "note": "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）"
+          },
+          {
+            "code": "ref_format",
+            "note": "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+          }
+        ],
+        "unknown": [],
+        "conflicts": [],
+        "final_text": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。\n- 保养周期 90 天[query_device_profile]\n- 保养周期 91 天[query_device_profile]\n- 未知字段 5[query_device_profile]\n- 推定 3 台[无出处]\n- 编号 7[出处格式错]\n* 核对设备编号后重查"
+      },
+      "check": {
+        "check_action": "retry",
+        "check_retry": 1,
+        "check_notes": [],
+        "check_unsourced0": 1,
+        "check_ev": 2
+      }
+    },
+    "check_nullswap": {
+      "verify": {
+        "blocked": [
+          "推定 3 台"
+        ],
+        "misquoted": [
+          "保养周期 91 天（候选值 90 都不是 91天）",
+          "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）",
+          "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+        ],
+        "cite_stats": {
+          "qty": 5,
+          "pct": 0,
+          "cited_ok": 1,
+          "cited_path": 1,
+          "cite_oob": 0,
+          "path_ok": 1,
+          "path_bad": 1,
+          "path_miss": 1,
+          "json_bad": 0,
+          "unsourced": 1,
+          "ref_bad": 1,
+          "cite_cut": 0,
+          "json_fixed": 0,
+          "range_ok": 0,
+          "range_bad": 0,
+          "ref_ambiguous": 0,
+          "multi_ok": 0,
+          "multi_bad": 0,
+          "qual_ok": 0,
+          "qual_bad": 0,
+          "qual_unsourced": 0,
+          "quote_ok": 0,
+          "quote_bad": 0,
+          "bare_conclusion": 0,
+          "svc_fail": 0,
+          "ev_mismatch": 0,
+          "cited": 1,
+          "ev": 2
+        },
+        "cite_fail": [
+          {
+            "code": "value_mismatch",
+            "note": "保养周期 91 天（候选值 90 都不是 91天）"
+          },
+          {
+            "code": "path_missing",
+            "note": "未知字段 5（query_device_profile 的返回里没有字段 no_such_field）"
+          },
+          {
+            "code": "ref_format",
+            "note": "编号 7（出处格式错:7#，应写 工具名#字段路径，如 query_device_profile#maintenance_cycle_days）"
+          }
+        ],
+        "unknown": [],
+        "conflicts": [],
+        "final_text": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。\n- 保养周期 90 天[query_device_profile]\n- 保养周期 91 天[query_device_profile]\n- 未知字段 5[query_device_profile]\n- 推定 3 台[无出处]\n- 编号 7[出处格式错]\n* 核对设备编号后重查"
+      },
+      "check": {
+        "check_action": "pass",
+        "check_retry": 1,
+        "check_notes": [
+          "回环后未溯源数字从 0 条涨到 1 条：把指错的 ref 改成 null 不是修正，是把引用问题换成了没引用"
+        ],
+        "check_unsourced0": 0,
+        "check_ev": 2
+      }
     }
   }
 }

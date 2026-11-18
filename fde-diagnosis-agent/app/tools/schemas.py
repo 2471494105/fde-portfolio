@@ -230,7 +230,14 @@ TOOL_SCHEMAS = [
                     "evidence_refs": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "支撑该根因的证据引用，例如 1号工位误判率57.6%、光源累计8620h",
+                        "description": (
+                            "支撑该根因的证据引用。每条必须是一个可解析的指针，"
+                            "格式「工具名#字段路径」；同一工具在一轮里调过多次时，"
+                            "写成「工具名{参数名=值}#字段路径」以区分是哪一次调用。"
+                            "例如：query_defect_log{group_by=station}#groups[0].rate。"
+                            "不要写「1号工位误判率57.6%」这类自然语言复述——那样的引用"
+                            "无法被程序核对，等于没有证据。"
+                        ),
                     },
                 },
                 "required": ["device_id", "root_cause", "root_cause_code", "severity", "actions", "evidence_refs"],

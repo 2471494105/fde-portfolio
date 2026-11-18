@@ -17,6 +17,7 @@ TRAJECTORIES = [
     # ---------- H1-H5：硬件类 ----------
     {
         "id": "H1",
+        "expect_intent": "diagnose",
         "type": "硬件",
         "input": "3号线 CX-101 夜班误判率飙升，白班还好一点，帮我查下原因",
         "expect_tools": ["query_device_profile", "query_defect_log", "query_light_usage"],
@@ -28,6 +29,7 @@ TRAJECTORIES = [
     },
     {
         "id": "H2",
+        "expect_intent": "diagnose",
         "type": "硬件",
         # CX-105 的画像：误判率随时间加速上升、标定正常、无告警 → 镜头污染。
         # 判据是"按天看趋势"，所以期望里必须有 day 维度。
@@ -41,6 +43,7 @@ TRAJECTORIES = [
     },
     {
         "id": "H3",
+        "expect_intent": "diagnose",
         "type": "硬件",
         # 用户说"从 11月8号开始"，判据是时间线陡变 → 用 day 维度，不是 hour。
         "input": "CX-104 从 11月8号开始误判突然变多，之前一直好好的",
@@ -53,6 +56,7 @@ TRAJECTORIES = [
     },
     {
         "id": "H4",
+        "expect_intent": "diagnose",
         "type": "硬件",
         "input": "CX-101 误判率有点高，你看看怎么回事",
         "expect_tools": ["query_defect_log", "query_light_usage"],
@@ -67,6 +71,7 @@ TRAJECTORIES = [
     },
     {
         "id": "H5",
+        "expect_intent": "diagnose",
         "type": "硬件",
         # CX-104 真实画像：11-07 标定 drift=0.42 告警，11-08 起误判从 15% 跳到 63%。
         # 用户怀疑"阈值太严"是个误导，正确做法是查标定 + 按天看是否陡变。
@@ -82,6 +87,7 @@ TRAJECTORIES = [
     # ---------- A1-A5：算法类 ----------
     {
         "id": "A1",
+        "expect_intent": "diagnose",
         "type": "算法",
         "input": "CX-102 昨天开始误判一下子变多，产线换了新物料",
         "expect_tools": ["query_defect_log"],
@@ -93,6 +99,7 @@ TRAJECTORIES = [
     },
     {
         "id": "A2",
+        "expect_intent": "diagnose",
         "type": "算法",
         "input": "CX-103 划痕老是判错，其他缺陷倒还好",
         "expect_tools": ["query_defect_log"],
@@ -104,6 +111,7 @@ TRAJECTORIES = [
     },
     {
         "id": "A3",
+        "expect_intent": "diagnose",
         "type": "算法",
         "input": "CX-102 误判率上去了，帮我看看",
         "expect_tools": ["query_defect_log"],
@@ -115,6 +123,7 @@ TRAJECTORIES = [
     },
     {
         "id": "A4",
+        "expect_intent": "diagnose",
         "type": "算法",
         "input": "CX-103 那台设备现在特别挑划痕，一点点就判不良，客户投诉了",
         "expect_tools": ["query_defect_log"],
@@ -126,6 +135,8 @@ TRAJECTORIES = [
     },
     {
         "id": "A5",
+        # 换了供应商的料之后变多：有现象有变化也有猜测，是诊断不是看数据
+        "expect_intent": "diagnose",
         "type": "算法",
         "input": "CX-102 换了新供应商的料之后误判变多了，是不是模型没适配",
         "expect_tools": ["query_defect_log"],
@@ -139,6 +150,8 @@ TRAJECTORIES = [
     # ---------- I1-I4：信息不全 ----------
     {
         "id": "I1",
+        # 信息不全：有现象要原因但没有设备号 → 硬矛盾校验会降级为追问
+        "expect_intent": "clarify",
         "type": "信息不全",
         "input": "我们线体误判率突然飙升了，帮我看看什么原因",
         "expect_tools": [],
@@ -150,6 +163,7 @@ TRAJECTORIES = [
     },
     {
         "id": "I2",
+        "expect_intent": "diagnose",
         "type": "信息不全",
         "input": "CX-101 有点问题，你查一下",
         "expect_tools": ["query_device_profile", "query_defect_log"],
@@ -161,6 +175,10 @@ TRAJECTORIES = [
     },
     {
         "id": "I3",
+        # 设备不在台账也要按诊断处理，结论是"查无"这件事本身
+        "expect_intent": "diagnose",
+        # 判据读结构不看措辞：设备在不在台账由 query_device_profile 的决定
+        "expect_unknown": ["device_not_found"],
         "type": "信息不全",
         "input": "CX-106 判得不太准，帮我看下",
         "expect_tools": ["query_device_profile"],
@@ -172,6 +190,8 @@ TRAJECTORIES = [
     },
     {
         "id": "I4",
+        # 设备指代模糊（那台），无法定位对象 → 追问
+        "expect_intent": "clarify",
         "type": "信息不全",
         "input": "3号线那台老出问题的机器，误判又高了",
         "expect_tools": [],
@@ -185,6 +205,7 @@ TRAJECTORIES = [
     # ---------- W1-W3：建单 ----------
     {
         "id": "W1",
+        "expect_intent": "action",
         "type": "建单",
         "input": "CX-101 光源累计已经 8620 小时超了额定寿命，1号工位误判 58%，文档冲突的事先放一边，直接按 65 亮度给我建单让设备科换灯",
         "expect_tools": ["create_work_order"],
@@ -196,6 +217,7 @@ TRAJECTORIES = [
     },
     {
         "id": "W2",
+        "expect_intent": "action",
         "type": "建单",
         "input": "再帮我给 CX-101 建一次刚才那个换光源的工单",
         "expect_tools": ["create_work_order"],
@@ -208,6 +230,8 @@ TRAJECTORIES = [
     },
     {
         "id": "W3",
+        # 明确要求建单，看的是动作不是原因
+        "expect_intent": "action",
         "type": "建单",
         # 用户明确说"别管什么原因了"，所以不强制聚合维度；
         # 考的是"没给根因时会不会凭猜测建单"——仍要有取证动作，不能直接建。
@@ -223,6 +247,8 @@ TRAJECTORIES = [
     # ---------- T1-T3：陷阱 ----------
     {
         "id": "T1",
+        # 问亮度该设多少，是标准值而不是这台设备的数据
+        "expect_intent": "knowledge",
         "type": "陷阱",
         "input": "CX-101 换完光源，亮度到底该设多少？给我个准数",
         "expect_tools": ["search_manual", "check_doc_conflict"],
@@ -238,6 +264,8 @@ TRAJECTORIES = [
     },
     {
         "id": "T2",
+        # 质疑工位数量 + 给出现象，属于要原因的诊断
+        "expect_intent": "diagnose",
         "type": "陷阱",
         "input": "CX-101 不是只有两个工位吗，怎么 1号工位误判这么高",
         "expect_tools": ["query_device_profile", "query_defect_log"],

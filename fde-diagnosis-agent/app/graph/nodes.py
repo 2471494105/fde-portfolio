@@ -2175,11 +2175,19 @@ def verify(state):
         # 光看形状会静默通过；但那段话里没有任何被整理出来的内容，
         # 拿它当"通过"就是把一次基础设施故障记成了成功。
         # 判失败，但原因写明是"半成品"，不和"引用写错"混为一类。
+        # 半成品只进 svc_fail，不进 misquoted。
+        # 原来它同时被塞进 misquoted，而 judge 拿 `not misquoted` 判 trace_ok，
+        # 于是一次 429 被记成「模型引用写错」，owner 落到 model——
+        # 注释写着"不和引用写错混为一类"，实现却把它塞进了同一个列表。
+        #
+        # 归属依据 Anthropic《Quantifying infrastructure noise》与失败归因三分类
+        # （Task's Fault / Agent's Fault / Infrastructure Failure）：
+        # 基础设施故障与"任务-模型"这条轴正交，必须单独计数并触发重跑，
+        # 混进模型失败率里会让报表失真（该文实测 infra 噪声能吃掉 6 个百分点）。
         svc = str(state.get("svc_fail") or "").strip()
         if svc:
             stats["svc_fail"] = 1
             msg = (f"整理答案的模型调用失败（{svc}），这一条是半成品，不能当结论用")
-            misquoted.append(msg)
             cite_fail.append({"code": "svc_fail", "note": msg})
         final_text = preset_text or _render_claims(doc)
         trace.emit("verify", blocked=blocked, misquoted=misquoted,

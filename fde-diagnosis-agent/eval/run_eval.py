@@ -156,6 +156,31 @@ def judge(traj, state):
     kw_hit = [k for k in kws if _norm(k) in flat]
     kw_rate = (len(kw_hit) / len(kws)) if kws else 1.0
 
+    # 结论层有两条独立的证据通道，不是"对/错"二选一：
+    #   1) 说对了词——kw_rate
+    #   2) 产生了对的结构事实——unknown 里记的"查过了确实没有"
+    #
+    # 为什么必须加第二条：同一份输入跑两次，模型会把"查不到"换成"没有"
+    # （实测 I3 两次措辞不同），拿措辞当判据等于让判据跟着模型的口语漂。
+    # Claude Citations 的做法是 cited_text 由 API 从原文填、模型只给位置——
+    # 判据的真值来自系统，不来自模型的自由表达。这里同理：
+    # 设备到底在不在台账，是 query_device_profile 的返回决定的，不是模型怎么措辞决定的。
+    unk_kinds = {u.get("kind") for u in (state.get("unknown") or []) if isinstance(u, dict)}
+    unk_expect = traj.get("expect_unknown", [])
+    unk_hit = [k for k in unk_expect if k in unk_kinds]
+    unknown_ok = bool(unk_expect) and len(unk_hit) == len(unk_expect)
+
+    # 半成品：模型调用挂了，结论是占位文案。
+    # 归 env 不归 model——依据失败归因三分类（Task's Fault / Agent's Fault /
+    # Infrastructure Failure）与 Anthropic《Quantifying infrastructure noise》：
+    # 基础设施故障与"任务-模型"这条轴正交，混进模型失败率会让报表失真。
+    svc_fail_n = int((cite_stats or {}).get("svc_fail") or 0)
+
+    # 结论达标 = 说对了词，或产生了对的结构事实。
+    # 写成"或"而不是给 I3 开特例：特例是"这条用例单独放行"，
+    # 而"查无"是一整类结论形态，任何一条问不存在对象的用例都该走这条路。
+    conclusion_ok = (kw_rate >= 0.5) or unknown_ok
+
     lo, hi = traj["steps_range"]
     steps_ok = lo <= steps <= hi
 
@@ -240,7 +265,8 @@ def judge(traj, state):
     semantic_ok = (
         tool_rate >= 1.0
         and gb_rate >= 1.0
-        and kw_rate >= 0.5
+        and conclusion_ok
+        and not svc_fail_n
         and not forbid_hit
         and steps_ok
         and not misquoted
@@ -289,7 +315,14 @@ def judge(traj, state):
         _fail("gb_missing", "model",
               f"取证维度不足(缺{','.join(g for g in gb_expect if g not in gb_used)})",
               missing=[g for g in gb_expect if g not in gb_used])
-    if kw_rate < 0.5:
+    # 半成品先单独记：它同时也必然 kw_rate=0，
+    # 若不在这里拦一道，一次 429 会被记成"模型结论未命中"，
+    # 等于把基础设施故障再算一遍到模型头上。
+    if svc_fail_n:
+        _fail("svc_fail", "env",
+              "整理答案时模型调用失败（结论是半成品，应重跑，不计入模型能力）",
+              svc_fail=cite_stats.get("svc_fail"))
+    if not conclusion_ok and not svc_fail_n:
         # 原来这一条只有一句"判断错/结论未命中"，至少盖住三种：
         #   追问了但该直接答 → 没答，病根在"该不该反问"
         #   调了工具仍没命中 → 答偏，病根在结论

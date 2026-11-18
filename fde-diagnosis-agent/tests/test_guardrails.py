@@ -2519,8 +2519,15 @@ class BareConclusionTest(unittest.TestCase):
         state = {"final": nodes._prose_doc("（整理答案时调用失败：APITimeoutError）未整理"),
                  "svc_fail": "APITimeoutError", "evidence": [], "turn": 1}
         out = nodes.verify(state)
-        self.assertTrue(out["misquoted"], "服务失败必须判失败，否则这条废结论会被当成通过")
+        # 半成品必须判失败，但它不是"引用写错"。
+        # misquoted 是 judge 判 trace_ok 的唯一依据，塞进去等于把一次超时
+        # 记成模型的责任——eval 里那条 429（T1）就是这么被算到 model 头上的。
+        # 失败改由 cite_fail 的 svc_fail 条目承载，归因到基础设施。
+        self.assertEqual(out["misquoted"], [],
+                         "服务失败不是引用错误，必须留在 misquoted 之外")
         self.assertEqual(out["cite_stats"]["svc_fail"], 1)
+        self.assertTrue(any(f.get("code") == "svc_fail" for f in out["cite_fail"]),
+                        "服务失败必须留一条可归因到 env 的记录，否则它会静默通过")
         # 而且不能被记成"引用写错"：那是模型的责任，这条是基础设施的责任
         self.assertFalse(out["cite_stats"]["json_bad"])
 

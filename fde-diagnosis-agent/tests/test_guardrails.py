@@ -3190,5 +3190,32 @@ class GraphRouteDeclaredTest(unittest.TestCase):
                           build.ROUTE_CHECK)
 
 
+class FixtureStepsRangeTest(unittest.TestCase):
+    """夹具的步数上界不能窄于同类。
+
+    2026-11-19：A2 跑 11 步、结论全对（"过杀集中划痕、跨工位跨批次分散、
+    光源与标定正常、阈值口径有冲突"），却因为区间上界是 10 被判死，
+    `failure.owner` 自己给的 `uncertain` —— 判据当场承认它分不清
+    "区间写窄"还是"模型绕远"。同组的 A1 / A5 都是 (3,12)，A3 是 (4,14)。
+
+    上界放到 12（= MAX_STEPS）的语义是：**跑满预算不算过**。真跑飞由
+    `budget_exhausted` 单独统计，不该让步数上界兼任这个职责。
+    """
+
+    def test_algorithm_diagnose_upper_bound(self):
+        from eval import trajectories as T
+        cases = {c["id"]: c for c in T.TRAJECTORIES}
+        for cid in ("A2", "A4"):
+            self.assertEqual(
+                cases[cid]["steps_range"], (3, 12),
+                f"{cid} 的上界应与同组 A1/A5 一致（12），别改回 10")
+
+    def test_every_case_range_is_ordered(self):
+        from eval import trajectories as T
+        for c in T.TRAJECTORIES:
+            lo, hi = c["steps_range"]
+            self.assertLessEqual(lo, hi, f"{c['id']} 的区间写反了")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

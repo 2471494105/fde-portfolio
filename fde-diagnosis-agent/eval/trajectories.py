@@ -107,7 +107,11 @@ TRAJECTORIES = [
         "expect_group_by": ["defect_type"],
         "final_keywords": ["划痕", "阈值"],
         "expect_ask": False,
-        "steps_range": (3, 10),
+        # 上界与同组的 A1 / A5 对齐到 12。原来是 10——那是照"最理想路径"
+        # （查一次 defect_log 就下结论）拍的，而它是完整诊断，模型会顺带查
+        # 设备档案 / 标定 / 手册冲突。2026-11-19 全量它跑 11 步、结论是对的，
+        # 却被这一步之差判死（owner=uncertain，判据自己都分不清）。
+        "steps_range": (3, 12),
     },
     {
         "id": "A3",
@@ -131,7 +135,9 @@ TRAJECTORIES = [
         "expect_group_by": ["defect_type"],
         "final_keywords": ["划痕"],
         "expect_ask": False,
-        "steps_range": (3, 10),
+        # 同上：与 A1 / A5 的 12 对齐。这是"客户投诉"型完整诊断，
+        # 不是"查一次就完"的轻诊断。
+        "steps_range": (3, 12),
     },
     {
         "id": "A5",

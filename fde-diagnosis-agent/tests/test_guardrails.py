@@ -92,6 +92,68 @@ class OwnershipGuardTest(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
 
 
+class WorkOrderScopeTest(unittest.TestCase):
+    """查工单的范围闸（2026-11-19）。
+
+    空 device_id + 空 status 以前会把全厂整张工单表拖出来：一台设备的诊断
+    能读到全厂数据，而且前 10 条无关工单会挤掉真正要看的那条。现在两个都空
+    直接拒（bad_args）；"全厂 + 指定状态"仍合法；返回恒带 scope。
+    """
+
+    class _Cur:
+        def __init__(self, rows=None, one=None):
+            self.rows = rows or []
+            self.one = one
+            self.sql = None
+            self.args = None
+
+        def execute(self, sql, args=None):
+            self.sql, self.args = sql, args
+
+        def fetchone(self):
+            return self.one
+
+        def fetchall(self):
+            return self.rows
+
+    def _patch(self, cur):
+        conn = mock.MagicMock()
+        cur_cm = mock.MagicMock()
+        cur_cm.__enter__.return_value = cur
+        conn.cursor.return_value = cur_cm
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = conn
+        return mock.patch.object(workorder, "connect", return_value=cm)
+
+    def test_both_empty_is_rejected(self):
+        res = workorder.query_work_order()
+        self.assertEqual(res["state"], "bad_args")
+        self.assertEqual(res["orders"], [])
+        self.assertIn("hint", res)
+
+    def test_scope_is_declared_for_single_device(self):
+        cur = self._Cur(one=("CX-101",), rows=[])
+        with self._patch(cur):
+            res = workorder.query_work_order(device_id="CX-101")
+        self.assertEqual(res["scope"], "device:CX-101")
+        self.assertEqual(res["state"], "no_order")
+
+    def test_scope_is_declared_for_plant_wide_query(self):
+        cur = self._Cur(rows=[])
+        with self._patch(cur):
+            res = workorder.query_work_order(device_id="", status="待处理")
+        # 全厂 + 指定状态是合法需求，不能被闸误伤
+        self.assertEqual(res["state"], "no_order")
+        self.assertEqual(res["scope"], "全厂(status=待处理)")
+
+    def test_plant_wide_limit_capped_at_20(self):
+        cur = self._Cur(rows=[])
+        with self._patch(cur):
+            workorder.query_work_order(device_id="", status="待处理", limit=100)
+        # 没有设备维度时每条都可能是无关样本，上限比单台查询更紧
+        self.assertEqual(cur.args[-1], 20)
+
+
 class WorkOrderGuardTest(unittest.TestCase):
     """建单前置校验：不合规的入参不许发出去。"""
 

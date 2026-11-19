@@ -176,14 +176,39 @@ def query_work_order(device_id: str = "", status: str = "", limit: int = 10) -> 
 
     只读工具，不写库、不改状态。
     """
-    # limit 收敛，避免模型传个 1000 把整表拖出来
+    did = (device_id or "").strip().upper()
+    st = (status or "").strip()
+
+    # 范围闸：设备与状态都不给 = 把全厂整张工单表拖出来。必须拦，不是洁癖：
+    #   ① 一台设备的诊断能读到全厂工单 —— 范围被悄悄放大；
+    #   ② 10 条无关工单会挤掉真正要看的那条，上下文预算被无关证据吃掉；
+    #   ③ 以前它默默放行，模型看到一堆工单会当成"这台设备的"，结论直接错。
+    # 只拒"两个都空"这一种：『全厂有哪些待处理的』是合法需求（device 空 + status 给定）。
+    if not did and not st:
+        return {
+            "device_id": None,
+            "count": 0,
+            "orders": [],
+            "state": "bad_args",
+            "error": "查工单至少要给一个范围：device_id 或 status，不能两个都空",
+            "hint": (
+                "要么传 device_id（如 CX-101）查单台设备，"
+                "要么传 status（如 待处理）查全厂该状态的单。"
+                "两个都不传等于拖全厂整表，既没有诊断价值，也会挤掉真正该看的证据。"
+            ),
+        }
+
+    # limit 收敛，避免模型传个 1000 把整表拖出来。
+    # 全厂查询再压一档：没有设备维度时，每条都是"可能无关"的样本。
+    cap = 50 if did else 20
     try:
-        limit = max(1, min(int(limit or 10), 50))
+        limit = max(1, min(int(limit or 10), cap))
     except (TypeError, ValueError):
         limit = 10
 
-    did = (device_id or "").strip().upper()
-    st = (status or "").strip()
+    # 返回恒带 scope：模型看不见"这是全厂还是单台"，就会把全厂结果当成单台的。
+    # 边界必须随结果一起回来，不能靠它的记忆。
+    scope = f"device:{did}" if did else f"全厂(status={st})"
 
     try:
         with connect() as conn:
@@ -193,6 +218,7 @@ def query_work_order(device_id: str = "", status: str = "", limit: int = 10) -> 
                     if not cur.fetchone():
                         return {
                             "device_id": did,
+                            "scope": scope,
                             "count": 0,
                             "orders": [],
                             "state": "device_not_found",
@@ -235,19 +261,21 @@ def query_work_order(device_id: str = "", status: str = "", limit: int = 10) -> 
         })
 
     if not orders:
-        scope = f"设备 {did}" if did else "全厂"
+        scope_text = f"设备 {did}" if did else "全厂"
         extra = f"、状态为「{st}」" if st else ""
         return {
             "device_id": did or None,
+            "scope": scope,
             "count": 0,
             "orders": [],
             "state": "no_order",
-            "note": f"{scope}{extra}没有任何工单记录。这是查询结果，不是建单记录缺失。",
+            "note": f"{scope_text}{extra}没有任何工单记录。这是查询结果，不是建单记录缺失。",
             "hint": HINT["no_order"],
         }
 
     return {
         "device_id": did or None,
+        "scope": scope,
         "count": len(orders),
         "orders": orders,
         "state": "found",

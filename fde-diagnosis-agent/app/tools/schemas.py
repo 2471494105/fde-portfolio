@@ -166,17 +166,26 @@ TOOL_SCHEMAS = [
                 "返回的 state 字段区分三种情况：device_not_found（设备不在台账）、"
                 "no_order（设备存在但没有任何工单）、found（查到工单）。"
                 "查到 0 条时如实说『没有工单记录』，不要说成『系统查不到』。"
+                "返回里恒带 scope 字段，写明本次查询的范围（device:CX-101 或 全厂(status=待处理））。"
+                "引用工单时必须说明范围，不要把全厂结果当成某台设备的。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "device_id": {
                         "type": "string",
-                        "description": "设备编号，例如 CX-101。不传则查全厂工单。",
+                        "description": (
+                            "设备编号，例如 CX-101。查单台设备就传它。"
+                            "不传时必须同时给 status，否则调用会被拒绝（bad_args）——"
+                            "两个都不给等于拖全厂整张工单表。"
+                        ),
                     },
                     "status": {
                         "type": "string",
-                        "description": "工单状态精确匹配，例如 待处理。不传则不限状态。",
+                        "description": (
+                            "工单状态精确匹配，例如 待处理。不传则不限状态；"
+                            "但 device_id 也不传时它是必填项。"
+                        ),
                     },
                     "limit": {
                         "type": "integer",

@@ -211,6 +211,57 @@ _INTENT_ENUM = {"diagnose", "lookup", "knowledge", "action", "refuse", "clarify"
 CONF_ASK = 0.6
 CONF_OK = 0.75
 
+# ---- 分支的"猜错代价"：决定低置信时是问还是做 ----
+#
+# 依据是 clarify-or-commit（arXiv 2601.06407）：每一轮真正要决策的不是"我确不确定"，
+# 而是"问一句的收益"和"问一句的成本 / 猜错的损失"哪个大。
+# 原文：every question carries both the potential to reduce uncertainty
+#      and **the cost of additional user effort**。
+#
+# 分值含义：2 = 猜错要跑很多步且答案不像"答非所问"，用户很难中途发现；
+#          3 = 有外部副作用（建单），错了要回滚；
+#          0 = 一步就能给出，答偏了用户一眼看出来，一句话就能纠正
+#              （REVOIR 的 cheap correction：此时先做比先问更划算）。
+#
+# 这张表替代了"低置信一律追问"：lookup/knowledge 现在低了也照做，
+# 但会把假设写在结论最前面（见 finalize）。
+BRANCH_COST = {"action": 3, "diagnose": 2, "lookup": 0, "knowledge": 0, "refuse": 0}
+
+# ---- 确定性前置：只在"罕见组合"上下手 ----
+#
+# 为什么只留这三条：在 27 条夹具上逐条测过精度——
+#   guess（不用查/凭经验）           1 条, 100%
+#   act_verb（建/派 + 工单）          2 条, 100%
+#   change+dev（变化词 + 设备号）      4 条, 100%
+#   why+dev                          86%（W3 里"别管什么原因"误伤）
+#   look_only                        50%（H2 里"标定记录"误伤）
+#   param_only                       33%（H5/W1 里"阈值/亮度"误伤）
+#
+# 后三条依赖的是**常见词**（记录、阈值、原因），真实用户表达更丰富，误伤只会更多；
+# 前三条依赖的是**罕见组合**，不容易撞上。所以弱规则一律不进前置——
+# 它们漏掉的情况会落到"追问"，而追问是安全路径；反过来，硬塞进去的弱规则
+# 会把本来正确的判断改成错的，且这种错在报表上看起来像"模型退化了"。
+_RULE_GUESS = re.compile(r"(不用查|凭经验|估一下|随便给|别管数据)")
+# 注意"建"和"工单"必须是动词-宾语关系，不能用「句子里有工单」——
+# I9「上次那个工单处理了吗」有"工单"但那是名词，判成 action 就错了。
+_RULE_ACT = re.compile(r"(建|派|登记)[^。；！？]{0,6}(单|工单|派工)")
+_RULE_CHANGE = re.compile(r"(变多|变少|飙升|越来越高|越来越低|突然|换了|开始变|上去了|掉了)")
+
+
+def route_by_rule(msg):
+    """规则能定就定，返回 (intent, 规则名)；定不了返回 (None, "")。
+
+    不追求覆盖率，追求"出手必对"。命中之后仍然会调模型（要它的 phenomenon /
+    param_names），但 intent 不听模型的——这样并发抖动只影响抽取，不影响路由。
+    """
+    if _RULE_GUESS.search(msg):
+        return "refuse", "guess"
+    if _RULE_ACT.search(msg):
+        return "action", "act_verb"
+    if DEVICE_RE.search(msg) and _RULE_CHANGE.search(msg):
+        return "diagnose", "change+dev"
+    return None, ""
+
 
 def _parse_json_loose(raw):
     """从模型输出里尽量抠出 JSON 对象，抠不出来返回 None。
@@ -322,9 +373,19 @@ def understand(state):
             fallback_reason = "意图判断输出不是合法 JSON（已重试一次），退回按设备号判断"
 
     # ---- 程序级一致性校验：不替模型判断语义，只查它自不自洽 ----
-    intent = str(data.get("intent") or "").strip().lower()
-    if intent not in _INTENT_ENUM:
-        intent = "clarify"
+    #
+    # 先看规则能不能定。规则定得了就定，不再听模型的 intent——
+    # 这是这一层最重要的改动：**路由不再由概率模型的输出直接决定**。
+    # 模型照旧要调（需要它的 phenomenon / param_names），但它的 intent 只作参考。
+    rule_intent, rule_name = route_by_rule(msg)
+    if rule_intent:
+        intent = rule_intent
+        route_by = f"rule:{rule_name}"
+    else:
+        intent = str(data.get("intent") or "").strip().lower()
+        if intent not in _INTENT_ENUM:
+            intent = "clarify"
+        route_by = "model"
 
     # ---- 置信度解析（判在硬矛盾之后，避免和降级后的 intent 打架）----
     try:
@@ -372,11 +433,25 @@ def understand(state):
     # 已经降级成 clarify 的不再叠置信说明：追问本身就是不确定性最好的表达。
     # 这层是这次唯一"融合 Jev"的地方——分类器的价值不只在选得准，
     # 还在能报出"我不确定"，并且这个数值真的会被用来改变行为。
-    if intent != "clarify" and conf < CONF_ASK:
-        intent_note = f"意图置信度 {conf:.2f} 低于 {CONF_ASK}，先追问确认再往下走"
-        intent = "clarify"
-    elif intent != "clarify" and conf < CONF_OK:
-        intent_note = f"意图置信度 {conf:.2f}，按「{intent}」理解，若不对请直接纠正"
+    # ---- 不确定时：按"猜错代价"决定问还是做，而不是一律追问 ----
+    #
+    # 规则命中的不进这道闸：规则是确定性的，模型给的 confidence 对它是噪音。
+    # 原来这里只有一个判据（低置信 → 追问），结果是两个相反的错：
+    #   A5 那种 spec 其实很完整、只是模型没判对的情况，被一句追问糊过去，
+    #      评测上再也看不见"它判错了"（假绿）；
+    #   lookup 那种一步就能给答案、答偏了用户一眼看穿的情况，白白多问一轮。
+    # 现在按 BRANCH_COST 分开：贵的问，便宜的先做并把假设写在结论最前面。
+    if intent != "clarify" and not route_by.startswith("rule:"):
+        cost = BRANCH_COST.get(intent, 2)
+        if conf < CONF_ASK and cost >= 2:
+            intent_note = "你这句话两种理解都通，先确认一句再往下走"
+            intent = "clarify"
+        elif conf < CONF_ASK:
+            # 便宜分支：不问，直接做，但把假设露出来让用户能纠正
+            # （REVOIR：能被便宜纠正时，先问反而更费）
+            intent_note = f"我按「{intent}」理解（置信 {conf:.2f}），若不对直接纠正"
+        elif conf < CONF_OK:
+            intent_note = f"意图置信度 {conf:.2f}，按「{intent}」理解，若不对请直接纠正"
 
     trace.emit(
         "understand",
@@ -387,6 +462,12 @@ def understand(state):
         missing=list(data.get("missing") or []),
         reason=reason[:160],
         note=intent_note[:120],
+        # 判定来源：rule:<名字> / model。用来算每条规则的真实误伤率——
+        # 规则错和模型错的归因方式完全不同，混在一起就什么都看不出来。
+        route_by=route_by,
+        # 模型自己判的那个 intent 也留一份：规则覆盖它的时候，
+        # 这两个值的分歧本身就是最有价值的样本（规则对、模型错，或反过来）。
+        model_intent=str(data.get("intent") or "").strip().lower()[:20],
     )
 
     return {
@@ -2796,7 +2877,16 @@ def finalize(state):
     turn = int(state.get("turn") or 1)
     tools = ",".join(state.get("tool_names") or []) or "无"
     user_head = (state.get("user_msg") or "").replace("\n", " ")[:50]
-    final_head = final_to_text(state.get("final")).replace("\n", " ")[:80]
+    final = state.get("final", "")
+    # 便宜分支"先做后纠"：把假设写在结论最前面，用户一眼能看出我是按什么理解的。
+    # 安全前提：verify 已经在 finalize 之前跑完，这里只加前缀、不动 claims，
+    # 不会凭空造出一个可引用的事实。也只在 intent_note 非空时加——
+    # 置信足够的时候不该有这句，否则每句话都在"我不太确定"，用户会免疫。
+    note = (state.get("intent_note") or "").strip()
+    if note and isinstance(final, dict) and final.get("conclusion"):
+        final = dict(final)
+        final["conclusion"] = f"（{note}）\n\n{final['conclusion']}"
+    final_head = final_to_text(final).replace("\n", " ")[:80]
     # 结束原因写进跨轮摘要：下一轮模型能看到"上一轮是被预算掐断的"，
     # 就不会把一份半成品结论当成已经查实的事实继续往下推。
     # lookup / knowledge 不走 plan，自然没有这个值，写成"未跑循环"而不是空——
@@ -2833,4 +2923,4 @@ def finalize(state):
     clash = f"；冲突 {len(clashes)} 处" if clashes else ""
     line = (f"\n[{turn}] 用户「{user_head}」→ {state.get('intent') or '?'}；"
             f"工具 {tools}；结束={stop}{gap}{clash}；结论「{final_head}」")
-    return {"final": state.get("final", ""), "session_summary": line}
+    return {"final": final, "session_summary": line}

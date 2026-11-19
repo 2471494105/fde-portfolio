@@ -1017,11 +1017,13 @@ class IntentConfidenceTest(unittest.TestCase):
             trace.RUNS_DIR = old
 
     def test_low_confidence_falls_back_to_ask(self):
-        # 带着错的理解跑满 8 步，不如先问一句
+        # 带着错的理解跑满 8 步，不如先问一句。
+        # 2026-11-19 起文案改了：不再写"置信度 0.45 低于 0.6"——
+        # 用户不关心阈值是几，只关心要补什么。
         out = self._run({"intent": "diagnose", "confidence": 0.45,
                          "device_ids": ["CX-104"], "phenomenon": "误判率高"})
         self.assertEqual(out["intent"], "clarify")
-        self.assertIn("低于", out["intent_note"])
+        self.assertIn("两种理解", out["intent_note"])
 
     def test_mid_confidence_keeps_intent_with_note(self):
         # 落在两条线之间：照判断走，但结论里要带"这是按 X 理解的"
@@ -1051,10 +1053,14 @@ class IntentConfidenceTest(unittest.TestCase):
         self.assertEqual(out["intent_conf"], 1.0)
 
     def test_string_confidence_is_parsed(self):
-        # 模型常把数字写成字符串，不能因此当成"没给"
+        # 模型常把数字写成字符串，不能因此当成"没给"。
+        # 2026-11-19 起语义变了：低置信的 lookup 不再追问——它一步就能给答案，
+        # 答偏了用户一眼看得出来（BRANCH_COST["lookup"]=0）。
+        # 所以断言落在"解析成了 0.40 并据此写了假设"，而不是"降级成 clarify"。
         out = self._run({"intent": "lookup", "confidence": "0.40",
                          "device_ids": ["CX-104"]})
-        self.assertEqual(out["intent"], "clarify")
+        self.assertEqual(out["intent"], "lookup")
+        self.assertIn("0.40", out["intent_note"])
 
     def test_llm_failure_falls_back_to_cheapest_path(self):
         # 有设备号时兜底原来跑 diagnose（最贵的一条）。改成 lookup。
@@ -1069,6 +1075,106 @@ class IntentConfidenceTest(unittest.TestCase):
         finally:
             trace.RUNS_DIR = old
         self.assertEqual(out["intent"], "lookup")
+
+
+class BranchCostGateTest(unittest.TestCase):
+    """低置信时按"猜错代价"分流，而不是一律追问。
+
+    依据：clarify-or-commit（arXiv 2601.06407）——每轮真正的决策是
+    「问的收益」vs「问的成本 + 猜错的损失」；REVOIR 补充：能被便宜纠正时先做更划算。
+
+    原来只有一条判据（低置信 → 追问），同时造成两个相反的错：
+      - 贵的分支（diagnose 跑十几步）该问却没问 → 跑错到底
+      - 便宜的分支（lookup 一步给答案）不该问却问了 → 白多一轮
+    """
+
+    def _run(self, payload, user_msg="cx-104 数据", device_id="CX-104"):
+        content = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else payload
+        client = _FakeClient(content)
+        st = {"user_msg": user_msg, "device_id": device_id, "turn": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with mock.patch.object(nodes, "get_client", return_value=client):
+                with trace.Tracer("cost", model="m", provider="p", base_url="b"):
+                    return nodes.understand(st)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_action_low_conf_always_asks(self):
+        # 建单有外部副作用，错了要回滚 → 只要不确定就先确认
+        out = self._run({"intent": "action", "confidence": 0.40,
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "clarify")
+
+    def test_diagnose_low_conf_asks(self):
+        out = self._run({"intent": "diagnose", "confidence": 0.40,
+                         "device_ids": ["CX-104"], "phenomenon": "误判率高"})
+        self.assertEqual(out["intent"], "clarify")
+
+    def test_lookup_low_conf_proceeds_with_assumption(self):
+        # 一步就能给答案，答偏了用户一句话能纠 → 先做，把假设写在结论前
+        out = self._run({"intent": "lookup", "confidence": 0.40,
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "lookup")
+        self.assertIn("按「lookup」理解", out["intent_note"])
+
+    def test_knowledge_low_conf_proceeds(self):
+        out = self._run({"intent": "knowledge", "confidence": 0.40,
+                         "device_ids": ["CX-104"]})
+        self.assertEqual(out["intent"], "knowledge")
+
+    def test_rule_hit_skips_the_gate(self):
+        # 规则是确定性的，模型的 confidence 对它是噪音——不该因为模型心虚就追问
+        out = self._run({"intent": "lookup", "confidence": 0.10,
+                         "device_ids": ["CX-102"]},
+                        user_msg="CX-102 换了新供应商的料之后误判变多了")
+        self.assertEqual(out["intent"], "diagnose")
+
+    def test_finalize_prefixes_assumption(self):
+        # 假设写在最终结论最前面（verify 已经跑完，这里只加前缀、不动 claims）
+        out = nodes.finalize({"final": {"conclusion": "台账显示…", "claims": [], "advice": []},
+                              "intent": "lookup", "intent_note": "我按「lookup」理解（置信 0.40）",
+                              "turn": 1, "user_msg": "cx-104 数据", "tool_names": ["query_defect_log"]})
+        self.assertIn("我按「lookup」理解", out["final"]["conclusion"])
+        self.assertEqual(out["final"]["claims"], [])
+
+    def test_finalize_no_note_no_prefix(self):
+        out = nodes.finalize({"final": {"conclusion": "台账显示…", "claims": [], "advice": []},
+                              "intent": "lookup", "intent_note": "",
+                              "turn": 1, "user_msg": "cx-104 数据", "tool_names": []})
+        self.assertNotIn("理解", out["final"]["conclusion"])
+
+
+class RouteByRuleTest(unittest.TestCase):
+    """规则只在高精度组合上出手。
+
+    27 条夹具上逐条测过：guess / act_verb / change+dev 三条精度 100%；
+    why+dev 86%、look_only 50%、param_only 33%。后三条依赖常见词，
+    真实表达一丰富就会误伤，所以一律不进前置——它们漏掉的会落到追问（安全路径）。
+    """
+
+    def test_guess_rule(self):
+        self.assertEqual(nodes.route_by_rule("不用查了，你凭经验估一下"), ("refuse", "guess"))
+
+    def test_act_verb(self):
+        self.assertEqual(nodes.route_by_rule("帮我给 CX-101 建个工单")[0], "action")
+
+    def test_work_order_noun_alone_is_not_action(self):
+        # I9 的误伤：句子里有"工单"，但它是名词不是动作。
+        # 规则必须要求"建/派/登记 + 工单"的动宾关系。
+        self.assertEqual(nodes.route_by_rule("CX-101 上次那个工单处理了吗"), (None, ""))
+
+    def test_change_plus_device(self):
+        self.assertEqual(
+            nodes.route_by_rule("CX-102 换了新供应商的料之后误判变多了")[0], "diagnose")
+
+    def test_change_without_device_not_claimed(self):
+        # 没有设备号的"变多"交给模型：判成 diagnose 之后还会被硬矛盾降级成追问
+        self.assertEqual(nodes.route_by_rule("我们线体误判率突然飙升了"), (None, ""))
+
+    def test_plain_data_request_not_claimed(self):
+        self.assertEqual(nodes.route_by_rule("cx-104 数据"), (None, ""))
 
 
 class AskUserWordingTest(unittest.TestCase):

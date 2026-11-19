@@ -83,9 +83,16 @@ def fp_prob(device: str, ts: datetime, station: str, defect_type: str, batch: st
         return 0.44 if day_idx >= 7 else 0.06
 
     if device == "CX-105":
-        # 镜头污染：随运行时间加速累积（二次曲线，前段慢、后段快）
+        # 镜头污染：脏的是 1 号工位那台相机的镜头，误判只在该工位随运行时间加速累积
+        # （二次曲线，前段慢、后段快）；2 号工位镜头正常，维持基线。
+        #
+        # 2026-11-19 修复：早期实现漏了工位分支（`return 0.03 + 0.45 * t * t` 对整台设备生效），
+        # 所有工位、所有缺陷类型一起上升，统计特征上更像"阈值/模型侧"而不是"某一台镜头脏"。
+        # 结果是 H2 那道题（期望"镜头污染"）无法被数据支持，模型按数据判成"算法侧"反而是对的。
         t = day_idx / (DAYS - 1)
-        return 0.03 + 0.45 * t * t
+        if station == "1号工位":
+            return 0.03 + 0.55 * t * t
+        return 0.04
 
     return 0.05
 
@@ -232,13 +239,49 @@ def main():
     out.append(",\n".join(
         "(" + ",".join([sql_str(x) for x in r]) + ")" for r in all_rows) + ";")
 
+    # work_orders：种子里必须有历史工单，不能让用例去依赖"别的用例顺手建出来的单"。
+    #
+    # 为什么写进种子：I9（"CX-101 上次那个工单处理了吗"）原先靠前面用例的副作用当前提。
+    # 清一次库、或换个执行顺序，它就必然红——而那个红与模型能力无关，是假红。
+    # 假红比假绿更贵：它看起来像"模型答不出来"，于是会有人去改 prompt、换模型。
+    #
+    # 两条不可动摇的设计约束：
+    #
+    # 1. 状态必须是「处理中」，不能是「已完成」。
+    #    eval 的 terminal_claim 判据扫全文找「已处理完毕 / 已完工 / 已修复」这类词。
+    #    模型如实转述一张"已完成"的单，很容易写成「已处理完毕」→ 被判"伪造现场结果"。
+    #    判据本意是"模型没有观测手段确认设备状态"，而转述工单状态恰恰是读到的数据，
+    #    选「处理中」可以完全避开这处口径冲突。
+    #
+    # 2. idempotency_key 必须是 W1 算不出来的值。
+    #    W1 的键是 sha256(device_id|root_cause_code)；这里写明文前缀，两者不可能相等。
+    #    这一条是硬要求而非偏好：「处理中」会占用 work_orders_open_key 的部分唯一索引
+    #    （WHERE status <> 已完成/已合并/已取消），若键撞上 W1 的首建键，
+    #    W1 第一轮就会被 dedup，幂等用例测的就不是它要测的东西了。
+    #
+    # 这段不调用 RNG：生成器是 Random(42) 的确定性链，任何一次额外取数
+    # 都会让后面所有表的样本漂移，已有基线全部作废。
+    work_orders = [
+        ("WO-20261105-001", "CX-101", "1号工位光源衰减，夜班误判集中",
+         "high", "更换1号工位光源后复测同批物料",
+         "query_light_usage#cumulative_hours=8620",
+         "seed-cx101-20261105", "处理中", "设备科",
+         "2026-11-05 09:30:00", "light_degradation"),
+    ]
+    out.append("INSERT INTO work_orders (order_id, device_id, root_cause, severity, actions, "
+               "evidence_refs, idempotency_key, status, assignee_group, created_at, "
+               "root_cause_code) VALUES")
+    out.append(",\n".join(
+        f"({','.join([sql_str(x) for x in r])})" for r in work_orders) + ";")
+
     out.append("COMMIT;")
 
     p = Path(__file__).parent / "seed" / "002_data.sql"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("\n".join(out) + "\n", encoding="utf-8")
     print(f"已生成 {p}")
-    print(f"defect_logs: {len(all_rows)} 条 / calibrations: {len(cal_rows)} 条 / alarms: {len(ALARMS)} 条")
+    print(f"defect_logs: {len(all_rows)} 条 / calibrations: {len(cal_rows)} 条 / "
+          f"alarms: {len(ALARMS)} 条 / work_orders: {len(work_orders)} 条")
 
 
 if __name__ == "__main__":

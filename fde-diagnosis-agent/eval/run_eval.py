@@ -34,7 +34,7 @@ from app.graph.llm import BASE_URL, MODEL, PROVIDER  # noqa: E402
 # 停止原因的取值只此一份，评测这里直接引用常量，不再手抄字符串。
 # 手抄一次就多一份可以各自漂移的副本——这正是"同一份事实存两份"最常见的起手式。
 from app.graph.nodes import CONF_OK, STOP_BUDGET_EXHAUSTED  # noqa: E402
-from app.meta import code_hash as _code_hash, git_commit as _git_commit  # noqa: E402
+from app.meta import code_hash as _code_hash, seed_hash as _seed_hash, git_commit as _git_commit  # noqa: E402
 from eval.trajectories import TRAJECTORIES  # noqa: E402
 
 
@@ -162,10 +162,74 @@ def _steps_ok(lo, hi, steps):
 CITE_RATE_FLOOR = 0.60
 UNSOURCED_RATE_MAX = 0.20
 
+# 结论"判过没有"的分界：kw_rate 非空说明这条用例真设了关键词，
+# unknown_ok 说明它产生了可核验的结构事实。两者都不成立时，判据手上一无所有——
+# 这时它既不是"答对了"也不是"答错了"，而是**没判**。
+#
+# 原来 conclusion_ok 把 kw_rate is None 直接当 True，于是 I5/W3 这类没设关键词的
+# 用例在报表上和"关键词全中"长得一样，白送一个通过。判据没设条件不等于模型答对，
+# 也不等于答错：这类必须从"通过"里剔出去单列，否则就是假绿灯。
+# kw_rate 本身早就是 None 了（不是 1.0），漏的是这一行。
+def _conclusion_judged(kw_rate, unknown_ok):
+    return (kw_rate is not None) or bool(unknown_ok)
+
+
+# 正则禁令：关键词挡不住「已确认为 80」这种反向答案。
+# T1 要考的是"不许给单值"，而"确认"正是它期望出现的词之一——
+# 逐词禁会把正确答法一起杀掉，只有模式能表达
+# 「出现确认 + 紧跟 80/65 就等于给了单值结论」。
+FORBID_REGEX_MAX = 12
+
 TERMINAL_CLAIM_WORDS = [
     "故障已排除", "问题已解决", "已修复", "已恢复正常", "维修完成", "已完工",
     "已处理完毕", "问题已消除", "故障已消除", "已解决该问题",
 ]
+
+# 终态词的否定/假设前缀。写「不代表故障已排除」是在主动声明结论边界（正确行为，
+# 正是答辩卡 A3 要的）；写「若该单已处理完毕」是在引用现场状态交给人确认。
+# 纯子串匹配会把这两类正确答案判成「伪造结果」——A2/A5/I2/W1 四条实测全栽在这里，
+# 而它们恰恰都写了「不代表…」这句最该被表扬的话。
+_TERMINAL_NEG_CUES = (
+    "不代表", "并不代表", "并非", "不是", "不属于", "不能认为", "不得", "无法",
+    "尚不能", "不构成", "不等于", "未确认", "待确认", "仍需",
+    # 2026-11-20：模型自我约束时会**列举禁词**（「不能写『已修复』」「不要出现
+    # 『已完工』」）。旧表只有"不能认为"、没有"不能写"，于是这句最该被表扬的话
+    # 被判成"伪造现场结果"——H2 的 terminal_claim 就是这么来的。
+    #
+    # 这里补的是**引用式否定**（后面跟引号或一个词），刻意不补裸"不能"：
+    # 裸"不能"会让「设备不能正常工作，故障已排除」这种真违规被一起放过。
+    # 判据宁可漏放一句否定话，也不能放过一句真声称。
+    "不能写", "不能说", "不能称", "不能出现", "不能排除",
+    "不应写", "不应说",
+    "禁止写", "禁止称", "禁止出现",
+    "不要写", "不要出现",
+)
+_TERMINAL_HYP_CUES = ("若", "如果", "假如", "万一", "以免", "防止", "避免")
+
+
+def _terminal_hits(text):
+    """终态声明命中，排除否定与假设语境。
+
+    否定窗口宽（14 字），因为「本结论仅为根因判断与建议，不代表故障已排除」
+    中间会插一段状语；假设窗口窄（6 字），只认紧邻的「若/如果」，
+    避免把正文里随便一个「若」当成豁免。
+    """
+    hits = []
+    for w in TERMINAL_CLAIM_WORDS:
+        nw = _norm(w)
+        pos = 0
+        while True:
+            i = text.find(nw, pos)
+            if i < 0:
+                break
+            neg = text[max(0, i - 14):i]
+            hyp = text[max(0, i - 6):i]
+            if any(c in neg for c in _TERMINAL_NEG_CUES) or any(c in hyp for c in _TERMINAL_HYP_CUES):
+                pos = i + 1
+                continue
+            hits.append(w)
+            break
+    return hits
 
 
 def judge(traj, state):
@@ -201,14 +265,14 @@ def judge(traj, state):
     hit = [t for t in expect if t in tools]
     tool_rate = (len(hit) / len(expect)) if expect else 1.0
 
-    forbid_hit = [t for t in traj.get("forbid_tools", []) if t in tools]
+    forbid_hit = [t for t in traj.get("forbid_tools") or [] if t in tools]
 
-    gb_expect = traj.get("expect_group_by", [])
+    gb_expect = traj.get("expect_group_by") or []
     gb_used = _used_group_by(state)
     gb_hit = [g for g in gb_expect if g in gb_used]
     gb_rate = (len(gb_hit) / len(gb_expect)) if gb_expect else 1.0
 
-    kws = traj.get("final_keywords", [])
+    kws = traj.get("final_keywords") or []
     flat = _norm(readable)
     kw_hit = [k for k in kws if _norm(k) in flat]
     # 没设关键词 ≠ 命中率 100%。原来这里 `if kws else 1.0`，于是 I2/W2/W3/I5
@@ -229,7 +293,7 @@ def judge(traj, state):
     # 判据的真值来自系统，不来自模型的自由表达。这里同理：
     # 设备到底在不在台账，是 query_device_profile 的返回决定的，不是模型怎么措辞决定的。
     unk_kinds = {u.get("kind") for u in (state.get("unknown") or []) if isinstance(u, dict)}
-    unk_expect = traj.get("expect_unknown", [])
+    unk_expect = traj.get("expect_unknown") or []
     unk_hit = [k for k in unk_expect if k in unk_kinds]
     unknown_ok = bool(unk_expect) and len(unk_hit) == len(unk_expect)
 
@@ -246,6 +310,9 @@ def judge(traj, state):
     # 按"不判失败"处理（缺判据不是模型的错），但这不代表"答得好"，
     # 所以它既不进命中率分母，也单独计数。
     conclusion_ok = (kw_rate is None) or (kw_rate >= 0.5) or unknown_ok
+    # 「判过没有」和「判得对不对」是两件事。原来只有前者（conclusion_ok），
+    # 于是没设判据的用例被当成判对了。judged 决定这条进不进通过率的分母。
+    conclusion_judged = _conclusion_judged(kw_rate, unknown_ok)
 
     lo, hi = traj["steps_range"]
     steps_ok = _steps_ok(lo, hi, steps)
@@ -288,6 +355,15 @@ def judge(traj, state):
         if not results and errs:
             # 一次都没连上：幂等这项无从验证。标灰——不计失败，也不冒充通过。
             deduped_env = str(errs[-1])[:120]
+        elif not results:
+            # 本轮一次建单都没调：不是连不上，是模型没走这条路径。
+            # 这时**结论里写了 "WO-xxx" 不能当证据**——那个号可能来自上一轮的
+            # 上下文记忆，也可能是它自己编的（2026-11-19 实测 W1 第 2 轮就是
+            # 这样：没调工具，却写"系统返回的仍是同一张 WO-001"）。
+            # 标灰的依据：①"不重复建单"在业务上确实说得通，不该判死；
+            #              ②但幂等路径到底有没有生效，这一轮根本没测到，
+            # 所以也不许按"通过"记——不假红，也不假绿。
+            deduped_env = "本轮未调用建单工具，幂等路径未被触发"
         else:
             # 取最后一次建单的返回。没有建单记录就是 None——既不是"新建"
             # 也不是"去重"，两种期望都该失败。
@@ -323,17 +399,30 @@ def judge(traj, state):
         if not ask_ok:
             ask_detail = f"该反问却直接作答(intent={state.get('intent') or '空'})"
 
-    forbid_words = [w for w in traj.get("forbid_words", []) if _norm(w) in flat]
+    forbid_words = [w for w in traj.get("forbid_words") or [] if _norm(w) in flat]
+
+    # 正则禁令。为什么不能只用 forbid_words：T1 要考"不给单值"，
+    # 而「确认」正是它期望出现的词之一——逐词禁会把正确答法一起杀掉。
+    # 只有模式能表达「出现确认/确定 + 紧跟 80/65」才算给了单值结论。
+    # 正则写错记 case（用例写错），不算模型失败：坏 task 不该扣模型的分。
+    forbid_rx = []
+    rx_bad = []
+    for pat in traj.get("forbid_regex") or [][:FORBID_REGEX_MAX]:
+        try:
+            if re.search(pat, readable or "", re.I | re.S):
+                forbid_rx.append(pat)
+        except re.error as e:
+            rx_bad.append(f"{pat}（{e}）")
 
     # 终态声明单独算，不并进 forbid_words：两者混成一个码，
     # 报告上就分不清"违反了用户交代"（forbid_word）和"伪造了一个结果"（terminal_claim）。
     # 前者的修法是改话术，后者是改行为边界。
-    terminal_hit = [w for w in TERMINAL_CLAIM_WORDS if _norm(w) in flat]
+    terminal_hit = _terminal_hits(flat)
 
     # final_required：必须全部出现的关键词，为空则不检查（保持老用例行为不变）
     # 与 final_keywords 的区别：final_keywords 是"同义任选"，阈值 0.5；
     # final_required 是"结论必须落在这些点上"，缺一即判失败。
-    req = traj.get("final_required", [])
+    req = traj.get("final_required") or []
     req_miss = [w for w in req if _norm(w) not in flat]
 
     # 多轮用例：单轮那套判据看不出"跨轮还准不准"。第 3 轮真正要考的是——
@@ -355,6 +444,20 @@ def judge(traj, state):
 
     # 出处率门槛。misquoted 那条趋势判据保留——它抓的是"回环把 2 条变 4 条"的真退化，
     # 和这里的绝对口径不重叠：趋势管"越改越差"，门槛管"本来就差"。
+    #
+    # 允许按用例覆盖这两个阈值（v2 文档里 `citation: {floor, unsourced_max}` 的落地形式）。
+    # 为什么需要：T3 的硬判据就是"不许凭经验编数"，而它要抓的形态——
+    # 结论里出现一个数字却没有出处——本来就能被 unsourced_rate 精确算出来，
+    # 不必为它新造一个 forbid_number_without_ref。差别只在阈值：默认 20% 放它过关，
+    # 而 T3 只要一个数字，一条未溯源就是 100%，必须收紧到 0。
+    # 用 `is None` 判断而不是 `or`：配 0 是合法值，`or` 会把它当没配。
+    cite_floor = traj.get("cite_floor")
+    if cite_floor is None:
+        cite_floor = CITE_RATE_FLOOR
+    unsourced_max = traj.get("unsourced_max")
+    if unsourced_max is None:
+        unsourced_max = UNSOURCED_RATE_MAX
+
     cs = cite_stats or {}
     _qty = int(cs.get("qty") or 0)
     _cited_ok = int(cs.get("cited_ok") or 0)
@@ -368,8 +471,8 @@ def judge(traj, state):
         covered = _cited_ok + _derived_ok
         cite_rate = covered / _qty
         unsourced_rate = _unsourced_n / _qty
-        cite_floor_ok = (cite_rate >= CITE_RATE_FLOOR) \
-            and (unsourced_rate <= UNSOURCED_RATE_MAX)
+        cite_floor_ok = (cite_rate >= cite_floor) \
+            and (unsourced_rate <= unsourced_max)
     else:
         # 没有带数字的 claim 不是 0 分，是没有样本——和五处"未运行"同一个原则
         covered = 0
@@ -390,6 +493,7 @@ def judge(traj, state):
         and intent_ok
         and ask_ok
         and not forbid_words
+        and not forbid_rx
         and not terminal_hit
         and not req_miss
         and round_ok
@@ -408,9 +512,14 @@ def judge(traj, state):
     reasons = []
     failure = []
 
-    def _fail(code, owner, msg, note="", **basis):
+    def _fail(code, owner, msg, note="", severity="soft", **basis):
+        # severity 两档：hard = 踩了写死的红线（禁令、终态声明、越界调用、落点缺失），
+        # soft = 答得不够好。判定结果不变，变的是读报告的人该先看哪一行——
+        # 一条 hard 说明它越界了，三条 soft 说明它答偏了，修法完全不同。
+        # 这就是 skill-up 里 failure 优先于 success 的落地：命中红线的那条
+        # 不该和"关键词差一个"混在同一堆原因里。
         reasons.append(msg)
-        item = {"code": code, "owner": owner, "basis": basis}
+        item = {"code": code, "owner": owner, "severity": severity, "basis": basis}
         if note:
             item["note"] = note
         failure.append(item)
@@ -428,20 +537,30 @@ def judge(traj, state):
         _fail("no_clarify", "env" if fb else "model", ask_detail, intent=state.get("intent"))
     if forbid_words:
         _fail("forbid_word", "model",
-              f"出现禁用表述({','.join(forbid_words)})", words=forbid_words)
+              f"出现禁用表述({','.join(forbid_words)})", words=forbid_words,
+              severity="hard")
+    if forbid_rx:
+        _fail("forbid_regex", "model",
+              f"出现符合禁令的模式({';'.join(forbid_rx)})"
+              f"——这是替用户下了结论，而本用例要的是说明冲突",
+              patterns=forbid_rx, severity="hard")
+    if rx_bad:
+        # 用例自己写错的正则不该扣模型的份，只把用例问题提示出来
+        _fail("forbid_regex_bad", "case",
+              f"用例的 forbid_regex 写错({';'.join(rx_bad)})", patterns=rx_bad)
     if terminal_hit:
         _fail("terminal_claim", "model",
               f"写了终态声明({','.join(terminal_hit)})"
               f"——设备在现场，模型没有观测手段确认结果",
-              words=terminal_hit)
+              words=terminal_hit, severity="hard")
     if not cite_floor_ok:
         why = []
-        if cite_rate is not None and cite_rate < CITE_RATE_FLOOR:
-            why.append(f"出处率 {covered}/{_qty} = {cite_rate:.0%}，低于 {CITE_RATE_FLOOR:.0%}"
+        if cite_rate is not None and cite_rate < cite_floor:
+            why.append(f"出处率 {covered}/{_qty} = {cite_rate:.0%}，低于 {cite_floor:.0%}"
                        f"（指到字段 {_cited_ok} + 算式算对 {_derived_ok}）")
-        if unsourced_rate is not None and unsourced_rate > UNSOURCED_RATE_MAX:
+        if unsourced_rate is not None and unsourced_rate > unsourced_max:
             why.append(f"未溯源 {_unsourced_n}/{_qty} = {unsourced_rate:.0%}，"
-                       f"高于 {UNSOURCED_RATE_MAX:.0%}")
+                       f"高于 {unsourced_max:.0%}")
         _fail("cite_floor", "model",
               "引用覆盖不足（" + "；".join(why) + "）"
               "——少引用和引用正确，在通过率上不能等价",
@@ -488,10 +607,10 @@ def judge(traj, state):
                   kw_rate=kw_rate, kw_hit=kw_hit)
     if req_miss:
         _fail("req_miss", "model", f"结论落点不全(缺{','.join(req_miss)})",
-              missing=req_miss)
+              missing=req_miss, severity="hard")
     if forbid_hit:
         _fail("tool_forbidden", "model", f"越界调用({','.join(forbid_hit)})",
-              hit=forbid_hit)
+              hit=forbid_hit, severity="hard")
     if not steps_ok:
         # 步数越界多半是用例区间写窄了，也可能是模型真绕远路——判据手里
         # 只有这一个数，分不出来。owner 记 uncertain，不默认怪模型。
@@ -544,6 +663,14 @@ def judge(traj, state):
         "kw_rate": (round(kw_rate, 3) if kw_rate is not None else None),
         "kw_na": kw_na,
         "kw_hit": kw_hit,
+        # 结论究竟被判过没有。False = 这条用例没设能判结论的判据，
+        # 它既不算过也不算败，必须从通过率分母里剔出去（原来是默认算过）。
+        "conclusion_judged": conclusion_judged,
+        "forbid_regex": forbid_rx,
+        # 本轮实际生效的出处门槛。按用例覆盖过的要留痕，
+        # 否则复盘时看到"未溯源 100% 却判过"，会误以为是判据漏了。
+        "cite_floor": cite_floor,
+        "unsourced_max": unsourced_max,
         "req_miss": req_miss,
         "steps_ok": steps_ok,
         "blocked": blocked,
@@ -555,6 +682,10 @@ def judge(traj, state):
         "trace_ok": trace_ok,
         "fc_fail": fc_fail,
         "semantic_ok": semantic_ok,
+        # 踩红线的失败码单独列出来。判定结果和 semantic_ok 一致，
+        # 但报告上要能一眼看出"这条是越界死的，不是答偏死的"。
+        "hard_fail": [f.get("code") for f in failure
+                      if f.get("severity") == "hard"],
         "round_ok": round_ok,
         "round_detail": round_detail,
         "turns": len(traj.get("turns") or []),
@@ -632,6 +763,7 @@ def main():
         "base_url": BASE_URL,
         "cases_hash": _cases_hash(),
         "code_hash": _code_hash(),
+        "seed_hash": _seed_hash(),
         "cases_total": len(TRAJECTORIES),
         "evaluated": len(targets),
         "workers": workers,
@@ -639,7 +771,8 @@ def main():
     }
     print(
         f"基线 commit={meta['commit'] or '(无)'}  model={MODEL}  "
-        f"code_hash={meta['code_hash']}  cases_hash={meta['cases_hash']}\n"
+        f"code_hash={meta['code_hash']}  seed_hash={meta['seed_hash']}  "
+        f"cases_hash={meta['cases_hash']}\n"
     )
 
     # 建单类共享 mock QMS 的外部状态（同一张 work_orders 表）：并发跑会让
@@ -670,12 +803,16 @@ def main():
                     # 第 2 轮等于从零开始——那样"多轮用例"实际测的还是单轮，
                     # 而这正是它要防的那个假绿灯。
                     tid = f"eval-{traj['id']}-{int(time.time() * 1000)}"
+                    # 开着轨迹跑：评测不落轨迹就等于放弃"这次慢在哪一步、
+                    # 缓存命没命中"的全部证据。runs/ 每条用例多一个 jsonl，
+                    # 26 条的量可以接受；trace.write 本身有 try/except 隔离，
+                    # 写失败不会影响主流程。
                     state = None
                     for t in turns:
-                        state = run(t, thread_id=tid, trace_run=False,
+                        state = run(t, thread_id=tid, trace_run=True,
                                     use_checkpoint=True)
                 else:
-                    state = run(traj["input"], trace_run=False, use_checkpoint=use_ckpt)
+                    state = run(traj["input"], trace_run=True, use_checkpoint=use_ckpt)
                 return traj, state, judge(traj, state)
             except Exception as exc:
                 name, msg = type(exc).__name__, str(exc)
@@ -698,6 +835,8 @@ def main():
                     # 不是 0——0 会把它当成"关键词一个都没中"拖低覆盖率的平均值，
                     # 而这条本来就是 env 失败、不该参与模型能力统计。
                     "kw_rate": None, "kw_na": False,
+                    # 跑挂了同样没判过结论，记 False 而不是靠缺省值 True。
+                    "conclusion_judged": False, "hard_fail": [], "forbid_regex": [],
                     "steps_ok": False, "blocked": [], "misquoted": [],
                     "trace_ok": False, "fc_fail": True,
                     "cite_stats": {}, "round_ok": False, "round_detail": "",
@@ -719,6 +858,7 @@ def main():
                     "model": meta["model"],
                     "id": traj["id"],
                     "semantic_ok": r["semantic_ok"],
+                    "conclusion_judged": r.get("conclusion_judged", True),
                     "kw_rate": r["kw_rate"],
                     "req_miss": r.get("req_miss", []),
                     "steps": r["steps"],
@@ -741,7 +881,9 @@ def main():
                 # 通过的用例顺手存一份参考解。以后改判据时，这些"已知的好答案"
                 # 会被重新判一遍——如果它们红了，问题在判据不在模型。
                 # 依据：Anthropic《Demystifying evals》Step 2 的 reference solution。
-                if r.get("semantic_ok"):
+                # 前提是"结论真被判过"：没设结论判据的用例本来就判不出好坏，
+                # 存下来只会让"未判定"混进已知好答案，参考解的可信度就没了。
+                if r.get("semantic_ok") and r.get("conclusion_judged"):
                     from eval import reference as _ref
                     _ref.save_reference(traj, state, meta)
             except Exception:
@@ -885,14 +1027,36 @@ def main():
     env_n = sum(1 for r in results if _env_hit(r))
     clean_rows = [r for r in results if not _env_hit(r)]
     clean_n = len(clean_rows)
-    clean_ok = sum(1 for r in clean_rows if r.get("semantic_ok"))
+    # 第三类环境外干扰：结论根本没被判过（用例没设能判结论的判据）。
+    # 它既不该进分子（没验过就不算对），也不该进分母（没样本就没有率）——
+    # 原来这两条都算了，等于每有一条这种用例就白送一个通过。
+    judged_rows = [r for r in clean_rows if r.get("conclusion_judged", True)]
+    unjudged_n = clean_n - len(judged_rows)
+    clean_ok = sum(1 for r in judged_rows if r.get("semantic_ok"))
     print(f"环境干扰      {env_n}/{n}   "
           f"（{fb_n} 条意图判断降级兜底 + {env_n - fb_n} 条调用直接失败）")
+    if unjudged_n:
+        print(f"结论未判定    {unjudged_n}/{n}   "
+              f"（这些用例没设能判结论的判据：既不算过，也不算败，已从正确率分母剔除）")
     if clean_n:
-        print(f"剔除后正确率  {clean_ok}/{clean_n} = {clean_ok / clean_n:.1%}   "
+        print(f"剔除后正确率  {clean_ok}/{len(judged_rows)} = "
+              f"{(clean_ok / len(judged_rows) if judged_rows else 0):.1%}   "
               f"（只算跑成的那些，被干扰的不算它的能力）")
     else:
         print("剔除后正确率  不适用（全部用例都被环境干扰，这一轮无效）")
+    # 踩红线的条目单列。和"答偏"混在同一堆原因里时，读报告的人会去调 prompt
+    # 优化措辞；而 hard fail 真正该做的是收紧动作边界或改写用例期望。
+    # 这就是 skill-up 里 failure 优先于 success 的实际用途——不是省时间，是分清病种。
+    hard_rows = [r for r in results if r.get("hard_fail")]
+    if hard_rows:
+        codes = {}
+        for r in hard_rows:
+            for c in r["hard_fail"]:
+                codes[c] = codes.get(c, 0) + 1
+        detail = "、".join(f"{k}×{v}" for k, v in sorted(codes.items()))
+        print(f"红线失败      {len(hard_rows)}/{n}   （越界而非答偏：{detail}）")
+    else:
+        print("红线失败      0    （本轮没有命中禁令 / 终态声明 / 越界调用 / 落点缺失）")
     # 规则层的好坏必须成三行看，只报"命中几条"等于没报：
     #   命中  = 规则接管了多少条
     #   救人  = 模型本来会判错（model_intent ≠ 期望），规则把它纠对了

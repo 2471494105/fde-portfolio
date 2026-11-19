@@ -1,7 +1,7 @@
 {
   "id": "T1",
-  "saved_at": "2026-11-19 18:07:43",
-  "traj_fp": "4942c741f51c",
+  "saved_at": "2026-11-20 00:38:31",
+  "traj_fp": "64a64bd88e72",
   "traj": {
     "id": "T1",
     "expect_intent": "knowledge",
@@ -14,9 +14,19 @@
     "forbid_tools": [],
     "expect_group_by": [],
     "final_keywords": [
-      "冲突",
-      "不一致",
-      "确认"
+      "冲突"
+    ],
+    "forbid_words": [
+      "建议设为",
+      "就该设",
+      "准数是",
+      "直接设为",
+      "确定为",
+      "统一设为"
+    ],
+    "forbid_regex": [
+      "(确认|确定)(为|是)\\s*(80|65)(\\s*(lx|%))?",
+      "(没有|不存在|无)[^，。]{0,4}(冲突|不一致)"
     ],
     "expect_ask": false,
     "steps_range": [
@@ -27,59 +37,128 @@
   "state": {
     "tool_names": [
       "search_manual",
-      "check_doc_conflict"
+      "check_doc_conflict",
+      "check_doc_conflict",
+      "query_device_profile",
+      "query_light_usage"
     ],
     "final": {
-      "conclusion": "手册片段未给出 CX-101 换完光源后应统一采用的亮度设定值，各出处对「光源亮度设定」的取值不一致，无法给出单一准数。\n现场调试记录 2026-09-15 将 CX-101 光源亮度由 85 下调至 80（片段 2）；现场调试记录 2026-10-20 又将 CX-101 光源亮度由 80 下调至 65（片段 1）。系统核查结果另列出：CV-X系列视觉检测系统操作手册（厂商版·摘录）记为 80，视觉检测作业指导书 WI-QC-015 记为 65。以上应视为冲突，不能自行挑一个当标准值。\n告警码 E-201 等级为 warning，含义是光源亮度低于设定值；其处置要求先测量实际亮度与设定值偏差，再检查光源驱动电流，若偏差由衰减引起需评估光源累计点亮时长、按保养计划安排更换，不要仅靠上调亮度设定压住告警。",
+      "conclusion": "（意图置信度 0.72，按「knowledge」理解，若不对请直接纠正）\n\n给不出唯一「准数」：光源亮度设定在厂商手册与厂内SOP之间存在 80 与 65 的取值冲突，且 CX-101 当前设定 65 是旧光源衰减期的补偿性下调值，不能直接沿用；须先由人工确认口径，再按新光源重新标定后定值",
       "claims": [
         {
-          "text": "2026-10-20 现场调试将 CX-101 光源亮度由 80 下调至 65。",
-          "quote": "CX-101 误判持续，光源亮度再次由 80 下调至 65。",
-          "ref": "search_manual#chunks[0].text"
+          "text": "「光源亮度设定」存在冲突，共 2 种取值",
+          "value": 2,
+          "unit": "种",
+          "ref": "check_doc_conflict{param_name=光源亮度设定}#value_count"
         },
         {
-          "text": "2026-09-15 现场调试将 CX-101 光源亮度由 85 下调至 80。",
-          "quote": "将光源亮度由 85 下调至 80",
-          "ref": "search_manual#chunks[1].text"
+          "text": "厂商手册《CV-X系列视觉检测系统操作手册》3.2 光源亮度设定为 80",
+          "value": 80,
+          "unit": null,
+          "ref": "check_doc_conflict{param_name=光源亮度设定}#conflicts[0].value"
         },
         {
-          "text": "告警码 E-201 的等级为 warning。",
-          "quote": "告警码 E-201，等级 warning。",
-          "ref": "search_manual#chunks[2].text"
+          "text": "厂内SOP《视觉检测作业指导书 WI-QC-015》2.1 光源亮度设定为 65",
+          "value": 65,
+          "unit": null,
+          "ref": "check_doc_conflict{param_name=光源亮度设定}#conflicts[1].value"
         },
         {
-          "text": "E-201 的含义是光源亮度低于设定值。",
-          "quote": "含义：光源亮度低于设定值。",
-          "ref": "search_manual#chunks[2].text"
+          "text": "现场调试记录 2026-09-15 夜班误判处置中该参数为 80",
+          "value": 80,
+          "unit": null,
+          "ref": "check_doc_conflict{param_name=光源亮度设定}#conflicts[2].value"
         },
         {
-          "text": "E-201 处置要求先测量实际亮度与设定值偏差，再检查光源驱动电流。",
-          "quote": "先测量实际亮度与设定值偏差，再检查光源驱动电流",
-          "ref": "search_manual#chunks[2].text"
+          "text": "现场调试记录 2026-10-20 光源二次调整中该参数为 65",
+          "value": 65,
+          "unit": null,
+          "ref": "check_doc_conflict{param_name=光源亮度设定}#conflicts[3].value"
         },
         {
-          "text": "若偏差由衰减引起，需评估光源累计点亮时长并按保养计划安排更换。",
-          "quote": "若偏差由衰减引起，需评估光源累计点亮时长，按保养计划安排更换",
-          "ref": "search_manual#chunks[2].text"
+          "text": "CX-101 当前亮度设定为 65",
+          "value": 65,
+          "unit": null,
+          "ref": "query_light_usage{device_id=CX-101}#brightness_set"
         },
         {
-          "text": "E-201 处置要求不要仅靠上调亮度设定压住告警。",
-          "quote": "不要仅靠上调亮度设定压住告警。",
-          "ref": "search_manual#chunks[2].text"
+          "text": "光源累计点亮 8620 小时",
+          "value": 8620,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#cumulative_hours"
+        },
+        {
+          "text": "光源额定寿命 8000 小时",
+          "value": 8000,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#rated_life_hours"
+        },
+        {
+          "text": "已超额定寿命 620 小时",
+          "value": 620,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#over_life_hours"
+        },
+        {
+          "text": "距额定寿命剩余 0 小时",
+          "value": 0,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#remaining_hours"
+        },
+        {
+          "text": "亮度设定历史逐次下调：2025-03-12 为 85、2026-09-15 为 80、2026-10-20 为 65",
+          "ref": "query_light_usage{device_id=CX-101}#brightness_history",
+          "items": [
+            {
+              "key": "2025-03-12",
+              "field": "value",
+              "value": 85
+            },
+            {
+              "key": "2026-09-15",
+              "field": "value",
+              "value": 80
+            },
+            {
+              "key": "2026-10-20",
+              "field": "value",
+              "value": 65
+            }
+          ]
+        },
+        {
+          "text": "光源超寿命后亮度衰减，误判率通常上升 10%-25%",
+          "value": 10,
+          "value_max": 25,
+          "unit": "%",
+          "ref": "query_light_usage{device_id=CX-101}#degradation_estimate"
+        },
+        {
+          "text": "CX-101 保养周期设定为 90 天",
+          "value": 90,
+          "unit": "天",
+          "ref": "query_device_profile{device_id=CX-101}#maintenance_cycle_days"
         }
+      ],
+      "advice": [
+        "先请工艺/质量确认口径：以厂商手册的 80 还是厂内SOP WI-QC-015 的 65 为准，确认前不要按任一值直接写入设备",
+        "注意你提到「换完光源」，但工具显示 CX-101 上次光源更换时间为 2024-09-20、累计点亮 8620 小时已超额定 8000 小时 620 小时——若确已换新灯，请先让现场在系统里补录更换记录，否则寿命与亮度基线都不可信",
+        "当前 65 是 2026-10-20 为补偿旧灯衰减而下调的，新光源不应直接沿用该值；建议以确认后的标准值为起点，装灯后重新标定并复测误判率再定最终设定",
+        "换灯后按 90 天保养周期同步安排下一次标定，并把本次实际设定值记入调试记录，避免再次出现同一参数两种取值",
+        "以上为根因判断与处置建议，处置结果需现场回报确认"
       ]
     },
-    "final_text": "手册片段未给出 CX-101 换完光源后应统一采用的亮度设定值，各出处对「光源亮度设定」的取值不一致，无法给出单一准数。\n现场调试记录 2026-09-15 将 CX-101 光源亮度由 85 下调至 80（片段 2）；现场调试记录 2026-10-20 又将 CX-101 光源亮度由 80 下调至 65（片段 1）。系统核查结果另列出：CV-X系列视觉检测系统操作手册（厂商版·摘录）记为 80，视觉检测作业指导书 WI-QC-015 记为 65。以上应视为冲突，不能自行挑一个当标准值。\n告警码 E-201 等级为 warning，含义是光源亮度低于设定值；其处置要求先测量实际亮度与设定值偏差，再检查光源驱动电流，若偏差由衰减引起需评估光源累计点亮时长、按保养计划安排更换，不要仅靠上调亮度设定压住告警。\n- 2026-10-20 现场调试将 CX-101 光源亮度由 80 下调至 65。[search_manual]\n- 2026-09-15 现场调试将 CX-101 光源亮度由 85 下调至 80。[search_manual]\n- 告警码 E-201 的等级为 warning。[search_manual]\n- E-201 的含义是光源亮度低于设定值。[search_manual]\n- E-201 处置要求先测量实际亮度与设定值偏差，再检查光源驱动电流。[search_manual]\n- 若偏差由衰减引起，需评估光源累计点亮时长并按保养计划安排更换。[search_manual]\n- E-201 处置要求不要仅靠上调亮度设定压住告警。[search_manual]",
-    "steps": 2,
+    "final_text": "手册中没有给出换光源后应设定的唯一标准亮度值，且不同文档对「光源亮度设定」的取值存在冲突：CV-X系列视觉检测系统操作手册（厂商版·摘录）为 80，视觉检测作业指导书 WI-QC-015 为 65，现场调试记录 2026-09 中同时出现 80 和 65。现场记录显示亮度曾被多次下调：2026-09-15 由 85 下调至 80，2026-10-20 又由 80 下调至 65。手册对 E-201 告警的处置要求是先测量实际亮度与设定值偏差、再检查驱动电流，若偏差由衰减引起需评估累计点亮时长并按保养计划更换，不要仅靠上调亮度设定压住告警。因此无法给出一个准数。\n- 「光源亮度设定」在厂商操作手册摘录中为 80[出处格式错]\n- 「光源亮度设定」在作业指导书 WI-QC-015 中为 65[出处格式错]\n- 现场调试记录 2026-09 中该参数同时出现 80 和 65 两个取值[出处格式错]\n- 2026-09-15 将光源亮度由 85 下调至 80[search_manual]\n- 2026-10-20 光源亮度再次由 80 下调至 65[search_manual]\n- E-201 告警的处置要求先测量实际亮度与设定值偏差，再检查光源驱动电流[search_manual]\n- 若偏差由衰减引起，需评估光源累计点亮时长，按保养计划安排更换[search_manual]\n- 不要仅靠上调亮度设定压住告警[search_manual]",
+    "steps": 5,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 0,
-      "pct": 0,
-      "cited_ok": 0,
-      "cited_path": 0,
+      "qty": 13,
+      "pct": 1,
+      "cited_ok": 13,
+      "cited_path": 13,
       "cite_oob": 0,
-      "path_ok": 0,
+      "path_ok": 13,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -92,21 +171,21 @@
       "range_ok": 0,
       "range_bad": 0,
       "ref_ambiguous": 0,
-      "multi_ok": 0,
+      "multi_ok": 1,
       "multi_bad": 0,
       "qual_ok": 0,
       "qual_bad": 0,
       "qual_unsourced": 0,
-      "quote_ok": 7,
+      "quote_ok": 0,
       "quote_bad": 0,
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 0,
-      "ev": 2
+      "cited": 13,
+      "ev": 5
     },
-    "stop_reason": "",
-    "check_retry": 0,
+    "stop_reason": "enough",
+    "check_retry": 1,
     "unknown": [],
     "evidence": [
       {
@@ -193,20 +272,88 @@
             }
           ],
           "likely_authoritative": "厂商手册",
-          "note": "存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。"
+          "note": "存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。",
+          "by_param": {
+            "光源亮度设定": {
+              "param_name": "光源亮度设定",
+              "has_conflict": true,
+              "value_count": 2,
+              "conflicts": [
+                {
+                  "source": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+                  "doc_type": "厂商手册",
+                  "section": "3.2 光源亮度设定",
+                  "value": 80
+                },
+                {
+                  "source": "视觉检测作业指导书 WI-QC-015",
+                  "doc_type": "厂内SOP",
+                  "section": "2.1 光源亮度设定",
+                  "value": 65
+                },
+                {
+                  "source": "现场调试记录 2026-09",
+                  "doc_type": "调试记录",
+                  "section": "2026-09-15 夜班误判处置",
+                  "value": 80
+                },
+                {
+                  "source": "现场调试记录 2026-09",
+                  "doc_type": "调试记录",
+                  "section": "2026-10-20 光源二次调整",
+                  "value": 65
+                }
+              ],
+              "likely_authoritative": "厂商手册",
+              "note": "存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。"
+            }
+          }
         },
         "turn": 1,
         "ev_no": 2
+      },
+      {
+        "tool": "check_doc_conflict",
+        "args": {
+          "param_name": "光源亮度设定"
+        },
+        "sig": "param_name=光源亮度设定",
+        "result": "[check_doc_conflict{param_name=光源亮度设定}] {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"value\": 80}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"value\": 65}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-09-15 夜班误判处置\", \"value\": 80}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-10-20 光源二次调整\", \"value\": 65}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\", \"by_param\": {\"光源亮度设定\": {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"value\": 80}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"value\": 65}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-09-15 夜班误判处置\", \"value\": 80}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-10-20 光源二次调整\", \"value\": 65}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}}}",
+        "truncated": false,
+        "ev_no": 3,
+        "turn": 1
+      },
+      {
+        "tool": "query_device_profile",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"2025-03-12 00:00:00\", \"maintenance_cycle_days\": 90, \"log_count\": 200, \"latest_log_at\": \"2026-11-14 17:19:52\"}",
+        "truncated": false,
+        "ev_no": 4,
+        "turn": 1
+      },
+      {
+        "tool": "query_light_usage",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_light_usage{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 8620, \"rated_life_hours\": 8000, \"over_life_hours\": 620, \"remaining_hours\": 0, \"brightness_set\": 65, \"last_replaced_at\": \"2024-09-20 00:00:00\", \"brightness_history\": [{\"ts\": \"2025-03-12 09:00:00\", \"value\": 85}, {\"ts\": \"2026-09-15 14:20:00\", \"value\": 80}, {\"ts\": \"2026-10-20 10:05:00\", \"value\": 65}], \"degradation_estimate\": \"已超额定寿命，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源\"}",
+        "truncated": false,
+        "ev_no": 5,
+        "turn": 1
       }
     ],
     "intent": "knowledge",
-    "intent_conf": 0.82,
+    "intent_conf": 0.72,
     "route_by": "model",
     "model_intent": "knowledge"
   },
   "meta": {
-    "commit": "f1296de",
-    "code_hash": "15213764895e",
-    "cases_hash": "1c088b9a1209"
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
   }
 }

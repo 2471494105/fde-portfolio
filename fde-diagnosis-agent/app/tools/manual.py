@@ -235,9 +235,31 @@ def check_doc_conflict(param_name: str) -> dict:
         keys = sorted({r["k"] for r in cur.fetchall()})
 
         if len(names) == 1:
-            return _conflict_for_one(names[0], keys, cur)
+            # 单参数也补一份 by_param（内容与扁平字段相同）。
+            # 原来返回结构随参数个数分叉：一个参数给扁平 conflicts，多个参数收进
+            # by_param。模型没法预知这次是哪种，于是同一个工具在结论里被引成两种
+            # 路径，必有一种判 miss——实测 5 条用例就是这么被判"引用写错"的
+            # （模型写 by_param，而那次只查了一个参数）。扁平字段全部保留，
+            # 旧引用照常成立；这里只是多开一个同形的入口。
+            one = _conflict_for_one(names[0], keys, cur)
+            # by_param 的键必须是归一化后的名字。模型读到的就是 one["param_name"]，
+            # 引用时自然照抄；用原始名做键会让「照 param_name 写路径」全部报 miss
+            # （实测：光源亮度→光源亮度设定、标定周期→标定周期(天)、
+            #  判定置信度→判定置信度阈值，三条都是 key 与 param_name 不一致）。
+            canon = one.get("param_name") or names[0]
+            one["by_param"] = {canon: dict(one)}
+            if names[0] != canon:
+                # 原始名也留一份，按旧写法引用的仍然成立；两者内容相同。
+                one["by_param"][names[0]] = one["by_param"][canon]
+            return one
 
-        by_param = {n: _conflict_for_one(n, keys, cur) for n in names}
+        by_param = {}
+        for n in names:
+            r = _conflict_for_one(n, keys, cur)
+            canon = r.get("param_name") or n
+            by_param.setdefault(canon, r)
+            if n != canon:
+                by_param.setdefault(n, r)
 
     conflict_params = [n for n, r in by_param.items() if r.get("has_conflict")]
     missing = [n for n, r in by_param.items() if "message" in r]

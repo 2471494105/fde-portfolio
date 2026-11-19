@@ -1,0 +1,313 @@
+{
+  "id": "I9",
+  "saved_at": "2026-11-20 00:39:19",
+  "traj_fp": "af72cc4903a5",
+  "traj": {
+    "id": "I9",
+    "type": "意图",
+    "input": "CX-101 上次那个工单处理了吗",
+    "expect_tools": [
+      "query_work_order"
+    ],
+    "forbid_tools": [],
+    "expect_group_by": [],
+    "final_keywords": [
+      "WO-"
+    ],
+    "forbid_words": [
+      "查不到系统",
+      "无法查询工单"
+    ],
+    "expect_intent": "lookup",
+    "expect_ask": false,
+    "steps_range": [
+      1,
+      6
+    ]
+  },
+  "state": {
+    "tool_names": [
+      "query_device_profile",
+      "query_defect_log",
+      "query_work_order"
+    ],
+    "final": {
+      "conclusion": "历史工单 WO-20261120-002、WO-20261105-001，状态见下表。按设备档案与最近 7 天的误判统计列出如下，不做根因判断。",
+      "claims": [
+        {
+          "text": "保养周期 90 天",
+          "value": 90,
+          "unit": "天",
+          "ref": "query_device_profile#maintenance_cycle_days"
+        },
+        {
+          "text": "日志条数 200 条",
+          "value": 200,
+          "unit": "条",
+          "ref": "query_device_profile#log_count"
+        },
+        {
+          "text": "共判定 113 条",
+          "value": 113,
+          "unit": "条",
+          "ref": "query_defect_log#total"
+        },
+        {
+          "text": "过杀 27 条",
+          "value": 27,
+          "unit": "条",
+          "ref": "query_defect_log#false_positive_count"
+        },
+        {
+          "text": "整体误判率 23.89%",
+          "value": 23.89,
+          "unit": "%",
+          "ref": "query_defect_log#false_positive_rate"
+        },
+        {
+          "text": "1号工位 判定 34 条",
+          "value": 34,
+          "unit": "条",
+          "ref": "query_defect_log#groups[0].count"
+        },
+        {
+          "text": "1号工位 过杀 20 条",
+          "value": 20,
+          "unit": "条",
+          "ref": "query_defect_log#groups[0].false_positive"
+        },
+        {
+          "text": "1号工位 误判率 58.82%",
+          "value": 58.82,
+          "unit": "%",
+          "ref": "query_defect_log#groups[0].rate"
+        },
+        {
+          "text": "3号工位 判定 47 条",
+          "value": 47,
+          "unit": "条",
+          "ref": "query_defect_log#groups[1].count"
+        },
+        {
+          "text": "3号工位 过杀 5 条",
+          "value": 5,
+          "unit": "条",
+          "ref": "query_defect_log#groups[1].false_positive"
+        },
+        {
+          "text": "3号工位 误判率 10.64%",
+          "value": 10.64,
+          "unit": "%",
+          "ref": "query_defect_log#groups[1].rate"
+        },
+        {
+          "text": "2号工位 判定 32 条",
+          "value": 32,
+          "unit": "条",
+          "ref": "query_defect_log#groups[2].count"
+        },
+        {
+          "text": "2号工位 过杀 2 条",
+          "value": 2,
+          "unit": "条",
+          "ref": "query_defect_log#groups[2].false_positive"
+        },
+        {
+          "text": "2号工位 误判率 6.25%",
+          "value": 6.25,
+          "unit": "%",
+          "ref": "query_defect_log#groups[2].rate"
+        },
+        {
+          "text": "历史工单 2 张",
+          "value": 2,
+          "unit": "张",
+          "ref": "query_work_order#count"
+        }
+      ],
+      "advice": []
+    },
+    "final_text": "### CX-101（3号线 / 1-3号工位）\n\n| 项 | 值 |\n|---|---|\n| 相机 | In-Sight 2801 |\n| 镜头 | 16mm |\n| 光源 | CA-DC21E |\n| 安装日期 | 2025-03-12 00:00:00 |\n| 保养周期 | 90 天 |\n| 日志条数 | 200（最新 2026-11-14 17:19:52） |\n\n最近 7 天（2026-11-07 17:19:52 ~ 2026-11-14 17:19:52）：共判定 113 条，过杀 27 条，整体误判率 23.89%\n\n| 工位 | 判定 | 过杀 | 误判率 |\n|---|---|---|---|\n| 1号工位 | 34 | 20 | 58.82% |\n| 3号工位 | 47 | 5 | 10.64% |\n| 2号工位 | 32 | 2 | 6.25% |\n\n### CX-101 历史工单（2 张）\n\n- WO-20261120-002 | 待处理 | 严重度 high | 设备科 | 建单 2026-11-20 00:12:55\n- WO-20261105-001 | 处理中 | 严重度 high | 设备科 | 建单 2026-11-05 09:30:00\n\n---\n以上是设备档案、最近 7 天的误判统计与历史工单，**没有做根因判断**。需要排查原因的话，说一句现象（哪类缺陷、从什么时候开始、哪个班次更重），我再往下查。",
+    "steps": 3,
+    "blocked": [],
+    "misquoted": [],
+    "cite_stats": {
+      "qty": 15,
+      "pct": 4,
+      "cited_ok": 15,
+      "cited_path": 15,
+      "cite_oob": 0,
+      "path_ok": 15,
+      "path_bad": 0,
+      "path_miss": 0,
+      "json_bad": 0,
+      "unsourced": 0,
+      "ref_bad": 0,
+      "cite_cut": 0,
+      "json_fixed": 0,
+      "derived_ok": 0,
+      "derived_bad": 0,
+      "range_ok": 0,
+      "range_bad": 0,
+      "ref_ambiguous": 0,
+      "multi_ok": 0,
+      "multi_bad": 0,
+      "qual_ok": 0,
+      "qual_bad": 0,
+      "qual_unsourced": 0,
+      "quote_ok": 0,
+      "quote_bad": 0,
+      "bare_conclusion": 0,
+      "svc_fail": 0,
+      "ev_mismatch": 0,
+      "cited": 15,
+      "ev": 3
+    },
+    "stop_reason": "",
+    "check_retry": 0,
+    "unknown": [],
+    "evidence": [
+      {
+        "tool": "query_device_profile",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "result": {
+          "device_id": "CX-101",
+          "state": "found",
+          "line": "3号线",
+          "station": "1-3号工位",
+          "camera_model": "In-Sight 2801",
+          "lens_model": "16mm",
+          "light_model": "CA-DC21E",
+          "install_date": "2025-03-12 00:00:00",
+          "maintenance_cycle_days": 90,
+          "log_count": 200,
+          "latest_log_at": "2026-11-14 17:19:52"
+        },
+        "turn": 1,
+        "ev_no": 1
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-101",
+          "group_by": "station"
+        },
+        "result": {
+          "device_id": "CX-101",
+          "state": "found",
+          "time_from": "2026-11-07 17:19:52",
+          "time_to": "2026-11-14 17:19:52",
+          "group_by": "station",
+          "total": 113,
+          "false_positive_count": 27,
+          "false_positive_rate": 0.2389,
+          "groups": [
+            {
+              "key": "1号工位",
+              "count": 34,
+              "false_positive": 20,
+              "rate": 0.5882
+            },
+            {
+              "key": "3号工位",
+              "count": 47,
+              "false_positive": 5,
+              "rate": 0.1064
+            },
+            {
+              "key": "2号工位",
+              "count": 32,
+              "false_positive": 2,
+              "rate": 0.0625
+            }
+          ],
+          "samples": [
+            {
+              "ts": "2026-11-07 20:19:55",
+              "station": "3号工位",
+              "defect_type": "污渍",
+              "confidence": 0.93,
+              "batch": "B20261104"
+            },
+            {
+              "ts": "2026-11-10 07:02:02",
+              "station": "1号工位",
+              "defect_type": "尺寸超差",
+              "confidence": 0.914,
+              "batch": "B20261107"
+            },
+            {
+              "ts": "2026-11-11 22:39:56",
+              "station": "3号工位",
+              "defect_type": "尺寸超差",
+              "confidence": 0.898,
+              "batch": "B20261109"
+            },
+            {
+              "ts": "2026-11-07 21:30:41",
+              "station": "1号工位",
+              "defect_type": "尺寸超差",
+              "confidence": 0.884,
+              "batch": "B20261105"
+            },
+            {
+              "ts": "2026-11-13 00:15:06",
+              "station": "1号工位",
+              "defect_type": "尺寸超差",
+              "confidence": 0.882,
+              "batch": "B20261103"
+            }
+          ]
+        },
+        "turn": 1,
+        "ev_no": 2
+      },
+      {
+        "tool": "query_work_order",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "result": {
+          "device_id": "CX-101",
+          "scope": "device:CX-101",
+          "count": 2,
+          "orders": [
+            {
+              "order_id": "WO-20261120-002",
+              "device_id": "CX-101",
+              "root_cause": "光源累计点亮 8620 小时已超额定寿命 8000 小时（超出 620 小时），亮度衰减导致 1 号工位误判率升至 58.82%",
+              "severity": "high",
+              "status": "待处理",
+              "assignee_group": "设备科",
+              "created_at": "2026-11-20 00:12:55"
+            },
+            {
+              "order_id": "WO-20261105-001",
+              "device_id": "CX-101",
+              "root_cause": "1号工位光源衰减，夜班误判集中",
+              "severity": "high",
+              "status": "处理中",
+              "assignee_group": "设备科",
+              "created_at": "2026-11-05 09:30:00"
+            }
+          ],
+          "state": "found",
+          "note": "按建单时间倒序，最多返回 limit 条。"
+        },
+        "turn": 1,
+        "ev_no": 3
+      }
+    ],
+    "intent": "lookup",
+    "intent_conf": 0.85,
+    "route_by": "model",
+    "model_intent": "lookup"
+  },
+  "meta": {
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
+  }
+}

@@ -53,7 +53,10 @@ ROUTE_UNDERSTAND = {
     "refuse": "refuse", "ask_user": "ask_user",
 }
 ROUTE_PLAN = {"act": "act", "check": "check", "finalize": "finalize", "plan": "plan"}
-ROUTE_CHECK = {"plan": "plan", "verify": "verify"}
+# 回环目标必须包含"结论是谁写的"那两类：知识题和查表题的结论不走 plan，
+# 一律回 plan 等于逼它们重走一遍诊断流程，语义完全不对（T1 就是这么丢的回环）。
+ROUTE_CHECK = {"plan": "plan", "verify": "verify",
+               "knowledge": "knowledge", "lookup": "lookup"}
 
 
 def build_graph(use_checkpoint: bool = True):
@@ -94,8 +97,12 @@ def build_graph(use_checkpoint: bool = True):
         ROUTE_CHECK,
     )
     g.add_edge("act", "plan")
-    g.add_edge("lookup", "verify")
-    g.add_edge("knowledge", "verify")
+    # 查表和知识原来直接进 verify：check 是"verify 前面的自查闸口"，
+    # 只给诊断路径开，等于这两类结论从来没有自查机会。
+    # 实测后果：T1 产出 3 条伪引用（ref 写成「系统核查结果」），
+    # check_rounds=0——不是模型改不动，是回环在结构上不会被经过。
+    g.add_edge("lookup", "check")
+    g.add_edge("knowledge", "check")
     # 拒答也过 verify：它同样是"一条对外的结论"，不该有哪条出口绕过校验。
     # 空 claims 是诚实的（拒答里没有可引用的事实），不是豁免。
     g.add_edge("refuse", "verify")

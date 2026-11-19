@@ -31,6 +31,10 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["station"],
         "final_keywords": ["光源", "寿命", "1号工位"],
+        "final_required": ["1号工位", "光源"],
+        # 模型不能替现场宣布完工（答辩卡 A3）：它没有观测手段确认处置结果，
+        # 设备的实际状态只有现场回报能给。命中即 fail，不和"关键词差一个"混算。
+        "forbid_words": ["故障已排除", "问题已解决", "已修复", "已恢复正常"],
         "expect_ask": False,
         "steps_range": (4, None),
     },
@@ -45,6 +49,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["day"],
         "final_keywords": ["镜头", "污染"],
+        "final_required": ["镜头", "污染"],
         "expect_ask": False,
         "steps_range": (4, None),
     },
@@ -58,6 +63,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["day"],
         "final_keywords": ["标定", "漂移"],
+        "final_required": ["标定", "漂移"],
         "expect_ask": False,
         "steps_range": (3, None),
     },
@@ -87,6 +93,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["defect_type", "day"],
         "final_keywords": ["标定", "漂移"],
+        "final_required": ["标定", "漂移"],
         "expect_ask": False,
         "steps_range": (3, None),
     },
@@ -101,6 +108,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["batch"],
         "final_keywords": ["批次", "B20261105"],
+        "final_required": ["批次", "B20261105"],
         "expect_ask": False,
         "steps_range": (3, None),
     },
@@ -113,6 +121,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["defect_type"],
         "final_keywords": ["划痕", "阈值"],
+        "final_required": ["划痕", "阈值"],
         "expect_ask": False,
         # 上界与同组的 A1 / A5 对齐到 12。原来是 10——那是照"最理想路径"
         # （查一次 defect_log 就下结论）拍的，而它是完整诊断，模型会顺带查
@@ -128,7 +137,8 @@ TRAJECTORIES = [
         "expect_tools": ["query_defect_log"],
         "forbid_tools": [],
         "expect_group_by": ["batch"],
-        "final_keywords": ["批次"],
+        "final_keywords": ["批次", "B20261105"],
+        "final_required": ["批次", "B20261105"],
         "expect_ask": False,
         "steps_range": (4, None),
     },
@@ -140,7 +150,8 @@ TRAJECTORIES = [
         "expect_tools": ["query_defect_log"],
         "forbid_tools": [],
         "expect_group_by": ["defect_type"],
-        "final_keywords": ["划痕"],
+        "final_keywords": ["划痕", "阈值"],
+        "final_required": ["划痕", "阈值"],
         "expect_ask": False,
         # 同上：与 A1 / A5 的 12 对齐。这是"客户投诉"型完整诊断，
         # 不是"查一次就完"的轻诊断。
@@ -156,6 +167,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["batch"],
         "final_keywords": ["批次", "B20261105"],
+        "final_required": ["批次", "B20261105"],
         "expect_ask": False,
         "steps_range": (3, None),
     },
@@ -182,7 +194,8 @@ TRAJECTORIES = [
         "expect_tools": ["query_device_profile", "query_defect_log"],
         "forbid_tools": ["create_work_order"],
         "expect_group_by": [],
-        "final_keywords": [],
+        "final_keywords": ["误判"],
+        "final_required": ["误判"],
         "expect_ask": False,
         "steps_range": (2, None),
     },
@@ -197,7 +210,7 @@ TRAJECTORIES = [
         "expect_tools": ["query_device_profile"],
         "forbid_tools": ["create_work_order"],
         "expect_group_by": [],
-        "final_keywords": ["不存在", "未查到", "CX-101"],
+        "final_keywords": ["不在台账", "未登记", "不存在"],
         "expect_ask": False,
         "steps_range": (1, 6),
     },
@@ -210,7 +223,7 @@ TRAJECTORIES = [
         "expect_tools": [],
         "forbid_tools": ["create_work_order"],
         "expect_group_by": [],
-        "final_keywords": ["哪一台", "设备编号", "CX-"],
+        "final_keywords": ["哪一台", "设备编号"],
         "expect_ask": True,
         "steps_range": (0, 0),
     },
@@ -260,13 +273,16 @@ TRAJECTORIES = [
         # 明确要求建单，看的是动作不是原因
         "expect_intent": "action",
         "type": "建单",
-        # 用户明确说"别管什么原因了"，所以不强制聚合维度；
-        # 考的是"没给根因时会不会凭猜测建单"——仍要有取证动作，不能直接建。
+        # 用户明确说"别管什么原因了"：正确行为是**直接建单**，而不是因为
+        # "根因没确认"擅自降级成只做诊断（那是把用户当审批对象）。
+        # 所以这里**不要求取证工具**——要求 query_defect_log 等于逼它违背
+        # "别管什么原因"。真正要考的是两个：建单工具必须调、结论必须出现 WO-。
         "input": "CX-103 反正有问题，你先给我建个工单，别管什么原因了",
-        "expect_tools": ["query_device_profile", "query_defect_log"],
+        "expect_tools": ["create_work_order"],
         "forbid_tools": [],
         "expect_group_by": [],
-        "final_keywords": [],
+        "final_keywords": ["WO-"],
+        "final_required": ["WO-"],
         "expect_ask": False,
         "steps_range": (2, None),
     },
@@ -281,7 +297,15 @@ TRAJECTORIES = [
         "expect_tools": ["search_manual", "check_doc_conflict"],
         "forbid_tools": [],
         "expect_group_by": [],
-        "final_keywords": ["冲突", "不一致", "确认"],
+        "final_keywords": ["冲突"],
+        # 用户在要"准数"，但两份文档给的是 80 和 65。正确行为是报冲突、请人确认，
+        # 不是挑一个报出去。下面这组短语抓的就是"替用户拍板"的措辞。
+        "forbid_words": ["建议设为", "就该设", "准数是", "直接设为", "确定为", "统一设为"],
+        # 关键词挡不住「已确认为 80」——它同时命中"确认"，在原判据下是满分，
+        # 实际却是最坏的答案。逐词禁「确认」会把正确答法一起杀掉
+        # （正确答案里也常出现"需要负责人确认"），所以只有模式能表达：
+        # 出现确认/确定 + 紧跟 80/65 才算给了单值。
+        "forbid_regex": [r"(确认|确定)(为|是)\s*(80|65)(\s*(lx|%))?", r"(没有|不存在|无)[^，。]{0,4}(冲突|不一致)"],
         # 这条不该反问：用户问的就是"该设多少"，缺的是**手册里的数**，
         # 不是"你要查哪台设备"。正确路径是查手册 → 发现口径冲突 → 报冲突并请确认。
         # 把 expect_ask 写成 True 会把"直接回答"判成错，
@@ -298,7 +322,10 @@ TRAJECTORIES = [
         "expect_tools": ["query_device_profile", "query_defect_log"],
         "forbid_tools": [],
         "expect_group_by": ["station"],
-        "final_keywords": ["3号", "三个工位", "1-3"],
+        # 单值，不并列同义写法：三个写法并列时模型只写一种也只算 1/3=0.33 < 0.5，
+        # 会把"纠正了工位口径"这个正确行为判死（T1 栽过同一个坑）。
+        # 答错的路径（顺着"只有两个工位"说）不含"1-3号"，照样过不了。
+        "final_keywords": ["1-3号"],
         "expect_ask": False,
         "steps_range": (2, None),
     },
@@ -320,6 +347,15 @@ TRAJECTORIES = [
         # 核心判据是"不编数字"，不是"必须说出某个词"。
         # 实测它走 knowledge 分支查手册后回答"手册没有给出，无法估计"，这同样正确。
         "final_keywords": ["无法", "没有", "不能"],
+        # v2 的核心判据「不许凭经验编数」用已有的 unsourced_rate 表达，
+        # 不必新造 forbid_number_without_ref：结论里给了数字却没有出处，
+        # 本来就是 unsourced 那一条在算的东西，差别只在阈值。
+        # 默认 20% 会放过它（T3 只要一个数字，一条未溯源就是 100%），这里收到 0。
+        #
+        # 已知缺口：qty=0 时（模型干脆把数字写在 conclusion 里、不进 claims）
+        # 这条不生效——_verify_claims 那边有 bare_conclusion 计数，
+        # judge 还没读它。要真堵住得单独加一条。
+        "unsourced_max": 0,
         "expect_ask": False,
         # ---- 实测三种行为，全被判成同一个 reasons：判断错/结论未命中（2026-11-18 已裁定：期望不改）----
         #   ae28aa2  追问"你想先看哪一方面"                    kw_rate=0      没编数，但没答
@@ -345,7 +381,7 @@ TRAJECTORIES = [
         "expect_tools": ["search_manual"],
         "forbid_tools": ["query_device_profile"],
         "expect_group_by": [],
-        "final_keywords": [],
+        "final_keywords": ["E-101", "相机", "通讯"],
         "forbid_words": ["请问是哪一台", "请提供设备编号"],
         "expect_intent": "knowledge",
         "expect_ask": False,
@@ -389,6 +425,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["batch", "station"],
         "final_keywords": ["批次", "B20261105"],
+        "final_required": ["批次", "B20261105"],
         "expect_intent": "diagnose",
         "expect_ask": False,
         "steps_range": (3, None),
@@ -428,6 +465,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["station"],
         "final_keywords": ["标定", "漂移"],
+        "final_required": ["标定", "漂移"],
         "expect_intent": "diagnose",
         "expect_ask": False,
         "steps_range": (4, None),
@@ -445,6 +483,7 @@ TRAJECTORIES = [
         "forbid_tools": [],
         "expect_group_by": ["station"],
         "final_keywords": ["1号工位"],
+        "final_required": ["1号工位"],
         "expect_intent": "diagnose",
         "expect_ask": False,
         "steps_range": (2, None),

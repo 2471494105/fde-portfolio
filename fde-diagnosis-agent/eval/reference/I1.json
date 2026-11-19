@@ -1,6 +1,6 @@
 {
   "id": "I1",
-  "saved_at": "2026-11-19 18:35:14",
+  "saved_at": "2026-11-20 00:38:01",
   "traj_fp": "d5eeabf623b0",
   "traj": {
     "id": "I1",
@@ -28,11 +28,11 @@
   "state": {
     "tool_names": [],
     "final": {
-      "conclusion": "你提到「线体误判率突然飙升，用户想知道原因」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+      "conclusion": "你提到「线体误判率突然飙升」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
       "claims": [],
       "advice": []
     },
-    "final_text": "你提到「线体误判率突然飙升，用户想知道原因」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+    "final_text": "你提到「线体误判率突然飙升」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
     "steps": 0,
     "blocked": [],
     "misquoted": [],
@@ -47,8 +47,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "1c45d98",
-    "code_hash": "e31aefefeb50",
-    "cases_hash": "1c088b9a1209"
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
   }
 }

@@ -1,7 +1,7 @@
 {
   "id": "A3",
-  "saved_at": "2026-11-19 17:51:25",
-  "traj_fp": "8827fb1b1267",
+  "saved_at": "2026-11-20 00:37:20",
+  "traj_fp": "66b65f22e5c1",
   "traj": {
     "id": "A3",
     "expect_intent": "diagnose",
@@ -15,7 +15,12 @@
       "batch"
     ],
     "final_keywords": [
-      "批次"
+      "批次",
+      "B20261105"
+    ],
+    "final_required": [
+      "批次",
+      "B20261105"
     ],
     "expect_ask": false,
     "steps_range": [
@@ -30,95 +35,123 @@
       "query_defect_log",
       "query_calibration",
       "query_light_usage",
-      "query_defect_log"
+      "search_manual",
+      "check_doc_conflict"
     ],
     "final": {
-      "conclusion": "误判集中在物料批次 B20261105，属该批次来料特征偏出模型适用分布导致的批次漂移；标定与光源均正常，可排除硬件方向",
+      "conclusion": "误判集中在物料批次 B20261105 与「污渍」缺陷类型，而三个工位均有分布、标定漂移平稳、光源未超寿命，方向偏算法与物料批次侧而非单工位硬件；同时判定置信度阈值存在文档口径冲突，需人工确认后才能定阈值是否偏严。",
       "claims": [
         {
-          "text": "整体误判率为 0.23（46/200）",
-          "value": 0.23,
-          "unit": "比例",
-          "ref": "query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}#false_positive_rate"
-        },
-        {
-          "text": "B20261105 批次误判率 50.62%",
-          "value": 50.62,
+          "text": "近 7 天整体误判率 21.28%（20/94）",
+          "value": 21.28,
           "unit": "%",
-          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#false_positive_rate"
         },
         {
-          "text": "该批次共 81 条记录",
-          "value": 81,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].count"
-        },
-        {
-          "text": "其中 41 条为误判",
-          "value": 41,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].false_positive"
-        },
-        {
-          "text": "全部 46 条误判中 89.1% 来自这一个批次（=41/46）",
-          "value": 89.1,
+          "text": "近一个月误判率 23%（46/200）",
+          "value": 23,
           "unit": "%",
-          "ref": null,
-          "derived": true,
-          "expr": "41/46"
+          "ref": "query_defect_log{group_by=day,time_from=2026-10-14}#false_positive_rate"
         },
         {
-          "text": "对照批次误判率显著更低：B20261107 为 0.2、B20261104 为 0.0667、B20261101 为 0",
-          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups",
+          "text": "2号工位误判率 31.03%",
+          "value": 31.03,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[0].rate"
+        },
+        {
+          "text": "3号工位误判率 18.42%",
+          "value": 18.42,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[1].rate"
+        },
+        {
+          "text": "「污渍」缺陷误判率 40.91%",
+          "value": 40.91,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.defect_type[0].rate"
+        },
+        {
+          "text": "「凹坑」缺陷误判率 23.08%",
+          "value": 23.08,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.defect_type[1].rate"
+        },
+        {
+          "text": "批次 B20261105 误判率 48.65%",
+          "value": 48.65,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.batch[0].rate"
+        },
+        {
+          "text": "批次 B20261106 误判率 14.29%",
+          "value": 14.29,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.batch[1].rate"
+        },
+        {
+          "text": "按天看无阶跃：11-02 为 47.06%、11-07 为 15.79%、11-14 为 17.65%",
+          "ref": "query_defect_log{group_by=day,time_from=2026-10-14}#groups",
           "items": [
             {
-              "key": "B20261107",
+              "key": "2026-11-02",
               "field": "rate",
-              "value": 0.2
+              "value": 47.06
             },
             {
-              "key": "B20261104",
+              "key": "2026-11-07",
               "field": "rate",
-              "value": 0.0667
+              "value": 15.79
             },
             {
-              "key": "B20261101",
+              "key": "2026-11-14",
               "field": "rate",
-              "value": 0.0
+              "value": 17.65
             }
           ]
         },
         {
-          "text": "误判未集中在单一工位：2号工位 0.2951、3号工位 0.2055",
-          "ref": "query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}#by_group.station",
+          "text": "被过杀样本的置信度均在 0.915~0.937 之间",
+          "ref": "query_defect_log{group_by=day,time_from=2026-10-14}#samples",
           "items": [
             {
-              "key": "2号工位",
-              "field": "rate",
-              "value": 0.2951
+              "key": "2026-11-06 10:24:55",
+              "field": "confidence",
+              "value": 0.937
             },
             {
-              "key": "3号工位",
-              "field": "rate",
-              "value": 0.2055
+              "key": "2026-11-08 04:44:54",
+              "field": "confidence",
+              "value": 0.926
+            },
+            {
+              "key": "2026-11-10 03:25:29",
+              "field": "confidence",
+              "value": 0.921
+            },
+            {
+              "key": "2026-11-04 18:59:04",
+              "field": "confidence",
+              "value": 0.915
+            },
+            {
+              "key": "2026-11-14 06:52:37",
+              "field": "confidence",
+              "value": 0.915
             }
           ]
         },
         {
-          "text": "缺陷类型也不集中：污渍 0.3636、凹坑 0.2321",
-          "ref": "query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}#by_group.defect_type",
-          "items": [
-            {
-              "key": "污渍",
-              "field": "rate",
-              "value": 0.3636
-            },
-            {
-              "key": "凹坑",
-              "field": "rate",
-              "value": 0.2321
-            }
-          ]
+          "text": "最近一次标定漂移 0.338px",
+          "value": 0.338,
+          "unit": "px",
+          "ref": "query_calibration#records[0].drift_px"
+        },
+        {
+          "text": "距上次标定 13 天，漂移趋势平稳",
+          "value": 13,
+          "unit": "天",
+          "ref": "query_calibration#days_since_last"
         },
         {
           "text": "光源累计点亮 5120 小时",
@@ -127,103 +160,98 @@
           "ref": "query_light_usage#cumulative_hours"
         },
         {
-          "text": "额定寿命 8000 小时",
+          "text": "光源额定寿命 8000 小时",
           "value": 8000,
           "unit": "小时",
           "ref": "query_light_usage#rated_life_hours"
         },
         {
-          "text": "距额定寿命还剩 2880 小时，未超寿命",
+          "text": "光源剩余寿命 2880 小时，未超寿命",
           "value": 2880,
           "unit": "小时",
           "ref": "query_light_usage#remaining_hours"
         },
         {
-          "text": "亮度设定一直为 80，无下调记录",
-          "ref": "query_light_usage#brightness_history",
-          "items": [
-            {
-              "key": "2025-05-20",
-              "field": "value",
-              "value": 80
-            }
-          ]
+          "text": "当前亮度设定 80，自安装以来未调整过",
+          "value": 80,
+          "unit": "",
+          "ref": "query_light_usage#brightness_set"
         },
         {
-          "text": "最近一次标定 2026-11-01 漂移 0.338 px，结果通过",
-          "value": 0.338,
-          "unit": "px",
-          "ref": "query_calibration#records[0].drift_px"
-        },
-        {
-          "text": "对应漂移量 0.057 mm",
-          "value": 0.057,
-          "unit": "mm",
-          "ref": "query_calibration#records[0].drift_mm"
-        },
-        {
-          "text": "距最近一次标定 13 天，漂移趋势平稳",
-          "value": 13,
-          "unit": "天",
-          "ref": "query_calibration#days_since_last"
-        },
-        {
-          "text": "历次标定漂移无单向上升：08-05 为 0.821、08-19 为 0.259、09-10 为 0.666、09-25 为 0.961、10-15 为 0.612 px",
-          "ref": "query_calibration#records",
-          "items": [
-            {
-              "key": "2026-08-05",
-              "field": "drift_px",
-              "value": 0.821
-            },
-            {
-              "key": "2026-08-19",
-              "field": "drift_px",
-              "value": 0.259
-            },
-            {
-              "key": "2026-09-10",
-              "field": "drift_px",
-              "value": 0.666
-            },
-            {
-              "key": "2026-09-25",
-              "field": "drift_px",
-              "value": 0.961
-            },
-            {
-              "key": "2026-10-15",
-              "field": "drift_px",
-              "value": 0.612
-            }
-          ]
-        },
-        {
-          "text": "本机设定的保养/标定周期为 90 天，当前未超期",
+          "text": "该设备档案保养周期设定为 90 天",
           "value": 90,
           "unit": "天",
           "ref": "query_device_profile#maintenance_cycle_days"
+        },
+        {
+          "text": "判定置信度阈值存在文档冲突：厂商手册与质量目标为 0.85，厂内SOP为 0.75",
+          "ref": "check_doc_conflict#by_param.判定置信度阈值.conflicts",
+          "items": [
+            {
+              "key": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+              "field": "value",
+              "value": 0.85
+            },
+            {
+              "key": "视觉检测作业指导书 WI-QC-015",
+              "field": "value",
+              "value": 0.75
+            }
+          ]
+        },
+        {
+          "text": "标定周期存在文档冲突：厂商手册为 90 天，厂内SOP为 30 天",
+          "ref": "check_doc_conflict#by_param.标定周期(天).conflicts",
+          "items": [
+            {
+              "key": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+              "field": "value",
+              "value": 90
+            },
+            {
+              "key": "视觉检测作业指导书 WI-QC-015",
+              "field": "value",
+              "value": 30
+            }
+          ]
+        },
+        {
+          "text": "光源亮度设定存在文档冲突：厂商手册为 80，厂内SOP为 65",
+          "ref": "check_doc_conflict#by_param.光源亮度设定.conflicts",
+          "items": [
+            {
+              "key": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
+              "field": "value",
+              "value": 80
+            },
+            {
+              "key": "视觉检测作业指导书 WI-QC-015",
+              "field": "value",
+              "value": 65
+            }
+          ]
         }
       ],
       "advice": [
-        "先隔离并复检 B20261105 批次：抽该批次过杀品做人工复判，确认是真污渍/凹坑还是物料表面色差、纹理变化造成的假缺陷",
-        "同步通知来料检验查该批次的供应商、生产日期与表面处理工艺，与该批次之前的物料做对比",
-        "把 B20261105 的误判图像作为验证集，评估是否需放宽「污渍」「凹坑」两类在该批次下的置信度阈值——阈值是所有工位共用的，改动前请工艺/算法确认口径，不要单机改",
-        "若复判确认物料本身正常且阈值调整后误判回落，可结案；若确认物料确实异常，则按来料不良处理，不改模型",
-        "光源与标定本次无需动作：亮度设定未动、寿命余 2880 小时，最近标定漂移 0.338 px 通过且趋势平稳，但建议下一轮仍按 90 天周期复标"
+        "先纠正一个前提：按天数据看，CX-102 的误判率并非近期突然上升，而是近一个月一直在 15%~47% 之间高位波动，11-02 反而是最高点（47.06%），11-07 之后并未抬升。请确认现场观察到的「变多」是指哪条线/哪个班次，避免按「突变」方向排查。",
+        "优先核查物料批次 B20261105：该批次误判率 48.65%，是 B20261106（14.29%）的三倍多，且「污渍」类缺陷误判率 40.91% 最高。建议调取该批次的来料外观记录与供应商信息，确认是否存在表面状态漂移。",
+        "硬件侧本轮可基本排除：三个工位均有误判（2号 31.03%、3号 18.42%），未集中在单一工位；最近标定漂移 0.338px、趋势平稳、13 天前刚标定；光源累计 5120 小时未超 8000 小时额定寿命、亮度从未下调。不建议先动镜头或光源。",
+        "判定置信度阈值口径需人工确认后再动：厂商手册与质量目标为 0.85，厂内SOP为 0.75，两者冲突。被过杀的样本置信度在 0.915~0.937，均高于两个口径，说明单纯调阈值未必能解释这批过杀，请质量部先定口径再评估。",
+        "标定周期（90 天 vs 30 天）与光源亮度设定（80 vs 65）同样存在文档冲突，请一并请质量部确认以哪份为准，确认前不要按任一数值调整设备。",
+        "本轮为诊断，未创建工单。若需派工，请明确告知，我再按批次漂移方向建单。处置结果需现场回报确认。"
       ]
     },
-    "final_text": "误判集中在物料批次 B20261105，属该批次来料特征偏出模型适用分布导致的批次漂移；标定与光源均正常，可排除硬件方向\n- 整体误判率为 0.23（46/200）[query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}]\n- B20261105 批次误判率 50.62%[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 该批次共 81 条记录[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 其中 41 条为误判[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 全部 46 条误判中 89.1% 来自这一个批次（=41/46）[无出处]\n- 对照批次误判率显著更低：B20261107 为 0.2、B20261104 为 0.0667、B20261101 为 0[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 误判未集中在单一工位：2号工位 0.2951、3号工位 0.2055[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}]\n- 缺陷类型也不集中：污渍 0.3636、凹坑 0.2321[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}]\n- 光源累计点亮 5120 小时[query_light_usage]\n- 额定寿命 8000 小时[query_light_usage]\n- 距额定寿命还剩 2880 小时，未超寿命[query_light_usage]\n- 亮度设定一直为 80，无下调记录[query_light_usage]\n- 最近一次标定 2026-11-01 漂移 0.338 px，结果通过[query_calibration]\n- 对应漂移量 0.057 mm[query_calibration]\n- 距最近一次标定 13 天，漂移趋势平稳[query_calibration]\n- 历次标定漂移无单向上升：08-05 为 0.821、08-19 为 0.259、09-10 为 0.666、09-25 为 0.961、10-15 为 0.612 px[query_calibration]\n- 本机设定的保养/标定周期为 90 天，当前未超期[query_device_profile]\n* 先隔离并复检 B20261105 批次：抽该批次过杀品做人工复判，确认是真污渍/凹坑还是物料表面色差、纹理变化造成的假缺陷\n* 同步通知来料检验查该批次的供应商、生产日期与表面处理工艺，与该批次之前的物料做对比\n* 把 B20261105 的误判图像作为验证集，评估是否需放宽「污渍」「凹坑」两类在该批次下的置信度阈值——阈值是所有工位共用的，改动前请工艺/算法确认口径，不要单机改\n* 若复判确认物料本身正常且阈值调整后误判回落，可结案；若确认物料确实异常，则按来料不良处理，不改模型\n* 光源与标定本次无需动作：亮度设定未动、寿命余 2880 小时，最近标定漂移 0.338 px 通过且趋势平稳，但建议下一轮仍按 90 天周期复标",
-    "steps": 6,
+    "final_text": "误判集中在物料批次 B20261105 与「污渍」缺陷类型，而三个工位均有分布、标定漂移平稳、光源未超寿命，方向偏算法与物料批次侧而非单工位硬件；同时判定置信度阈值存在文档口径冲突，需人工确认后才能定阈值是否偏严。\n- 近 7 天整体误判率 21.28%（20/94）[query_defect_log{group_by=station,defect_type,batch,day}]\n- 近一个月误判率 23%（46/200）[query_defect_log{group_by=day,time_from=2026-10-14}]\n- 2号工位误判率 31.03%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 3号工位误判率 18.42%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 「污渍」缺陷误判率 40.91%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 「凹坑」缺陷误判率 23.08%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 批次 B20261105 误判率 48.65%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 批次 B20261106 误判率 14.29%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 按天看无阶跃：11-02 为 47.06%、11-07 为 15.79%、11-14 为 17.65%[query_defect_log{group_by=day,time_from=2026-10-14}]\n- 被过杀样本的置信度均在 0.915~0.937 之间[query_defect_log{group_by=day,time_from=2026-10-14}]\n- 最近一次标定漂移 0.338px[query_calibration]\n- 距上次标定 13 天，漂移趋势平稳[query_calibration]\n- 光源累计点亮 5120 小时[query_light_usage]\n- 光源额定寿命 8000 小时[query_light_usage]\n- 光源剩余寿命 2880 小时，未超寿命[query_light_usage]\n- 当前亮度设定 80，自安装以来未调整过[query_light_usage]\n- 该设备档案保养周期设定为 90 天[query_device_profile]\n- 判定置信度阈值存在文档冲突：厂商手册与质量目标为 0.85，厂内SOP为 0.75[check_doc_conflict]\n- 标定周期存在文档冲突：厂商手册为 90 天，厂内SOP为 30 天[check_doc_conflict]\n- 光源亮度设定存在文档冲突：厂商手册为 80，厂内SOP为 65[check_doc_conflict]\n* 先纠正一个前提：按天数据看，CX-102 的误判率并非近期突然上升，而是近一个月一直在 15%~47% 之间高位波动，11-02 反而是最高点（47.06%），11-07 之后并未抬升。请确认现场观察到的「变多」是指哪条线/哪个班次，避免按「突变」方向排查。\n* 优先核查物料批次 B20261105：该批次误判率 48.65%，是 B20261106（14.29%）的三倍多，且「污渍」类缺陷误判率 40.91% 最高。建议调取该批次的来料外观记录与供应商信息，确认是否存在表面状态漂移。\n* 硬件侧本轮可基本排除：三个工位均有误判（2号 31.03%、3号 18.42%），未集中在单一工位；最近标定漂移 0.338px、趋势平稳、13 天前刚标定；光源累计 5120 小时未超 8000 小时额定寿命、亮度从未下调。不建议先动镜头或光源。\n* 判定置信度阈值口径需人工确认后再动：厂商手册与质量目标为 0.85，厂内SOP为 0.75，两者冲突。被过杀的样本置信度在 0.915~0.937，均高于两个口径，说明单纯调阈值未必能解释这批过杀，请质量部先定口径再评估。\n* 标定周期（90 天 vs 30 天）与光源亮度设定（80 vs 65）同样存在文档冲突，请一并请质量部确认以哪份为准，确认前不要按任一数值调整设备。\n* 本轮为诊断，未创建工单。若需派工，请明确告知，我再按批次漂移方向建单。处置结果需现场回报确认。",
+    "steps": 7,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 17,
-      "pct": 2,
-      "cited_ok": 16,
-      "cited_path": 16,
+      "qty": 20,
+      "pct": 8,
+      "cited_ok": 20,
+      "cited_path": 20,
       "cite_oob": 0,
-      "path_ok": 16,
+      "path_ok": 20,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -231,7 +259,7 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
-      "derived_ok": 1,
+      "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 0,
       "range_bad": 0,
@@ -246,8 +274,8 @@
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 16,
-      "ev": 6
+      "cited": 20,
+      "ev": 7
     },
     "stop_reason": "enough",
     "check_retry": 0,
@@ -268,11 +296,10 @@
         "tool": "query_defect_log",
         "args": {
           "device_id": "CX-102",
-          "group_by": "day,station,defect_type",
-          "time_from": "2025-10-01"
+          "group_by": "station,defect_type,batch,day"
         },
-        "sig": "device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01",
-        "result": "[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2025-10-01 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"day,station,defect_type\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 8, \"rate\": 0.4706}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, \"...共 14 项，仅送前 2 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"day\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": \"17\", \"false_positive\": \"8\", \"rate\": \"0.4706\"}, {\"key\": \"2026-11-10 00:00:00\", \"count\": \"18\", \"false_positive\": \"5\", \"rate\": \"0.2778\"}, \"...共 14 项，仅送前 2 项\"], \"station\": [{\"key\": \"2号工位\", \"count\": \"61\", \"false_positive\": \"18\", \"rate\": \"0.2951\"}, {\"key\": \"3号工位\", \"count\": \"73\", \"false_positive\": \"15\", \"rate\": \"0.2055\"}, \"...共 3 项，仅送前 2 项\"], \"defect_type\": [{\"key\": \"污渍\", \"count\": \"44\", \"false_positive\": \"16\", \"rate\": \"0.3636\"}, {\"key\": \"凹坑\", \"count\": \"56\", \"false_positive\": \"13\", \"rate\": \"0.2321\"}, \"...共 4 项，仅送前 2 项\"]}}",
+        "sig": "device_id=CX-102,group_by=station,defect_type,batch,day",
+        "result": "[query_defect_log{device_id=CX-102,group_by=station,defect_type,batch,day}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-11-07 23:49:51\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"station,defect_type,batch,day\", \"total\": 94, \"false_positive_count\": 20, \"false_positive_rate\": 0.2128, \"groups\": [{\"key\": \"2号工位\", \"count\": 29, \"false_positive\": 9, \"rate\": 0.3103}, {\"key\": \"3号工位\", \"count\": 38, \"false_positive\": 7, \"rate\": 0.1842}, \"...共 3 项，仅送前 2 项\"], \"samples\": [{\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"station\": [{\"key\": \"2号工位\", \"count\": 29, \"false_positive\": 9, \"rate\": 0.3103}, {\"key\": \"3号工位\", \"count\": 38, \"false_positive\": 7, \"rate\": 0.1842}, \"...共 3 项，仅送前 2 项\"], \"defect_type\": [{\"key\": \"污渍\", \"count\": 22, \"false_positive\": 9, \"rate\": 0.4091}, {\"key\": \"凹坑\", \"count\": 26, \"false_positive\": 6, \"rate\": 0.2308}, \"...共 4 项，仅送前 2 项\"], \"batch\": [{\"key\": \"B20261105\", \"count\": 37, \"false_positive\": 18, \"rate\": 0.4865}, {\"key\": \"B20261106\", \"count\": 7, \"false_positive\": 1, \"rate\": 0.1429}, \"...共 10 项，仅送前 2 项\"], \"day\": [{\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, {\"key\": \"2026-11-12 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, \"...共 7 项，仅送前 2 项\"]}}",
         "truncated": false,
         "ev_no": 2,
         "turn": 1
@@ -282,10 +309,10 @@
         "args": {
           "device_id": "CX-102",
           "group_by": "day",
-          "time_from": "2026-10-15"
+          "time_from": "2026-10-14"
         },
-        "sig": "device_id=CX-102,group_by=day,time_from=2026-10-15",
-        "result": "[query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 8, \"rate\": 0.4706}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, {\"key\": \"2026-11-01 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-12 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-06 00:00:00\", \"count\": 17, \"false_positive\": 4, \"rate\": 0.2353}, {\"key\": \"2026-11-07 00:00:00\", \"count\": 19, \"false_positive\": 3, \"rate\": 0.1579}, {\"key\": \"2026-11-14 00:00:00\", \"count\": 17, \"false_positive\": 3, \"rate\": 0.1765}, {\"key\": \"2026-11-05 00:00:00\", \"count\": 16, \"false_positive\": 3, \"rate\": 0.1875}, \"...共 14 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-04 18:59:04\", \"station\": \"2号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.915, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-14 06:52:37\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.915, \"batch\": \"B20261105\"}]}",
+        "sig": "device_id=CX-102,group_by=day,time_from=2026-10-14",
+        "result": "[query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-14}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-10-14 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 8, \"rate\": 0.4706}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, {\"key\": \"2026-11-01 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-12 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-06 00:00:00\", \"count\": 17, \"false_positive\": 4, \"rate\": 0.2353}, {\"key\": \"2026-11-07 00:00:00\", \"count\": 19, \"false_positive\": 3, \"rate\": 0.1579}, {\"key\": \"2026-11-14 00:00:00\", \"count\": 17, \"false_positive\": 3, \"rate\": 0.1765}, {\"key\": \"2026-11-05 00:00:00\", \"count\": 16, \"false_positive\": 3, \"rate\": 0.1875}, \"...共 14 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-04 18:59:04\", \"station\": \"2号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.915, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-14 06:52:37\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.915, \"batch\": \"B20261105\"}]}",
         "truncated": false,
         "ev_no": 3,
         "turn": 1
@@ -294,10 +321,10 @@
         "tool": "query_calibration",
         "args": {
           "device_id": "CX-102",
-          "limit": 6
+          "limit": 10
         },
-        "sig": "device_id=CX-102,limit=6",
-        "result": "[query_calibration{device_id=CX-102,limit=6}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"records\": [{\"ts\": \"2026-11-01 14:00:00\", \"drift_px\": 0.338, \"drift_mm\": 0.057, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-10-15 13:00:00\", \"drift_px\": 0.612, \"drift_mm\": 0.089, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-25 13:00:00\", \"drift_px\": 0.961, \"drift_mm\": 0.158, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-10 14:00:00\", \"drift_px\": 0.666, \"drift_mm\": 0.105, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 15:00:00\", \"drift_px\": 0.259, \"drift_mm\": 0.04, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-08-05 13:00:00\", \"drift_px\": 0.821, \"drift_mm\": 0.135, \"result\": \"通过\", \"operator\": \"王敏\"}], \"last_calibration_at\": \"2026-11-01 14:00:00\", \"days_since_last\": 13, \"drift_trend\": \"平稳\", \"window\": {\"time_from\": null, \"time_to\": null}}",
+        "sig": "device_id=CX-102,limit=10",
+        "result": "[query_calibration{device_id=CX-102,limit=10}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"records\": [{\"ts\": \"2026-11-01 14:00:00\", \"drift_px\": 0.338, \"drift_mm\": 0.057, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-10-15 13:00:00\", \"drift_px\": 0.612, \"drift_mm\": 0.089, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-25 13:00:00\", \"drift_px\": 0.961, \"drift_mm\": 0.158, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-10 14:00:00\", \"drift_px\": 0.666, \"drift_mm\": 0.105, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 15:00:00\", \"drift_px\": 0.259, \"drift_mm\": 0.04, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-08-05 13:00:00\", \"drift_px\": 0.821, \"drift_mm\": 0.135, \"result\": \"通过\", \"operator\": \"王敏\"}], \"last_calibration_at\": \"2026-11-01 14:00:00\", \"days_since_last\": 13, \"drift_trend\": \"平稳\", \"window\": {\"time_from\": null, \"time_to\": null}}",
         "truncated": false,
         "ev_no": 4,
         "turn": 1
@@ -314,27 +341,37 @@
         "turn": 1
       },
       {
-        "tool": "query_defect_log",
+        "tool": "search_manual",
         "args": {
-          "device_id": "CX-102",
-          "group_by": "batch",
-          "time_from": "2026-10-15"
+          "query": "判定置信度阈值 过杀 误判 处置",
+          "top_k": 5
         },
-        "sig": "device_id=CX-102,group_by=batch,time_from=2026-10-15",
-        "result": "[query_defect_log{device_id=CX-102,group_by=batch,time_from=2026-10-15}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"batch\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"B20261105\", \"count\": 81, \"false_positive\": 41, \"rate\": 0.5062}, {\"key\": \"B20261107\", \"count\": 15, \"false_positive\": 3, \"rate\": 0.2}, {\"key\": \"B20261104\", \"count\": 15, \"false_positive\": 1, \"rate\": 0.0667}, {\"key\": \"B20261106\", \"count\": 12, \"false_positive\": 1, \"rate\": 0.0833}, {\"key\": \"B20261101\", \"count\": 17, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261100\", \"count\": 14, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261102\", \"count\": 12, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261109\", \"count\": 12, \"false_positive\": 0, \"rate\": 0.0}, \"...共 10 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-04 18:59:04\", \"station\": \"2号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.915, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-14 06:52:37\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.915, \"batch\": \"B20261105\"}]}",
+        "sig": "query=判定置信度阈值 过杀 误判 处置,top_k=5",
+        "result": "[search_manual{query=判定置信度阈值 过杀 误判 处置,top_k=5}] {\"query\": \"判定置信度阈值 过杀 误判 处置\", \"chunks\": [{\"text\": \"6.1 判定置信度\\n系统默认判定置信度阈值 0.85。低于该值的判定结果应转人工复核。阈值下调至 0.75 以下会显著增加过杀率。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"6.1 判定置信度\", \"score\": 0.7608}, {\"text\": \"5.1 判定置信度\\n为减少漏检，现场将判定置信度阈值下调至 0.75，低于 0.75 转人工。过杀率上升时不得直接上调阈值，须先核查光源与镜头。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"5.1 判定置信度\", \"score\": 0.7558}, {\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.7417}, {\"text\": \"1.3 判定参数统一口径\\n全厂判定置信度阈值统一按 0.85 执行，特殊工况需质量部书面批准后方可下调。\", \"source_doc\": \"质量目标与验收标准 QO-2026\", \"doc_type\": \"质量目标\", \"section\": \"1.3 判定参数统一口径\", \"score\": 0.7127}, {\"text\": \"E-102 触发信号超时\\n告警码 E-102，等级 warning。含义：触发信号超时。常见原因：PLC 触发回路异常、编码器信号丢失。处置：检查 PLC 触发输出与编码器线缆，核对触发延迟设定是否与产线节拍匹配；表现为偶发漏拍，即产品未被完整成像。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-102 触发信号超时\", \"score\": 0.7076}]}",
         "truncated": false,
         "ev_no": 6,
+        "turn": 1
+      },
+      {
+        "tool": "check_doc_conflict",
+        "args": {
+          "param_name": "判定置信度阈值,标定周期(天),光源亮度设定"
+        },
+        "sig": "param_name=判定置信度阈值,标定周期(天),光源亮度设定",
+        "result": "[check_doc_conflict{param_name=判定置信度阈值,标定周期(天),光源亮度设定}] {\"param_name\": \"判定置信度阈值,标定周期(天),光源亮度设定\", \"has_conflict\": true, \"checked\": [\"判定置信度阈值\", \"标定周期(天)\", \"...共 3 项，仅送前 2 项\"], \"conflict_params\": [\"判定置信度阈值\", \"标定周期(天)\", \"...共 3 项，仅送前 2 项\"], \"by_param\": {\"判定置信度阈值\": {\"param_name\": \"判定置信度阈值\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"6.1 判定置信度\", \"value\": 0.85}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"5.1 判定置信度\", \"value\": 0.75}, \"...共 3 项，仅送前 2 项\"], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——0.85（厂商手册、质量目标）；0.75（厂内SOP）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}, \"标定周期(天)\": {\"param_name\": \"标定周期(天)\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"value\": 90}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"value\": 30}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——90（厂商手册）；30（厂内SOP）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}, \"光源亮度设定\": {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"value\": 80}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"value\": 65}, \"...共 4 项，仅送前 2 项\"], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}}, \"note\": \"共查 3 个参数，其中 3 个存在冲突：判定置信度阈值、标定周期(天)、光源亮度设定。取证时不要自行挑选，须说明冲突并请人工确认以哪份为准。\"}",
+        "truncated": false,
+        "ev_no": 7,
         "turn": 1
       }
     ],
     "intent": "diagnose",
-    "intent_conf": 0.92,
+    "intent_conf": 0.95,
     "route_by": "rule:change+dev",
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "f1296de",
-    "code_hash": "15213764895e",
-    "cases_hash": "1c088b9a1209"
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
   }
 }

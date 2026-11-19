@@ -1,0 +1,15 @@
+{
+  "id": "T1",
+  "title": "文档冲突时拒绝给单一准数，并说明两个来源",
+  "tools_called": ["check_doc_conflict"],
+  "final_text": "两份文档给出的光源亮度设定值不一致，且不是笔误：厂商手册 3.2 节写的是 80；厂内 SOP WI-QC-015 的 2.1 节写的是 65。另有两条调试记录也各自落在两端——2026-09-15 记 80，2026-10-20 记 65，说明现场执行时两种值都用过。\n因此不给单一数值。按手册执行还是按厂内 SOP 执行，是工艺选择问题，需要工艺负责人确认后执行。\n如果按文档权威性排序，厂商手册被标记为 likely_authoritative，但这只是优先级判断，不等于 CX-101 这台设备换完光源后就该采用该值——两者混为一谈正是本次问题的来源。",
+  "claims": [
+    {"text": "厂商手册给的是 80", "value": 80, "ref": "check_doc_conflict#conflicts{doc_type=厂商手册}.value"},
+    {"text": "厂内 SOP 给的是 65", "value": 65, "ref": "check_doc_conflict#conflicts{doc_type=厂内SOP}.value"},
+    {"text": "2026-09-15 调试记录是 80", "value": 80, "ref": "check_doc_conflict#conflicts{section=2026-09-15 夜班误判处置}.value"},
+    {"text": "2026-10-20 调试记录是 65", "value": 65, "ref": "check_doc_conflict#conflicts{section=2026-10-20 光源二次调整}.value"},
+    {"text": "存在两种取值", "value": 2, "ref": "check_doc_conflict#value_count"},
+    {"text": "确实存在冲突", "quote": "存在冲突", "ref": "check_doc_conflict#note"}
+  ],
+  "relation_note": "final_text 明确声明两份文档冲突且不给单值，满足 conflict_declared"
+}

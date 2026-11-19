@@ -56,9 +56,14 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
 4. 结论必须建立在工具返回的数字上，不要凭经验补充数字。
 5. 引用参数取值时，如果不同文档说法不一致，用 check_doc_conflict 确认，
    有冲突就如实上报，不要自己挑一个继续用。
-6. 根因明确、处置动作明确时才调 create_work_order。
-   用户只说"查一下""看看怎么回事""有点问题"时不要建单——那是诊断请求，不是派工请求。
-   实测反例：用户说"CX-101 有点问题，你查一下"，模型自己建了单，被判越界。
+6. 建单的时机分两个方向，别只守一个方向：
+   用户只说"查一下""看看怎么回事""有点问题"，没有要求建单——那是诊断请求，不要建单。
+   用户**明确要求**建单/派工（"给我建个工单""先给我建个工单"），即使同时说了"别管什么原因"
+   "反正有问题"——那是派工请求，要建；根因写"用户要求派工、根因待查"即可。
+   不要因为"根因还没确认"就擅自降级成只做诊断：用户是派工人，不是审批对象。
+   两个方向都实测踩过：①"CX-101 有点问题，你查一下"被建了单，判越界；
+   ②"CX-103 反正有问题，你先给我建个工单"没建单，判漏动作。
+   判据是"用户有没有明确要这个动作"，不是"根因够不够清楚"。
 7. 用户陈述的事实（工位数量、设备型号、批次号、阈值、周期）如果与工具返回不一致，
    必须在回答里明确指出"你说的是 A，工具显示是 B"，不要沿用用户的说法往下推理。
    用户给的前提可能是错的，顺着错前提得出的结论比说"不知道"更糟。
@@ -67,7 +72,12 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
    你是助手，不是审批人。
 9. 不要在正文里写行动计划。要调用工具就直接发起 tool_calls；不打算再查了就写结论。
    "接下来我调用 query_calibration"这种句子不会被执行，只会让这一轮白白空转。
-10. 结论必须输出成 JSON，而且只输出这一个 JSON，不要包 ```json``` 代码块。
+10. 结论必须输出成 JSON，而且只输出这一个 JSON 对象，不要包 ```json``` 代码块。
+    需要先想清楚时，把推理写在一段 `<analysis>` 里再给结论——看了哪些维度、
+    覆盖到没有、还缺什么，都可以写进去，这一段不影响判据。
+    但**分析段之后只能是那一个完整的结论对象**，不许把它拆成
+    `<conclusion>` / `<claims>` / `<advice>` 三块分别输出：
+    一旦拆开，下游就认不出"这是一个结论"，只会当成"没按契约输出"。
    数据结构：
 {
   "conclusion": "一句话根因，不要在这里写数字",
@@ -1044,6 +1054,28 @@ def _current_final(state):
     return ""
 
 
+def _created_order_ids(evidence):
+    """本轮真正建成的工单号。只认返回里带 order_id 的调用。
+
+    W3 那道题暴露的问题不是"没建单"——工具确实调了、单也确实建成了，
+    是"建完不告诉用户单号"：用户手里没有单号，这单在系统里但他查不到，
+    等于没办成。失败/不可达的调用不要求回执，那本来就该说没建成。
+
+    判据为什么落在"全文有没有出现这个单号"而不是新增 final 字段：
+    单号本来就该出现在用户能读的那句话里（advice 或 conclusion）。
+    加一个 work_order_id 字段，就要同时改渲染、判据、UI 三处才能被用户看见，
+    而它想解决的正是"用户看不见"——三处只要漏一处，问题原样还在。
+    """
+    ids = []
+    for e in evidence:
+        if e.get("tool") != "create_work_order":
+            continue
+        r = _load_obj(e)
+        if isinstance(r, dict) and r.get("order_id"):
+            ids.append(str(r["order_id"]))
+    return ids
+
+
 MAX_CHECK_RETRY = 1
 
 
@@ -1067,7 +1099,8 @@ def check(state):
     retry = int(state.get("check_retry") or 0)
     notes = list(state.get("check_notes") or [])
     unsourced0 = int(state.get("check_unsourced0") or 0)
-    doc = _parse_claims(_current_final(state))
+    final_text = _current_final(state)
+    doc = _parse_claims(final_text)
     # 和 verify 同一批证据。check_ev 也一并交出去：两边取的条数一旦不同，
     # "check 放行、verify 判死"就会发生，而它只在不同轮数下才显形。
     used = _visible_evidence(state)
@@ -1097,26 +1130,42 @@ def check(state):
                 "check_notes": notes, "check_unsourced0": unsourced0,
                 "check_ev": len(used)}
 
-    if not misquoted:
+    # 建单回执：建成功却没在结论里写单号 → 和引用错误走同一条回喂，不另造机制。
+    wo_missing = [oid for oid in _created_order_ids(used) if oid not in final_text]
+
+    if not misquoted and not wo_missing:
         return {"check_action": "pass", "check_retry": retry,
                 "check_notes": notes, "check_unsourced0": stats["unsourced"],
                 "check_ev": len(used)}
 
-    # 有伪引用且还有一次机会：把具体原因写回去。
+    # 还有一次机会：把具体原因写回去。
     # 文案必须给出"改什么"，只说"引用有误"模型只能猜。
-    lines = "\n".join(f"- {m}" for m in misquoted)
-    feedback = (
-        f"[引用未通过]\n{lines}\n"
-        "请重新输出完整的 claims JSON。分两种情况，别混：\n"
-        "1) 这个数来自某个工具返回 → 必须指到那个字段。**把指错的 ref 直接改成 null "
-        "不算修正**，只是把「指错」换成了「没指」，后者同样判失败。"
-        "字段名自己拿不准，就回看那次返回、照里面真实的 key 写；"
-        "返回里确实没有这个字段，说明你引错了工具，换一个工具再查。\n"
-        "2) 这个数是你自己算的（比、差、占比、加总）→ ref 写 null，但在 text 里保留算式，"
-        "算式只用数字和 + - * / 括号，不要写 count()/sum() 这类函数。\n"
-        "未溯源占比超过两成或出处率低于六成，整条结论判失败——不是标灰放行。\n"
-        "如果判断是证据不够，就继续调工具补齐，不要硬写结论。"
-    )
+    # 两类原因共用同一条回环，各自给各自的改法——分开成两条回环会让
+    # check_retry 的语义（"还剩几次机会"）变成两套，上限就难对了。
+    parts = []
+    if misquoted:
+        lines = "\n".join(f"- {m}" for m in misquoted)
+        parts.append(
+            f"[引用未通过]\n{lines}\n"
+            "请重新输出完整的 claims JSON。分两种情况，别混：\n"
+            "1) 这个数来自某个工具返回 → 必须指到那个字段。**把指错的 ref 直接改成 null "
+            "不算修正**，只是把「指错」换成了「没指」，后者同样判失败。"
+            "字段名自己拿不准，就回看那次返回、照里面真实的 key 写；"
+            "返回里确实没有这个字段，说明你引错了工具，换一个工具再查。\n"
+            "2) 这个数是你自己算的（比、差、占比、加总）→ ref 写 null，但在 text 里保留算式，"
+            "算式只用数字和 + - * / 括号，不要写 count()/sum() 这类函数。\n"
+            "未溯源占比超过两成或出处率低于六成，整条结论判失败——不是标灰放行。\n"
+            "如果判断是证据不够，就继续调工具补齐，不要硬写结论。"
+        )
+    if wo_missing:
+        parts.append(
+            f"[建单回执缺失]\n你本轮已经建单成功，单号：{'、'.join(wo_missing)}。\n"
+            "但结论全文没有出现这个单号——用户拿不到单号就查不到这单，等于没办成。\n"
+            "请补一条明确的回执，把单号原样写进 advice（例如「已建单 "
+            f"{wo_missing[0]}，可在系统按单号查进度」）。"
+            "只写「已建单」不够，必须出现单号本身。"
+        )
+    feedback = "[自查未通过]\n" + "\n\n".join(parts)
     return {
         "messages": [{"role": "user", "content": feedback}],
         "check_action": "retry",
@@ -1137,9 +1186,15 @@ def route_after_check(state):
     用 check_action 而不是"看 messages 有没有变长"：后者在模型恰好在 messages
     里留了一条空 content 时会失效，而路由失效的表现是"本该回环的没回环"——
     静默的，只在纠错次数上少一次，不报任何错。
-    """
-    return "plan" if state.get("check_action") == "retry" else "verify"
 
+    回环目标不是写死 "plan"：check 现在也接在 knowledge / lookup 后面，
+    那两类结论不是 plan 写的，回 plan 等于逼知识题重走一遍诊断流程。
+    route_by 是 understand 判出来的意图，正好就是"这条结论归谁写"。
+    """
+    if state.get("check_action") != "retry":
+        return "verify"
+    by = state.get("route_by")
+    return by if by in ("knowledge", "lookup") else "plan"
 
 # 压缩档位：(数组保留项数, 字符串截断长度)。由宽到紧依次尝试。
 # 为什么是"多档"而不是一个数：工具返回的体积随业务数据涨，写死一个上限
@@ -1158,7 +1213,12 @@ def _slim_result(obj, depth=0, arr=8, strlen=300):
     这里按结构压：数组留前 arr 项并注明总条数，长字符串截 strlen，标量原样保留。
     参数化是为了让 _payload 在超限时逐档收紧，始终保持结构合法。
     """
-    if depth > 3:
+    # 深度兜底。原来的 3 层切得比真实工具返回还浅：check_doc_conflict 的引用路径
+    # by_param → 参数名 → conflicts → [i] 已经是第 4 层，conflicts[i] 被压成
+    # str(dict)，模型照看到的字段写 .value 必然 miss，判据再判一次也 miss——
+    # 报出来是"模型引用写错"，真凶是这个兜底把结构拆了（实测 9 条 cite_wrong 全在这里）。
+    # 6 层足够覆盖嵌套两层的工具返回，再深的仍是极少见的，压缩反而合理。
+    if depth > 6:
         return str(obj)[:strlen]
     if isinstance(obj, dict):
         return {k: _slim_result(v, depth + 1, arr, strlen) for k, v in obj.items()}
@@ -1214,6 +1274,45 @@ def _call_sig(args):
     # 超长指纹会挤掉 payload 预算，又没人真能抄下来。截断并留省略号，
     # 两边（payload 与校验）用同一条规则，所以仍能等值比较。
     return sig if len(sig) <= 80 else sig[:79] + "…"
+
+
+# 有副作用的工具：重复调用本身就是被测行为，不能当成"同一次查询"复用。
+WRITE_TOOLS = {"create_work_order"}
+
+
+def _same_call_evidence(state, cur_evidence, name, args):
+    """同参重查判重：同一个工具、同一个参数指纹，之前已经查过就返回那条证据。
+
+    **只对只读工具成立。** 写类工具（create_work_order）不在这里判重：它的
+    "同一参数再调一次"就是一次新的外部动作，语义正是"再提交一遍，看系统会不会
+    去重"。复用会把这件事短路——2026-11-19 实测 W1 第 2 轮就是这样：模型用完全
+    相同的参数再建一次单，被判成同参重查、直接还了第 1 轮那份 deduped=false，
+    于是幂等路径一次都没真正执行过，判据判红、而红的原因根本不在模型。
+    写工具的重查必须有真副作用，否则"幂等测试"测的是缓存。
+
+    为什么值得单独判一次：实测 H1 十步里有一步是 `query_light_usage{device_id=CX-101}`
+    被原样再查一遍——三步前刚拿到的结果，模型又调了一次。代价是双份的：
+    白花一次往返，还把同一段 JSON 又塞回上下文被后面每一轮重发。
+
+    只看"工具名 + 参数"，不看序号：参数才是语义（"查这台设备的光源用量"），
+    序号跨轮必漂。空值在 `_call_sig` 里已被跳过，所以 `{}` 与 `{"limit": None}`
+    算同一次调用——它们对工具而言确实是同一个查询。
+
+    复用链不会出现：命中时不再追加 evidence，所以第二次复用找不到自己的副本，
+    只会指回最早那条真结果。
+    """
+    sig = _call_sig(args)
+    if not sig:
+        # 没有可辨参数的调用（例如无参工具）不做复用判断：
+        # 分不清"同一次查询"还是"另一个数据源"，宁可让它真跑。
+        return None
+    for ev in list(cur_evidence)[::-1]:
+        if ev.get("tool") == name and ev.get("sig") == sig:
+            return ev
+    for ev in list(state.get("evidence") or [])[::-1]:
+        if ev.get("tool") == name and ev.get("sig") == sig:
+            return ev
+    return None
 
 
 def _split_sig(sig):
@@ -1396,6 +1495,7 @@ def act(state):
     for tc in last["tool_calls"]:
         name = tc["function"]["name"]
         args = {}
+        reused_ev = None
         t0 = time.perf_counter()
         try:
             args = json.loads(tc["function"]["arguments"] or "{}")
@@ -1453,13 +1553,48 @@ def act(state):
                             ),
                         }
                     else:
-                        try:
-                            res = impl(**args)
-                        except TypeError as exc:
-                            res = {"error": f"参数不匹配：{exc}"}
-                        except Exception as exc:
-                            res = {"error": f"{type(exc).__name__}: {exc}"}
+                        # 同参重查：这一轮或前面几轮已经用完全相同的参数查过，
+                        # 结果必然一致。再查一遍等于白花一次调用、白占一段上下文，
+                        # 还会在 evidence 里留一份重复数据被后面每一轮重发。
+                        # 写类工具不做同参复用：注释见 _same_call_evidence。
+                        prev_ev = (None if name in WRITE_TOOLS
+                                   else _same_call_evidence(state, evidence, name, args))
+                        if prev_ev is not None:
+                            reused_ev = prev_ev
+                            res = {"reused": True, "same_as_ev_no": prev_ev.get("ev_no")}
+                        else:
+                            try:
+                                res = impl(**args)
+                            except TypeError as exc:
+                                res = {"error": f"参数不匹配：{exc}"}
+                            except Exception as exc:
+                                res = {"error": f"{type(exc).__name__}: {exc}"}
         ms = round((time.perf_counter() - t0) * 1000)
+
+        if reused_ev is not None:
+            # 复用路径：不追加 evidence（内容与已有那条完全一致，引用校验按
+            # 「工具名+指纹」找第一条就够了），但**不吞掉这一轮的 tool 消息**——
+            # 模型必须看到结果才能继续推理，吞了它会以为调用失败、然后重试，
+            # 反而多一轮。所以照原样把那条结果再送一次，只是不再单独记账。
+            slim = reused_ev.get("result") or ""
+            out_msgs.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "name": name,
+                "content": slim,
+            })
+            names.append(name)
+            trace.emit(
+                "tool",
+                name=name,
+                args=args,
+                ms=0,
+                ok=True,
+                error=None,
+                reused_from=reused_ev.get("ev_no"),
+                result_head=slim[:400],
+            )
+            continue
 
         ok = not (isinstance(res, dict) and "error" in res)
         res_json = json.dumps(res, ensure_ascii=False, default=str)
@@ -1547,26 +1682,66 @@ def _load_obj(e):
         return _MISS
 
 
-# 字段路径切段：字段名或 [下标]。groups[0].rate → ("groups", None) ("rate", None) (None, 0)
-_PATH_ATOM = re.compile(r"([A-Za-z_]\w*)|\[(\d+)\]")
+# 字段路径切段：按 "." 分段，段内允许尾部一个或多个 [下标]。
+# 这里**不能用** `[A-Za-z_]\w*` 限定键名——工具返回里会出现中文键和带括号的键
+# （check_doc_conflict 多参数时是 {"by_param": {"标定周期(天)": {...}}}）。
+# 旧正则遇到中文键会整段跳过，把 `by_param.标定周期(天).conflicts` 读成
+# `by_param.conflicts`，于是必然 MISS，报出来却是"模型引用写错"。
+# 在那个规则下，模型引用得越准，被判错越多。
+_PATH_NAME = re.compile(r"\[\d+\]")
+_PATH_IDX = re.compile(r"\[(\d+)\]")
+# 选择器 `groups{key=1号工位}`：按下标取值会把「抄对判错」变成常态。
+# 实测 fixture 里 groups 的顺序是 1号/3号/2号，1号工位恰好在 [0]——
+# 只是巧合，换 2 号工位就没法用下标写，而模型按工位名写 ref 是对的。
+# 故 ref 允许在段尾追加 {字段=值}，按记录内字段精确匹配定位。
+_PATH_SEL = re.compile(r"\{([^{}]+)\}")
 
 
 def _get_path(obj, path):
-    """按 a.b[0].c 取值。任一段不存在就返回 _MISS，不抛异常。"""
+    """按 a.b[0].c 或 groups{key=1号工位}.rate 取值。任一段不存在返回 _MISS，不抛异常。
+
+    选择器只在取到 list 之后生效，且要求记录内该字段**精确相等**——
+    不做子串匹配：`{key=1}` 会命中 `1号工位`，那等于把"抄对"放宽成"抄个大概也对"，
+    正好是这类判据最该避免的误放行。
+    """
     cur = obj
-    for m in _PATH_ATOM.finditer(path):
-        name, idx = m.group(1), m.group(2)
-        if idx is not None:
-            if not isinstance(cur, list):
-                return _MISS
-            i = int(idx)
-            if i >= len(cur):
-                return _MISS
-            cur = cur[i]
-        else:
+    for seg in path.split("."):
+        if not seg:
+            continue
+        sels = []
+        while True:
+            m = _PATH_SEL.search(seg)
+            if not m:
+                break
+            kv = m.group(1)
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                sels.append((k.strip(), v.strip()))
+            seg = seg[:m.start()] + seg[m.end():]
+        idxs = _PATH_IDX.findall(seg)
+        name = _PATH_NAME.sub("", seg)
+        if name:
             if not isinstance(cur, dict) or name not in cur:
                 return _MISS
             cur = cur[name]
+        for raw in idxs:
+            if not isinstance(cur, list):
+                return _MISS
+            i = int(raw)
+            if i >= len(cur):
+                return _MISS
+            cur = cur[i]
+        for k, v in sels:
+            if not isinstance(cur, list):
+                return _MISS
+            hit = None
+            for e in cur:
+                if isinstance(e, dict) and str(e.get(k)) == v:
+                    hit = e
+                    break
+            if hit is None:
+                return _MISS
+            cur = hit
     return cur
 
 
@@ -1723,6 +1898,28 @@ def _parse_claims(text):
     if s.startswith("```"):
         s = re.sub(r"^```[A-Za-z]*\s*", "", s)
         s = re.sub(r"```\s*$", "", s).strip()
+
+    # 2026-11-20：模型会先写一段推理（`<analysis>`），再给结论对象。
+    # 旧逻辑取「第一个 { 到最后一个 }」，在这种形状下切出来的是
+    # `<claims>[{...},{...}]</claims>` 里的**数组中间片段**——不是一个对象，
+    # 必然解析失败，于是内容完全合法的 claims 被记成 json_bad、qty=0。
+    #
+    # 改成从后往前找第一个「能独立解析成 dict、且含 claims 列表」的对象：
+    # 单条 claim 的 {...} 解析得动但没有 claims 键，会被跳过；分析段里的
+    # JSON 片段同理。这与 Anthropic structured outputs 的 grammar scope 同构——
+    # 语法只约束最终答案那一段，前面的自由推理不算违约。
+    dec = json.JSONDecoder()
+    for pos in range(len(s) - 1, -1, -1):
+        if s[pos] != "{":
+            continue
+        try:
+            obj, _end = dec.raw_decode(s, pos)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("claims"), list):
+            return obj
+
+    # 兜底仍是旧路径：处理裸引号这类格式病，修完打 _repaired 留痕
     i, j = s.find("{"), s.rfind("}")
     if i < 0 or j <= i:
         return None
@@ -1747,6 +1944,67 @@ def _parse_claims(text):
     return d
 
 
+def _as_num(x):
+    """把 claim 里的数值写法变成 float：45、"45、"45%、"45.0%"、"1,234.5"。
+
+    为什么必须单独做：模型写百分比时习惯把 `%` 一起塞进 value（`"46.77%"`），
+    原来直接 `float(v)` 抛 ValueError 就 return False，于是**每一个带百分号的
+    claim 都被判成"值对不上"**，而证据里的数明明是对的（0.4677）。
+    这条规则下模型写得越贴近人话，被判错越多。
+    """
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    if not isinstance(x, str):
+        return None
+    s = x.strip().replace(",", "").replace("，", "")
+    if s.endswith("%"):
+        s = s[:-1].strip()
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _num_eq(t, g, tol=0.02):
+    """claim 的数 t 和字段里的数 g 是否同一个值。
+
+    只认一个方向：**字段是小数（0.6316）、claim 写百分数（63.16%）**。
+    反方向（字段 63.16、claim 0.6316）不救——模型抄的总是百分数那一头，
+    放宽反方向只会把"把 0.63 写成 0.0063"这种真错放过去。
+    """
+    lim = max(tol, abs(t) * 0.01)
+    if abs(g - t) <= lim:
+        return True
+    if 0 < g <= 1 and abs(g * 100 - t) <= lim:
+        return True
+    return False
+
+
+def _as_num_claim(v):
+    """claim 的 value 取数。比 `_as_num` 多认一种写法：**数字后面带单位**。
+
+    模型会把单位一起写进 value（"90 天"、"0.3 mm"、"63.16%"），而 `_as_num`
+    只剥 `%` 和千分位，于是 "90 天" 取不到数、整条判成"值不对"。
+    抄对原文却判错，比放过一个错更伤——它会把正确的引用教学成不写单位。
+
+    但日期不能这么取：`_as_num("2026-11-08")` 本来就该失败，若按开头取数会得到
+    2026，于是每句带日期的断言都会"配上"。所以要求数字后面紧跟的不能是
+    `-` 或 `/`（日期分隔符），其余的后缀（天、mm、℃、条…）一律允许。
+    """
+    n = _as_num(v)
+    if n is not None:
+        return n
+    if isinstance(v, str):
+        m = re.match(r"\s*(-?\d+(?:\.\d+)?)\s*(.*)$", v, re.S)
+        if m:
+            rest = (m.group(2) or "").strip()
+            if not rest.startswith(("-", "/")):
+                return float(m.group(1))
+    return None
+
+
 def _value_match(v, got, unit, tol=0.02):
     """claim 里写的数值和字段实际值是否一致。
 
@@ -1758,27 +2016,26 @@ def _value_match(v, got, unit, tol=0.02):
     "已超额定寿命 620 小时，上升 10%-25%"}），没法做等值比较，
     只能比"这段文字里有没有这个数"。这不比数值相等弱——模型引的字段里
     确实有这个数，是返回结构本身没有把它拆成独立字段。
+
+    ⚠️ 字符串分支必须先试"整串就是一个数"。工具返回里 rate 常以字符串存
+    （"0.6316"），旧代码把这种值直接丢进"文本里找数字"，找到 0.6316 却
+    不做 ×100，于是 63.16% 必然对不上——同一个换算在两个分支里只做了一个，
+    这就是那批"候选值 0.6316 都不是 63.16%"的来源。
     """
-    try:
-        t = float(v)
-    except (TypeError, ValueError):
+    t = _as_num_claim(v)
+    if t is None:
         return False
     if isinstance(got, str):
-        nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", got)]
-        return any(abs(n - t) <= max(tol, abs(t) * 0.01) for n in nums)
-    try:
-        g = float(got)
-    except (TypeError, ValueError):
+        whole = _as_num(got)
+        if whole is not None:
+            return _num_eq(t, whole, tol)
+        nums = [n for n in (_as_num(x) for x in re.findall(r"\d+(?:\.\d+)?", got))
+                if n is not None]
+        return any(_num_eq(t, n, tol) for n in nums)
+    g = _as_num(got)
+    if g is None:
         return False
-    if unit == "%" and 0 < g <= 1:
-        g *= 100
-    elif 0 < g <= 1 < t:
-        # 单值 claim 会写 unit:"%"，多值 items 的元素没有这个位置，unit 是空的。
-        # 于是同一个数两种写法被判成两个数：证据 rate=0.0476，模型写 4.76。
-        # 只认 ×100 这一个方向：反方向会把「模型写 0.0476、证据是 4.76」
-        # 也救回来，而那种错模型不犯（它抄的是百分数）。
-        g *= 100
-    return abs(g - t) <= max(tol, abs(t) * 0.01)
+    return _num_eq(t, g, tol)
 
 
 # ---------------------------------------------------------------------------
@@ -1871,16 +2128,51 @@ def _verify_derived(c, text, v, unit):
     r = _safe_arith(expr)
     if r is None:
         return False, f"算式「={expr}」无法求值"
-    try:
-        t = float(v)
-    except (TypeError, ValueError):
+    t = _as_num(v)
+    if t is None:
         return False, ""
     # 百分比：结论写 74（unit=%），算式给 20/27 = 0.74 → 先换到同一口径再比
     if unit == "%" and 0 < r <= 1 and t > 1:
         r *= 100
     if abs(r - t) <= max(0.02, abs(t) * 0.01):
         return True, ""
+    # 「5 条中有 4 条（=4/5）」这种写法：value 是分子（计数），算式是比例，
+    # 两者不同口径。判据不能拿 0.8 去比 4 ——2026-11-19 全量里 H2 就是这样被判
+    # 「算式得 0.8，与写的 4 不符」，而模型那句本身没说错任何事。
+    # 算式里能原样找到这个数，就当它是"计数的比例表达"，放过。
+    if _num_in_expr(expr, t):
+        return True, ""
     return False, f"算式「={expr}」得 {r:g}，与写的 {t:g} 不符"
+
+
+def _num_in_expr(expr, v):
+    """算式里是否原样出现了这个数（作为独立操作数）。
+
+    只做"是不是算式的一部分"这种粗判，不追求等价证明：目的是区分
+    「value 本身就是算式的输入」与「value 和算式根本是两回事」。
+    """
+    for tok in re.findall(r"\d+(?:\.\d+)?", expr or ""):
+        try:
+            if abs(float(tok) - v) <= max(1e-9, abs(v) * 1e-9):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _has_numeric_assert(text):
+    """结论里是否存在"带单位的数值断言"。
+
+    用来把「设备台账里查不到 CX-106」这类拒答，和「编了个没出处的数字」
+    区分开：前者的数字只是编号/序号，没有量，本来就没有可核验的东西，
+    硬要它交 claims 只会逼它在查无的情况下编一个数出来。
+    """
+    return bool(_NUM_ASSERT_RE.search(text or ""))
+
+
+_NUM_ASSERT_RE = re.compile(
+    r"\d+(?:\.\d+)?\s*(?:%|％|小时|毫秒|秒|分钟|天|周|月|年|件|条|次|台|个|批|倍|"
+    r"mm|cm|μm|℃|dB|Hz|rpm)")
 
 
 def _render_claims(doc):
@@ -2103,10 +2395,30 @@ def _match_item(item, arr, unit):
     key = str(item.get("key") or "").strip()
     field = str(item.get("field") or "").strip()
 
+    def _key_hit(e):
+        """这条记录是不是 item 说的那条。
+
+        模型常把章节号一起写进 key（"厂商手册 4.1"），而记录里只有 doc_type
+        "厂商手册"。原来只做整串子串匹配，于是对不上就报"这条记录不存在"——
+        读起来像编造，实际是它抄多了一个小节号。折中：整串先试，不行再按空白
+        切段、要求每一段都落在同一个字段里。既不放过真错配，也不因为多写一节判死。
+        """
+        if not key:
+            return True
+        if any(isinstance(v, str) and key in v for v in e.values()):
+            return True
+        parts = [p for p in key.split() if p]
+        if len(parts) > 1:
+            # 片段常落在不同字段：机构名在 doc_type、章节号在 section。
+            # 要求"每一段都能在这一条记录里找到"，但不必挤在同一个字段。
+            strs = [v for v in e.values() if isinstance(v, str)]
+            return all(any(p in v for v in strs) for p in parts)
+        return False
+
     for e in arr:
         if not isinstance(e, dict):
             continue
-        if key and not any(isinstance(v, str) and key in v for v in e.values()):
+        if not _key_hit(e):
             continue
         if field:
             g = e.get(field)
@@ -2116,6 +2428,13 @@ def _match_item(item, arr, unit):
         if any(isinstance(v, (int, float)) and not isinstance(v, bool)
                and _value_match(val, v, unit) for v in e.values()):
             return True
+        # 文本值（"通过"/"告警"）：items 不是只能配数字。
+        # 原来只比数值字段，模型写「六次标定结果均为通过」就 6/6 全判错——
+        # 它抄的是原文，只是那一位不是数。
+        if isinstance(val, str) and _as_num_claim(val) is None:
+            if any(isinstance(v, str) and _norm_quote(val) == _norm_quote(v)
+                   for v in e.values()):
+                return True
     return False
 
 
@@ -2576,10 +2895,17 @@ def verify(state):
     # 而没校验的结论被当成通过，才是真正危险的地方。
     # 唯一例外是步数用尽、压根没形成结论那条，它本来就没声明要溯源。
     stats["json_bad"] = 1
-    if not no_final:
+    if not no_final and _has_numeric_assert(final):
         msg = "结论未按 claims 契约输出，引用无法核验"
         misquoted.append(msg)
         cite_fail.append({"code": "json_bad", "note": msg})
+    elif not no_final:
+        # 纯文本、且没有任何带单位的数值断言（典型是"设备台账里查不到"这类
+        # 拒答/查无）：本来就没有可核验的量，claims 为空是合理的。
+        # 仍然记 json_bad（契约确实没守），但不进 misquoted —— 否则报告上
+        # 会把它写成"引用写错"，owner 落到 model，而模型这条做得没错。
+        # 2026-11-19 全量里 I3 就是这样被误判成 cite_wrong 的。
+        stats["json_bad_plain"] = 1
     trace.emit("verify", blocked=blocked, misquoted=misquoted,
                final_len=len(final), **stats)
     return {"final": out_final, "final_text": final, "blocked": blocked,
@@ -2675,6 +3001,10 @@ def lookup(state):
     """
     ids = (state.get("device_ids") or [])[:3]
     blocks, evidence, names, steps, claims = [], [], [], 0, []
+    # 工单号单独收一份。用户问「上次那个工单处理了吗」时，答案就在单号与状态里，
+    # 而 conclusion 原先是「按设备档案与最近 7 天的误判统计列出如下」——
+    # 一句元描述，既没提工单也没提单号，读的人（和判据）都拿不到答案。
+    wo_ids = []
     # "查过了，确实没有"的清单。lookup 里有两处会命中：设备编号不存在、
     # 这台设备没有历史工单。两者都不是错误，是**结论本身**——
     # "这台没建过单"和"我不知道有没有建过"必须能分开，前者是事实，后者是故障。
@@ -2731,6 +3061,7 @@ def lookup(state):
                 for o in wo["orders"]
             )
             blocks.append(f"### {d} 历史工单（{wo['count']} 张）\n\n{lines}")
+            wo_ids.extend(str(o["order_id"]) for o in wo["orders"])
             claims.append({"text": f"历史工单 {wo['count']} 张",
                            "value": wo["count"], "unit": "张",
                            "ref": "query_work_order#count"})
@@ -2756,7 +3087,12 @@ def lookup(state):
             "需要排查原因的话，说一句现象（哪类缺陷、从什么时候开始、哪个班次更重），我再往下查。"
         )
         doc = {
-            "conclusion": "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。",
+            "conclusion": (
+                # 单号进结论：这是用户问「工单处理了吗」时唯一能直接回答的部分，
+                # 留在表格里等于让读者自己去翻。状态另见下方表格（工单块）。
+                (f"历史工单 {'、'.join(wo_ids)}，状态见下表。" if wo_ids else "")
+                + "按设备档案与最近 7 天的误判统计列出如下，不做根因判断。"
+            ),
             "claims": claims,
             "advice": [],
         }

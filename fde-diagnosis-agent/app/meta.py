@@ -39,6 +39,16 @@ BEHAVIOR_FILES = (
     "eval/run_eval.py",
 )
 
+# 数据库初态指纹的输入。刻意与 BEHAVIOR_FILES 分开，不并进 code_hash：
+# 前者是"代码怎么想"，后者是"库里有什么"，混成一条轴就分不清某次回归是改代码
+# 还是改数据造成的。2026-11-20 补 work_orders 种子时暴露了这个缺口——
+# 改动落在 data/ 下，code_hash 纹丝不动，于是 0013 和 2359 的 meta 除时间外
+# 几乎一样，而数据库初态已经不同。判"两份报告能不能比"因此从三根轴变成四根。
+#
+# 只算**主文件**，不含 .bak_* 备份：备份随每次改种子新增一个，
+# 算进去会让 hash 因为"多留了一份副本"而变化，与数据内容无关。
+SEED_FILES = ("data/seed/002_data.sql",)
+
 
 @functools.lru_cache(maxsize=1)
 def git_commit(short: int = 7) -> str:
@@ -91,7 +101,33 @@ def code_hash() -> str:
     return h.hexdigest()[:12]
 
 
+@functools.lru_cache(maxsize=1)
+def seed_hash() -> str:
+    """数据库初态指纹（12 位）。
+
+    它回答一个 code_hash 答不了的问题：**这两份报告跑的是同一个库吗**。
+
+    code_hash 只覆盖代码。种子里加一条工单、改一个误判概率，模型的行为和
+    "通过"的定义都没变，但每条用例拿到的数据变了。以前这种改动在 meta 里
+    完全不可见——报告看着"同一版本"，数字却已经不可横比。
+
+    取不到文件时退化成文件名本身的 hash，与 code_hash 的处理一致：
+    宁可给出一个"肯定不等于别人"的值，也不要让两个不同初态撞成同一个指纹。
+    """
+    h = hashlib.sha256()
+    for rel in SEED_FILES:
+        try:
+            h.update((ROOT / rel).read_bytes())
+        except Exception:
+            h.update(rel.encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
 def stamp() -> dict:
-    """一次 run 要记的版本标识。"""
+    """一次 run 要记的版本标识。
+
+    三根轴：代码（commit + code_hash）、数据（seed_hash）、夹具（cases_hash
+    在 run_eval 里单独算，因为夹具在 eval/ 下、不随代码走）。
+    """
     commit = git_commit()
-    return {"commit": commit, "code_hash": code_hash()}
+    return {"commit": commit, "code_hash": code_hash(), "seed_hash": seed_hash()}

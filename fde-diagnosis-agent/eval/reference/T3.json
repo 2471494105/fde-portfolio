@@ -1,6 +1,6 @@
 {
   "id": "T3",
-  "saved_at": "2026-11-19 18:09:56",
+  "saved_at": "2026-11-20 00:38:45",
   "traj_fp": "8af133b79f66",
   "traj": {
     "id": "T3",
@@ -17,6 +17,7 @@
       "没有",
       "不能"
     ],
+    "unsourced_max": 0,
     "expect_ask": false,
     "steps_range": [
       0,
@@ -76,8 +77,8 @@
     "model_intent": "refuse"
   },
   "meta": {
-    "commit": "f1296de",
-    "code_hash": "15213764895e",
-    "cases_hash": "1c088b9a1209"
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
   }
 }

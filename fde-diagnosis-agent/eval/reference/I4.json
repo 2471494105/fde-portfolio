@@ -1,7 +1,7 @@
 {
   "id": "I4",
-  "saved_at": "2026-11-19 18:05:50",
-  "traj_fp": "82f5f78af5b5",
+  "saved_at": "2026-11-20 00:38:18",
+  "traj_fp": "8e2483bd75ae",
   "traj": {
     "id": "I4",
     "expect_intent": "clarify",
@@ -14,8 +14,7 @@
     "expect_group_by": [],
     "final_keywords": [
       "哪一台",
-      "设备编号",
-      "CX-"
+      "设备编号"
     ],
     "expect_ask": true,
     "steps_range": [
@@ -40,13 +39,13 @@
     "unknown": [],
     "evidence": [],
     "intent": "clarify",
-    "intent_conf": 0.88,
+    "intent_conf": 0.9,
     "route_by": "model",
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "f1296de",
-    "code_hash": "15213764895e",
-    "cases_hash": "1c088b9a1209"
+    "commit": "ff2b8e0",
+    "code_hash": "56ce58d18707",
+    "cases_hash": "4c9bd0d53ec4"
   }
 }

@@ -3630,7 +3630,18 @@ class DocConflictMultiParamTest(unittest.TestCase):
             res = manual.check_doc_conflict("阈值")
         self.assertTrue(res["has_conflict"])
         self.assertEqual(res["value_count"], 2)
-        self.assertNotIn("by_param", res, "单参数不该走多参数结构，老调用方会读不到字段")
+        # 2026-11-19：单参数现在也补一份 by_param（内容与扁平字段相同）。
+        # 旧断言"单参数不该有 by_param"写在结构分叉时期；分叉本身是缺陷——
+        # 模型没法预知这次该写 by_param 还是扁平路径，必有一种判 miss
+        # （实测 5 条用例就是这么被判"引用写错"的）。
+        # 现在守两条：① 全部扁平字段保留，老调用方照旧能读；
+        #            ② 多开的 by_param 与扁平字段内容一致，不是一个影子结构。
+        for k in ("param_name", "has_conflict", "value_count", "conflicts",
+                  "likely_authoritative", "note"):
+            self.assertIn(k, res, f"扁平字段 {k} 必须保留，老调用方照旧能读")
+        self.assertIn("by_param", res, "单参数也要有多参数同形的入口")
+        self.assertEqual(res["by_param"]["阈值"]["conflicts"], res["conflicts"],
+                         "by_param 里的内容必须与扁平字段一致")
 
     def test_multi_param_reports_each(self):
         cur = self._cur(
@@ -3721,6 +3732,146 @@ class CalibrationWindowTest(unittest.TestCase):
                 "CX-101", time_from="2026-11-01", time_to="2026-11-15")
         self.assertEqual(res["state"], "no_calibration_in_range")
         self.assertIn("window", res)
+
+
+class SameCallReuseTest(unittest.TestCase):
+    """同参重查：同一个工具、同一套参数，第二次不该再真调一次实现。
+
+    为什么要这条：实测 H1 十步里有一步是 `query_light_usage{device_id=CX-101}`
+    被原样又查了一遍。省的是双份代价——一次往返，以及一段重复 JSON 被后面每一轮重发。
+    但复用**不能吞掉 tool 消息**：吞了模型会以为调用失败，然后重试，反而多一轮。
+    """
+
+    def setUp(self):
+        self._orig = dict(nodes.TOOL_IMPLS)
+        self.calls = []
+
+        def fake_impl(**kw):
+            self.calls.append(kw)
+            return {"state": "found", "device_id": kw.get("device_id"),
+                    "seq": len(self.calls)}
+
+        nodes.TOOL_IMPLS["query_device_profile"] = fake_impl
+
+    def tearDown(self):
+        nodes.TOOL_IMPLS.clear()
+        nodes.TOOL_IMPLS.update(self._orig)
+
+    def _state(self, args_list):
+        calls = [{
+            "id": f"c{i}",
+            "function": {"name": "query_device_profile",
+                         "arguments": json.dumps(a)},
+        } for i, a in enumerate(args_list)]
+        return {
+            "messages": [{"role": "assistant", "tool_calls": calls}],
+            "device_ids": ["CX-101", "CX-103"],
+            "device_id": "CX-101",
+            "turn": 1,
+        }
+
+    def test_same_args_are_reused_instead_of_refetched(self):
+        out = nodes.act(self._state([{"device_id": "CX-101"}, {"device_id": "CX-101"}]))
+        self.assertEqual(len(self.calls), 1,
+                         "同参数的第二次调用不该真的执行工具")
+        self.assertEqual(len(out["evidence"]), 1,
+                         "复用不该在 evidence 里追加副本")
+        self.assertEqual(len(out["messages"]), 2,
+                         "两条 tool 消息都要回给模型，否则它会以为调用失败")
+
+    def test_different_args_still_refetch(self):
+        out = nodes.act(self._state([{"device_id": "CX-101"}, {"device_id": "CX-103"}]))
+        self.assertEqual(len(self.calls), 2, "参数不同就该各查各的")
+        self.assertEqual(len(out["evidence"]), 2)
+
+    def test_none_args_skip_reuse_judgement(self):
+        """无参调用不做复用判断：分不清"同一次查询"还是"另一个数据源"。"""
+        self.assertIsNone(nodes._same_call_evidence({}, [], "search_manual", {}))
+        self.assertIsNone(nodes._same_call_evidence({}, [], "search_manual", {"top_k": None}))
+
+
+class EvalJudgeContractTest(unittest.TestCase):
+    """judge() 的两处新判据：结论未判定 ≠ 通过；正则禁令只杀该杀的。
+
+    这两条都很容易被写成"看起来对"的版本：把 kw_rate is None 当 True（假绿灯），
+    或把 forbid_regex 退化成逐词禁（连正确答法一起杀掉）。
+    所以两边都要断言——只测"该失败"会漏掉误伤，只测"该通过"会漏掉漏放。
+    """
+
+    TRAJ = {
+        "id": "PROBE", "type": "normal",
+        "expect_tools": ["query_defect_log"],
+        "forbid_tools": [],
+        "expect_group_by": [],
+        "final_keywords": ["58.82%"],
+        "final_required": [],
+        "forbid_words": [],
+        "forbid_regex": [],
+        "steps_range": (1, 12),
+        "expect_ask": None,
+        "expect_unknown": [],
+        "expect_intent": "diagnose",
+        "turns": None,
+    }
+    STATE = {
+        "tool_names": ["query_defect_log"],
+        "final": "x",
+        "final_text": "1号工位误判率 58.82%，明显高于其他工位",
+        "steps": 3,
+        "blocked": [], "misquoted": [],
+        "cite_stats": {},
+        "stop_reason": "enough",
+        "check_retry": 0,
+        "intent": "diagnose",
+        "unknown": [],
+        "evidence": [],
+    }
+
+    def _run(self, traj_patch=None, state_patch=None):
+        traj = dict(self.TRAJ, **(traj_patch or {}))
+        state = dict(self.STATE, **(state_patch or {}))
+        return run_eval.judge(traj, state)
+
+    def test_keyword_hit_is_judged_and_passes(self):
+        r = self._run()
+        self.assertTrue(r["semantic_ok"])
+        self.assertTrue(r["conclusion_judged"])
+
+    def test_no_conclusion_criteria_is_unjudged_not_pass(self):
+        """没设结论判据 ≠ 答对。这条是 I5/W3 假满分的根。
+
+        原来 conclusion_ok 把 kw_rate is None 直接当 True，于是判据一手无所有的
+        用例在报表上和"关键词全中"长得一样。现在它必须落进"未判定"，
+        由汇总层从正确率分母里剔掉：既不算过，也不算败。
+        """
+        r = self._run(traj_patch={"final_keywords": [], "expect_unknown": []})
+        self.assertFalse(r["conclusion_judged"])
+        self.assertIsNone(r["kw_rate"])
+
+    def test_forbid_regex_blocks_single_value_answer(self):
+        r = self._run(
+            traj_patch={"forbid_regex": [r"(确认|确定)(为|是)\s*(80|65)"]},
+            state_patch={"final_text": "两份文档有差异，已确认为 80，可直接采用"},
+        )
+        self.assertFalse(r["semantic_ok"])
+        self.assertIn("forbid_regex", r["hard_fail"])
+        severities = {f["code"]: f.get("severity") for f in r["failure"]}
+        self.assertEqual(severities.get("forbid_regex"), "hard",
+                         "红线失败必须标 hard，否则报告里和『关键词差一个』混成一堆")
+
+    def test_forbid_regex_does_not_kill_correct_answer(self):
+        r = self._run(
+            traj_patch={"forbid_regex": [r"(确认|确定)(为|是)\s*(80|65)"]},
+            state_patch={"final_text": "手册写 80、SOP 写 65，需要工艺负责人确认后再执行；"
+                                        "1号工位误判率 58.82%"},
+        )
+        self.assertTrue(r["semantic_ok"], "正确答法含「确认」但不给单值，不该被误伤")
+
+    def test_broken_regex_is_case_fault_not_model_fault(self):
+        r = self._run(traj_patch={"forbid_regex": ["(未闭合"]})
+        self.assertTrue(r["semantic_ok"], "用例写坏的正则不该扣模型的份")
+        owners = {f["code"]: f["owner"] for f in r["failure"]}
+        self.assertEqual(owners.get("forbid_regex_bad"), "case")
 
 
 if __name__ == "__main__":

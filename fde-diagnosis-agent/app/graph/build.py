@@ -43,6 +43,19 @@ from app.graph.persistence import get_saver, new_thread_id
 from app.graph.state import State
 
 
+# 路由函数的返回值和这里的 key 必须一致：LangGraph 运行时按 key 查表，
+# 差一个就是 KeyError，而且只有跑到那条路径才炸（编译期不报）。
+# 这两样东西分散写在 add_conditional_edges 的实参里，最容易脱节——
+# route_after_plan 早就返回 "plan" 了，这里却一直没给，一崩就是整条用例。
+# 提成常量后由单测钉住（tests/test_guardrails.py 的 GraphRouteTest）。
+ROUTE_UNDERSTAND = {
+    "plan": "plan", "lookup": "lookup", "knowledge": "knowledge",
+    "refuse": "refuse", "ask_user": "ask_user",
+}
+ROUTE_PLAN = {"act": "act", "check": "check", "finalize": "finalize", "plan": "plan"}
+ROUTE_CHECK = {"plan": "plan", "verify": "verify"}
+
+
 def build_graph(use_checkpoint: bool = True):
     g = StateGraph(State)
     g.add_node("intake", intake)
@@ -61,12 +74,16 @@ def build_graph(use_checkpoint: bool = True):
     g.add_edge("intake", "understand")
     g.add_conditional_edges(
         "understand", route_after_understand,
-        {"plan": "plan", "lookup": "lookup", "knowledge": "knowledge",
-         "refuse": "refuse", "ask_user": "ask_user"},
+        ROUTE_UNDERSTAND,
     )
+    # 出口里必须有 "plan"：route_after_plan 在「正文写了要调工具、tool_calls 却为空」
+    # 时会退回来重出一次结论。之前这里只给了 act/check/finalize，那条退路在
+    # LangGraph 里直接变成 KeyError: 'plan'——意图写了、代码没接，一崩就是整条用例。
+    # 不会死循环：退回来的那次 _plan_notes 会把 plan_retry 置 1 并追加提醒，
+    # 下次 route_after_plan 见 retry!=0 就不再退。
     g.add_conditional_edges(
         "plan", route_after_plan,
-        {"act": "act", "check": "check", "finalize": "finalize"},
+        ROUTE_PLAN,
     )
     # check 是 verify 前面的自查闸口，不是新的终局：
     # 回环一次 → 回 plan 重出结论；不通过但已用掉机会 → 照样交给 verify 判失败。
@@ -74,7 +91,7 @@ def build_graph(use_checkpoint: bool = True):
     # 在报告里能分开看（result_event 的 check_rounds）。
     g.add_conditional_edges(
         "check", route_after_check,
-        {"plan": "plan", "verify": "verify"},
+        ROUTE_CHECK,
     )
     g.add_edge("act", "plan")
     g.add_edge("lookup", "verify")

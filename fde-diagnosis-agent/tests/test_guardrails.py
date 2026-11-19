@@ -3134,5 +3134,61 @@ class SessionSummaryCapTest(unittest.TestCase):
         self.assertIs(meta[0], graph_state._tail_lines)
 
 
+class GraphRouteDeclaredTest(unittest.TestCase):
+    """路由函数的返回值必须都在 build 的映射表里。
+
+    LangGraph 运行时按 key 查表：差一个就是 KeyError，而且只有真跑到那条路径
+    才炸——编译期不报，`GraphCompilesTest` 也报不出来（图能建起来）。
+    2026-11-19 的 demo 稳定性验证就栽在这儿：`route_after_plan` 早就返回
+    "plan"，映射表却只有 act/check/finalize，于是模型一在正文写"接下来调用
+    query_calibration"，整条用例直接 `run_error: KeyError: 'plan'`——
+    5 条 × 3 轮里崩了 1 条。
+
+    「意图写了、代码没接」这类洞，只测函数本身的断言抓不到：没有一条断言
+    跨过"函数返回值"和"图的出口表"这条缝。本类就是那条断言。
+    """
+
+    @staticmethod
+    def _st(content="", stop=nodes.STOP_ENOUGH, retry=0, calls=False):
+        last = {"role": "assistant", "content": content}
+        if calls:
+            last["tool_calls"] = [{
+                "id": "c1", "type": "function",
+                "function": {"name": "query_calibration", "arguments": "{}"}}]
+        return {"messages": [last], "stop_reason": stop, "plan_retry": retry}
+
+    def test_pending_call_route_is_declared(self):
+        # 前提断言：这条判据得真的命中，否则下面的路由测试测的是空气。
+        content = "接下来，我们调用 query_calibration 检查1号工位的标定记录。"
+        self.assertTrue(nodes._pending_call(content))
+        route = nodes.route_after_plan(self._st(content=content))
+        self.assertEqual(route, "plan")
+        self.assertIn(route, build.ROUTE_PLAN,
+                      "route_after_plan 会返回 plan，映射表里没有它 → 运行时 KeyError")
+
+    def test_retry_second_time_does_not_loop(self):
+        # 退回一次之后不许再退：第二次进来 plan_retry 已是 1，必须走 check。
+        content = "接下来调用 query_calibration。"
+        self.assertEqual(
+            nodes.route_after_plan(self._st(content=content, retry=1)), "check")
+
+    def test_all_plan_branches_are_declared(self):
+        cases = [
+            self._st(stop=nodes.STOP_BUDGET_EXHAUSTED, calls=True),
+            self._st(stop=nodes.STOP_NEED_MORE, calls=True),
+            self._st(content="结论：1号工位光源衰减。"),
+        ]
+        for st in cases:
+            self.assertIn(nodes.route_after_plan(st), build.ROUTE_PLAN)
+
+    def test_understand_and_check_branches_are_declared(self):
+        for intent in ("diagnose", "action", "lookup", "knowledge", "refuse", "clarify"):
+            self.assertIn(nodes.route_after_understand({"intent": intent}),
+                          build.ROUTE_UNDERSTAND)
+        for action in ("retry", "pass", ""):
+            self.assertIn(nodes.route_after_check({"check_action": action}),
+                          build.ROUTE_CHECK)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

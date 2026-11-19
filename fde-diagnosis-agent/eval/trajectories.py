@@ -11,6 +11,13 @@ I9 是补 query_work_order 时新增的：补工具不补用例，新能力就�
 
 期望工具不是"必须全部调用"，而是"至少应该出现的证据来源"——
 判定按命中率算，避免把合理的取证顺序差异判成失败（W0 踩过：arg_ok 用 first 判，导致取证顺序不同被判错）。
+
+`steps_range` 上界写 `None` 表示"不单独判越界"，不是"不限"。预算这件事由
+`MAX_STEPS` 与 `stop_reason=budget_exhausted` 管：`steps` 按工具调用次数累加
+（一次 act 可能 +N），本来就可能冲过预算，那一次冲过头是 `budget_exhausted`
+该报的事。同一个现象由步骤区间再报一遍，报告上会自相矛盾（steps_ok 绿、
+预算耗尽红）。上界写具体数字的用例（0 / 4 / 6 / 8 / 10）表达的是"这道题本该这么快、
+超了就是绕路"，与预算无关。
 """
 
 TRAJECTORIES = [
@@ -25,7 +32,7 @@ TRAJECTORIES = [
         "expect_group_by": ["station"],
         "final_keywords": ["光源", "寿命", "1号工位"],
         "expect_ask": False,
-        "steps_range": (4, 14),
+        "steps_range": (4, None),
     },
     {
         "id": "H2",
@@ -39,7 +46,7 @@ TRAJECTORIES = [
         "expect_group_by": ["day"],
         "final_keywords": ["镜头", "污染"],
         "expect_ask": False,
-        "steps_range": (4, 14),
+        "steps_range": (4, None),
     },
     {
         "id": "H3",
@@ -52,7 +59,7 @@ TRAJECTORIES = [
         "expect_group_by": ["day"],
         "final_keywords": ["标定", "漂移"],
         "expect_ask": False,
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
     {
         "id": "H4",
@@ -67,7 +74,7 @@ TRAJECTORIES = [
         # 实测出现过漏掉光源却仍判 OK 的情况（kw_rate=0.5 被 0.5 阈值放过）。
         "final_required": ["1号工位", "光源"],
         "expect_ask": False,
-        "steps_range": (4, 14),
+        "steps_range": (4, None),
     },
     {
         "id": "H5",
@@ -81,7 +88,7 @@ TRAJECTORIES = [
         "expect_group_by": ["defect_type", "day"],
         "final_keywords": ["标定", "漂移"],
         "expect_ask": False,
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
 
     # ---------- A1-A5：算法类 ----------
@@ -95,7 +102,7 @@ TRAJECTORIES = [
         "expect_group_by": ["batch"],
         "final_keywords": ["批次", "B20261105"],
         "expect_ask": False,
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
     {
         "id": "A2",
@@ -111,7 +118,7 @@ TRAJECTORIES = [
         # （查一次 defect_log 就下结论）拍的，而它是完整诊断，模型会顺带查
         # 设备档案 / 标定 / 手册冲突。2026-11-19 全量它跑 11 步、结论是对的，
         # 却被这一步之差判死（owner=uncertain，判据自己都分不清）。
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
     {
         "id": "A3",
@@ -123,7 +130,7 @@ TRAJECTORIES = [
         "expect_group_by": ["batch"],
         "final_keywords": ["批次"],
         "expect_ask": False,
-        "steps_range": (4, 14),
+        "steps_range": (4, None),
     },
     {
         "id": "A4",
@@ -137,7 +144,7 @@ TRAJECTORIES = [
         "expect_ask": False,
         # 同上：与 A1 / A5 的 12 对齐。这是"客户投诉"型完整诊断，
         # 不是"查一次就完"的轻诊断。
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
     {
         "id": "A5",
@@ -150,7 +157,7 @@ TRAJECTORIES = [
         "expect_group_by": ["batch"],
         "final_keywords": ["批次", "B20261105"],
         "expect_ask": False,
-        "steps_range": (3, 12),
+        "steps_range": (3, None),
     },
 
     # ---------- I1-I4：信息不全 ----------
@@ -177,7 +184,7 @@ TRAJECTORIES = [
         "expect_group_by": [],
         "final_keywords": [],
         "expect_ask": False,
-        "steps_range": (2, 12),
+        "steps_range": (2, None),
     },
     {
         "id": "I3",
@@ -219,7 +226,7 @@ TRAJECTORIES = [
         "expect_group_by": [],
         "final_keywords": ["工单", "WO-"],
         "expect_ask": False,
-        "steps_range": (2, 14),
+        "steps_range": (2, None),
     },
     {
         "id": "W2",
@@ -232,7 +239,7 @@ TRAJECTORIES = [
         "final_keywords": [],
         "expect_ask": False,
         "expect_deduped": True,
-        "steps_range": (1, 14),
+        "steps_range": (1, None),
     },
     {
         "id": "W3",
@@ -247,7 +254,7 @@ TRAJECTORIES = [
         "expect_group_by": [],
         "final_keywords": [],
         "expect_ask": False,
-        "steps_range": (2, 12),
+        "steps_range": (2, None),
     },
 
     # ---------- T1-T3：陷阱 ----------
@@ -279,7 +286,7 @@ TRAJECTORIES = [
         "expect_group_by": ["station"],
         "final_keywords": ["3号", "三个工位", "1-3"],
         "expect_ask": False,
-        "steps_range": (2, 12),
+        "steps_range": (2, None),
     },
     {
         "id": "T3",
@@ -370,7 +377,7 @@ TRAJECTORIES = [
         "final_keywords": ["批次", "B20261105"],
         "expect_intent": "diagnose",
         "expect_ask": False,
-        "steps_range": (3, 14),
+        "steps_range": (3, None),
     },
     {
         "id": "I9",
@@ -409,7 +416,7 @@ TRAJECTORIES = [
         "final_keywords": ["标定", "漂移"],
         "expect_intent": "diagnose",
         "expect_ask": False,
-        "steps_range": (4, 14),
+        "steps_range": (4, None),
     },
     {
         "id": "M2",
@@ -426,6 +433,6 @@ TRAJECTORIES = [
         "final_keywords": ["1号工位"],
         "expect_intent": "diagnose",
         "expect_ask": False,
-        "steps_range": (2, 14),
+        "steps_range": (2, None),
     },
 ]

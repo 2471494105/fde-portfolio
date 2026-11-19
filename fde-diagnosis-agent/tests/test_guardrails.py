@@ -3332,7 +3332,7 @@ class GraphRouteDeclaredTest(unittest.TestCase):
 
 
 class FixtureStepsRangeTest(unittest.TestCase):
-    """夹具的步数上界不能窄于同类。
+    """夹具的步数上界不能窄于同类，也不能兼职预算。
 
     2026-11-19：A2 跑 11 步、结论全对（"过杀集中划痕、跨工位跨批次分散、
     光源与标定正常、阈值口径有冲突"），却因为区间上界是 10 被判死，
@@ -3341,6 +3341,11 @@ class FixtureStepsRangeTest(unittest.TestCase):
 
     上界放到 12（= MAX_STEPS）的语义是：**跑满预算不算过**。真跑飞由
     `budget_exhausted` 单独统计，不该让步数上界兼任这个职责。
+
+    收尾（同日，DOC-34 第 2 项）：光放成 12 还是没脱钩——它仍然是人肉抄的常量，
+    A3 写 14 而预算只有 12，于是 `steps=14` 可以同时"判合格"且"报预算耗尽"，
+    同一个现象两个来源两个结论。现在等于/大于预算的上界统一写 `None`，
+    判据改成不判上界；真上界（0/4/6/8/10）保留，它问的是"这道题该不该这么快"。
     """
 
     def test_algorithm_diagnose_upper_bound(self):
@@ -3348,14 +3353,37 @@ class FixtureStepsRangeTest(unittest.TestCase):
         cases = {c["id"]: c for c in T.TRAJECTORIES}
         for cid in ("A2", "A4"):
             self.assertEqual(
-                cases[cid]["steps_range"], (3, 12),
-                f"{cid} 的上界应与同组 A1/A5 一致（12），别改回 10")
+                cases[cid]["steps_range"], (3, None),
+                f"{cid} 的上界应不设（None），别再抄成一个预算数字")
+
+    def test_no_upper_bound_is_a_budget_copy(self):
+        """上界不许写成大于等于预算的具体数字——那是把成本闸抄进判据。"""
+        from eval import trajectories as T
+        from app.graph.nodes import MAX_STEPS
+        for c in T.TRAJECTORIES:
+            hi = c["steps_range"][1]
+            self.assertTrue(
+                hi is None or hi < MAX_STEPS,
+                f"{c['id']} 的上界 {hi} 已触到预算 {MAX_STEPS}："
+                "写 None 才是「不判上界」，抄具体值会与 budget_exhausted 打架")
 
     def test_every_case_range_is_ordered(self):
         from eval import trajectories as T
         for c in T.TRAJECTORIES:
             lo, hi = c["steps_range"]
-            self.assertLessEqual(lo, hi, f"{c['id']} 的区间写反了")
+            if hi is not None:
+                self.assertLessEqual(lo, hi, f"{c['id']} 的区间写反了")
+
+    def test_open_bound_does_not_double_judge(self):
+        """同一条运行，区间判据与预算信号不许给出相反结论。"""
+        from eval.run_eval import _steps_ok
+        # 上界 None：冲过预算的 14 步也判合格（那是 budget_exhausted 的事）
+        self.assertTrue(_steps_ok(3, None, 14))
+        # 真上界 8：9 步判越界（绕路，与预算无关）
+        self.assertFalse(_steps_ok(0, 8, 9))
+        self.assertTrue(_steps_ok(0, 8, 8))
+        # 下界照守
+        self.assertFalse(_steps_ok(4, None, 3))
 
 
 class DocConflictMultiParamTest(unittest.TestCase):

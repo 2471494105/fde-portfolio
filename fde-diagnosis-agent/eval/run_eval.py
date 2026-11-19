@@ -119,6 +119,21 @@ def _result_dict(raw):
     return None
 
 
+def _steps_ok(lo, hi, steps):
+    """步数是否落在期望区间内。
+
+    hi=None 表示"不判上界"，不是"不限"：预算由 MAX_STEPS 与
+    stop_reason=budget_exhausted 管。steps 按工具调用次数累加（一次 act
+    可能 +N），本来就可能冲过预算；那一次冲过头是 budget_exhausted 该报的
+    事，步骤区间再报一遍会让报告自相矛盾（steps_ok 绿、预算耗尽红）。
+    上界写具体数字的用例问的是另一件事：这道题本该这么快，超了就是绕路。
+
+    抽成模块级函数是为了让判据与测试同源——测试复刻一遍表达式，
+    改的时候漏改一边，测出来的就不是线上跑的那条判据。
+    """
+    return lo <= steps and (hi is None or steps <= hi)
+
+
 def judge(traj, state):
     tools = state.get("tool_names", [])
     final = state.get("final", "") or ""
@@ -199,7 +214,7 @@ def judge(traj, state):
     conclusion_ok = (kw_rate is None) or (kw_rate >= 0.5) or unknown_ok
 
     lo, hi = traj["steps_range"]
-    steps_ok = lo <= steps <= hi
+    steps_ok = _steps_ok(lo, hi, steps)
 
     # evidence 里存的是文本不是 dict，原来那个 isinstance 判断让它永远不成立，
     # 于是"工具调用格式错"这个指标一直是 0——不是没发生，是没测。

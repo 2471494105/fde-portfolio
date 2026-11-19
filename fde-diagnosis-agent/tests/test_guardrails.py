@@ -3150,6 +3150,24 @@ class JudgeAttributionTest(unittest.TestCase):
         item = [f for f in r["failure"] if f["code"] == "no_clarify"][0]
         self.assertEqual(item["owner"], "env")
 
+    def test_terminal_claim_is_flagged(self):
+        # "故障已排除"不是语气问题。模型没有观测手段：它读过工具返回的历史记录，
+        # 但看不到设备此刻的状态，也看不到现场有没有人动手。
+        # 所以这句话是在**声称一件它伪造不出来的事实**，必须单独成码。
+        r = self._judge(intent="lookup", final_text="CX-101 故障已排除，可以恢复生产")
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "terminal_claim"][0]
+        self.assertEqual(item["owner"], "model")
+        self.assertEqual(item["basis"]["words"], ["故障已排除"])
+
+    def test_plain_fix_advice_is_not_a_terminal_claim(self):
+        # 反例同样重要：只禁完成态。"建议修复镜头后复测"是完全合法的处置建议，
+        # 把"修复"两个字一起禁掉，会把正常的 advice 判成越界。
+        r = self._judge(intent="lookup", final_text="无法确认，建议修复镜头后复测")
+        self.assertNotIn("terminal_claim", [f["code"] for f in r["failure"]])
+        # 不断言 semantic_ok：这条用例的关键词是 3 选 0.5，只命中「无法」1 个，
+        # 本来就会 conclusion_off。这条测试只负责证明"不误伤合法建议"。
+
     def test_asked_instead_of_answering_is_named(self):
         # 追问本身没错，但这条用例要求直接给结论 → 失败原因必须是"追问了"
         r = self._judge(intent="clarify", tool_names=[],

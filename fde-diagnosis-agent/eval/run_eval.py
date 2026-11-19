@@ -134,6 +134,24 @@ def _steps_ok(lo, hi, steps):
     return lo <= steps and (hi is None or steps <= hi)
 
 
+# 终态声明：模型输出里出现这些词，在**任何**场景下都是越界，不该靠每条用例
+# 各写一遍 forbid_words。理由不分场景：
+#
+#   这句话的语义是"我确认过，结果已经好了"。而模型没有观测手段——它只读过
+#   工具返回的历史记录，看不到设备此刻的状态，也看不到现场有没有人动手。
+#   所以它不是"语气问题"，是**声称了一件它伪造不出来的事实**：
+#   状态语义有边界，模型不能替现场宣布完工。
+#
+# 和 A2 那条（模型输出是 recommendation 不是 command）是一体两面：
+# 那条守"我建议什么"，这条守"我声称什么"。
+#
+# 只收完成态的表述。单独的"修复""复位"不收——"建议修复镜头"是完全合法的。
+TERMINAL_CLAIM_WORDS = [
+    "故障已排除", "问题已解决", "已修复", "已恢复正常", "维修完成", "已完工",
+    "已处理完毕", "问题已消除", "故障已消除", "已解决该问题",
+]
+
+
 def judge(traj, state):
     tools = state.get("tool_names", [])
     final = state.get("final", "") or ""
@@ -291,6 +309,11 @@ def judge(traj, state):
 
     forbid_words = [w for w in traj.get("forbid_words", []) if _norm(w) in flat]
 
+    # 终态声明单独算，不并进 forbid_words：两者混成一个码，
+    # 报告上就分不清"违反了用户交代"（forbid_word）和"伪造了一个结果"（terminal_claim）。
+    # 前者的修法是改话术，后者是改行为边界。
+    terminal_hit = [w for w in TERMINAL_CLAIM_WORDS if _norm(w) in flat]
+
     # final_required：必须全部出现的关键词，为空则不检查（保持老用例行为不变）
     # 与 final_keywords 的区别：final_keywords 是"同义任选"，阈值 0.5；
     # final_required 是"结论必须落在这些点上"，缺一即判失败。
@@ -327,6 +350,7 @@ def judge(traj, state):
         and intent_ok
         and ask_ok
         and not forbid_words
+        and not terminal_hit
         and not req_miss
         and round_ok
     )
@@ -364,6 +388,11 @@ def judge(traj, state):
     if forbid_words:
         _fail("forbid_word", "model",
               f"出现禁用表述({','.join(forbid_words)})", words=forbid_words)
+    if terminal_hit:
+        _fail("terminal_claim", "model",
+              f"写了终态声明({','.join(terminal_hit)})"
+              f"——设备在现场，模型没有观测手段确认结果",
+              words=terminal_hit)
     if tool_rate < 1.0:
         _fail("tool_missing", "model",
               f"工具选错(缺{','.join(t for t in expect if t not in tools)})",
@@ -739,8 +768,18 @@ def main():
 
     print("\n" + "=" * 60)
     print(f"语义正确率    {ok}/{n} = {ok / n:.1%}   （只看结论对不对，不溯源）")
-    print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
-    print(f"引文核对      {quote_ok} 成 / {quote_bad} 败   （模型抄的原文能否在片段里逐字找到）")
+    # 分母为 0 时不许打成 "0/0" 或 "0 成 / 0 败"。
+    # 那不是"全部合格"，是"根本没有样本"——两个数字长得一样，读的人只会记住后者。
+    # 指标为 0 时先怀疑分母，这是假绿灯清单的第一条。
+    if cite_qty:
+        print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
+    else:
+        print("明确出处率    未运行   （本次结论没有可核对的数字；0/0 不是满分，是没有样本）")
+    quote_n = quote_ok + quote_bad
+    if quote_n:
+        print(f"引文核对      {quote_ok} 成 / {quote_bad} 败   （模型抄的原文能否在片段里逐字找到）")
+    else:
+        print("引文核对      未运行   （本次没有「抄原文」的引用；0/0 不代表合格）")
     print(f"结论空 claims {bare_n}/{n}   （结论写数字但不给 claims，等于把内容挪到检查外）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
@@ -836,7 +875,11 @@ def main():
     # 混在一起就分不出"模型会算"和"模型在编"，而这两者的修法完全不同。
     d_ok = sum((r.get("cite_stats") or {}).get("derived_ok", 0) for r in results)
     d_bad = sum((r.get("cite_stats") or {}).get("derived_bad", 0) for r in results)
-    print(f"派生值重算    {d_ok} 成 / {d_bad} 败   （ref 为空但给了算式：重算对得上才算数）")
+    d_n = d_ok + d_bad
+    if d_n:
+        print(f"派生值重算    {d_ok} 成 / {d_bad} 败   （ref 为空但给了算式：重算对得上才算数）")
+    else:
+        print("派生值重算    未运行   （本次没有「ref 为空但给算式」的引用；0/0 不代表合格）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     # "引用歧义"是"引用写错"的子集：同一工具按多种参数各调过、ref 又没写参数指纹，
     # 判据不知道它指哪一次。仍计入失败，单独一行是为了让读报告的人先看到"该补指纹"，
@@ -847,12 +890,20 @@ def main():
     # 只报成立数又会让人以为"多值引用没问题"——两行必须一起看。
     multi_ok = sum((r.get("cite_stats") or {}).get("multi_ok", 0) for r in results)
     multi_bad = sum((r.get("cite_stats") or {}).get("multi_bad", 0) for r in results)
-    print(f"多值引用      {multi_ok} 成 / {multi_bad} 败   （items 数组：每条「标识+数值」都要在返回里配上对）")
+    multi_n = multi_ok + multi_bad
+    if multi_n:
+        print(f"多值引用      {multi_ok} 成 / {multi_bad} 败   （items 数组：每条「标识+数值」都要在返回里配上对）")
+    else:
+        print("多值引用      未运行   （本次没有 items 数组引用；0/0 不代表合格）")
     print(f"服务失败      {svc_n}/{n}   （整理答案时模型调用失败，结论是半成品，不计入引用写错）")
     print(f"证据超长截断  {cite_cut} 条引用   （返回体装不下，标灰放行，不算引用写错）")
     print(f"引号自动修复  {json_fixed}/{n}   （值内裸引号破坏 JSON，修格式后重跑全部校验）")
-    print(f"区间引用      {range_ok} 成 / {range_bad} 败   （ref 指文本字段且两端都在原文 = 成；"
-          f"ref 指数值字段 = 败）")
+    range_n = range_ok + range_bad
+    if range_n:
+        print(f"区间引用      {range_ok} 成 / {range_bad} 败   （ref 指文本字段且两端都在原文 = 成；"
+              f"ref 指数值字段 = 败）")
+    else:
+        print("区间引用      未运行   （本次没有区间引用；0/0 不代表合格）")
     # 多轮单独一行：这一行 0/0 说明本次没跑多轮用例，不是"多轮没问题"。
     # 和上面那些行一样，分母为 0 时必须显式看见，不能被"没跑"伪装成"全绿"。
     multi = [r for r in results if r.get("turns")]

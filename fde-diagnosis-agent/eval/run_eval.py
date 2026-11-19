@@ -489,6 +489,14 @@ def main():
             workers = max(1, int(arg.split("=", 1)[1]))
 
     targets = [t for t in TRAJECTORIES if not only or t["id"] in only]
+    # --only 写了不存在的编号时，过滤结果是空集，原来只打一行"待评测 0 条"就跑完了：
+    # 不报错、不写报告。写错一个字母和一个拼错的用例名，在这套输出里长得一模一样，
+    # 而人的记忆是"我跑过它了"。宁可炸，也别让人以为跑过了。
+    if only and not targets:
+        known = sorted(t["id"] for t in TRAJECTORIES)
+        print(f"!! --only={','.join(sorted(only))} 没有匹配任何用例")
+        print(f"   现有 {len(known)} 条：{', '.join(known)}")
+        return 2
     print(f"待评测 {len(targets)} 条，并发 {workers}\n")
 
     # 判据自检必须在这里拦，不能放到跑完之后——判据坏了，后面每个数字都是废的。
@@ -883,4 +891,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 必须把返回值传出去：--only 写错编号要能用退出码判断（脚本里 `if ($LASTEXITCODE)` 就靠它）。
+    # 原来裸调 main()，退出码永远是 0，"没匹配到用例"在 CI 里和"跑完了"长得一样。
+    raise SystemExit(main())

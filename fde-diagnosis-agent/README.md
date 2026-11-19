@@ -34,6 +34,12 @@
 
 **评测**（当时 24 条，含 4 条意图用例，deepseek-chat，temperature=0，连跑 8 轮。现有 25 条，新增 I9；下表是 24 条时期的 8 轮结果，保留原值不做覆盖）
 
+> ⚠️ **下面这段是 24 条、旧判据口径时期的记录，不是当前基线。**
+> 2026-11-19 之后用例数变成 **26**（W1+W2 合并成一条两轮用例），判据口径也改了几处
+> （`kw_rate=None` 不再按 100% 算、标灰通过单列、`steps_range` 上界不许抄预算常量、
+> `expect_deduped` 改三态）。**当前代码（`code_hash=1b0f5bccb9d7`）还没有全量报告**，
+> 也就是说现在没有任何可引用的通过率。引用任何数字之前先看 `eval/报告状态.md`。
+
 ```
 语义正确率   22/24 = 91.7%（8 轮里出现 4 次，区间 83.3%–91.7%，均值 90.0%）
 工具命中率   0.95      维度覆盖率 0.99
@@ -43,7 +49,7 @@
 
 91.7% 不是稳定值，是 8 轮里出现次数最多的那个值。之前报的 95% 是单次快照，同样不能当基线。
 
-8 轮里**稳定失败只有 H5 一条**：用户问"CX-104 尺寸类误判多，是不是阈值太严"，模型只在算法侧取证，没查 `query_calibration`、也没按 day 聚合，缺"什么时候开始变"这一维。这条故意保留为失败——它是「用户带假设来、系统顺着说」的活样本。其余失败项（T1/W1/W3/I2）每轮各出现 1–2 次，属波动。
+当时**稳定失败只有 H5 一条**：用户问"CX-104 尺寸类误判多，是不是阈值太严"，模型只在算法侧取证，没查 `query_calibration`、也没按 day 聚合，缺"什么时候开始变"这一维。**这条已在 2026-11-19 修掉**——修法是在 `query_defect_log` 的工具描述里加两条约束（时间线是必查维度、用户带来的猜测不构成证据），不是放宽判据。修后 H5 的结论原话是"方向不是判定阈值过严，而是标定漂移未被处置"，过程中真调了 `group_by=day,defect_type,station` 和 `query_calibration`（拿到 `drift_mm=0.42` 告警）。经过见 `docs/20261115_05_M4评测.md` 第八节。其余失败项（T1/W1/W3/I2）每轮各出现 1–2 次，属波动。
 
 **意图判错 0/192** 是这轮改造最直接的收益：五类意图（诊断/查数据/查知识/执行动作/追问）一次没判错，而改造前系统里根本没有这个判断——只要句子里有设备号就当诊断。
 
@@ -157,9 +163,9 @@ $env:PGPASSWORD='postgres'
 ```powershell
 & venv\Scripts\python.exe scripts\run_case.py "CX-101 误判率有点高，你看看怎么回事"
 & venv\Scripts\python.exe scripts\replay.py              # 回放最近一次运行
-& venv\Scripts\python.exe eval\run_eval.py               # 全量 25 条
+& venv\Scripts\python.exe eval\run_eval.py               # 全量 26 条
 & venv\Scripts\python.exe eval\run_eval.py --workers=3   # 并发（建单类自动串行）
-& venv\Scripts\python.exe eval\run_eval.py --only=W1,W2  # 只跑指定 case
+& venv\Scripts\python.exe eval\run_eval.py --only=H5,H3  # 只跑指定 case
 ```
 
 轨迹按 run 落盘在 `runs\<时间戳>_<id>.jsonl`，一行一个事件，

@@ -20,6 +20,13 @@
         "[check_doc_conflict{param_name=判定置信度阈值}] {\"param_name\": \"判定置信度阈值\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"6.1 判定置信度\", \"value\": 0.85}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"5.1 判定置信度\", \"value\": 0.75}, {\"source\": \"质量目标与验收标准 QO-2026\", \"doc_type\": \"质量目标\", \"section\": \"1.3 判定参数统一口径\", \"value\": 0.85}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突，两类文档取值不同：厂商手册=0.85、厂内SOP=0.75、质量目标=0.85。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}"
       ],
       "expect": {
+        "qty": 16,
+        "cited_ok": 16,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 1,
         "multi_bad": 0,
         "path_bad": 0,
@@ -44,6 +51,13 @@
         "[query_calibration{device_id=CX-102,limit=6}] {\"device_id\": \"CX-102\", \"records\": [{\"ts\": \"2026-11-01 14:00:00\", \"drift_px\": 0.338, \"drift_mm\": 0.057, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-10-15 13:00:00\", \"drift_px\": 0.612, \"drift_mm\": 0.089, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-25 13:00:00\", \"drift_px\": 0.961, \"drift_mm\": 0.158, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-10 14:00:00\", \"drift_px\": 0.666, \"drift_mm\": 0.105, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 15:00:00\", \"drift_px\": 0.259, \"drift_mm\": 0.04, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-08-05 13:00:00\", \"drift_px\": 0.821, \"drift_mm\": 0.135, \"result\": \"通过\", \"operator\": \"王敏\"}], \"last_calibration_at\": \"2026-11-01 14:00:00\", \"days_since_last\": 13, \"drift_trend\": \"平稳\"}"
       ],
       "expect": {
+        "qty": 11,
+        "cited_ok": 11,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 3,
         "multi_bad": 0,
         "path_bad": 0,
@@ -71,6 +85,13 @@
         "[query_defect_log{device_id=CX-103,group_by=batch,time_from=2026-10-15}] {\"device_id\": \"CX-103\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 22:26:19\", \"group_by\": \"batch\", \"total\": 200, \"false_positive_count\": 64, \"false_positive_rate\": 0.32, \"groups\": [{\"key\": \"B20261101\", \"count\": 25, \"false_positive\": 9, \"rate\": 0.36}, {\"key\": \"B20261102\", \"count\": 15, \"false_positive\": 9, \"rate\": 0.6}, {\"key\": \"B20261105\", \"count\": 31, \"false_positive\": 8, \"rate\": 0.2581}, {\"key\": \"B20261103\", \"count\": 21, \"false_positive\": 8, \"rate\": 0.381}, {\"key\": \"B20261100\", \"count\": 19, \"false_positive\": 8, \"rate\": 0.4211}, {\"key\": \"B20261104\", \"count\": 18, \"false_positive\": 8, \"rate\": 0.4444}, {\"key\": \"B20261106\", \"count\": 16, \"false_positive\": 4, \"rate\": 0.25}, {\"key\": \"B20261108\", \"count\": 16, \"false_positive\": 4, \"rate\": 0.25}, \"...共 10 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-12 11:54:24\", \"station\": \"2号工位\", \"defect_type\": \"划痕\", \"confidence\": 0.933, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-08 22:12:29\", \"station\": \"3号工位\", \"defect_type\": \"划痕\", \"confidence\": 0.931, \"batch\": \"B20261108\"}, {\"ts\": \"2026-11-14 02:48:52\", \"station\": \"1号工位\", \"defect_type\": \"划痕\", \"confidence\": 0.928, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-10 14:03:23\", \"station\": \"1号工位\", \"defect_type\": \"划痕\", \"confidence\": 0.914, \"batch\": \"B20261100\"}, {\"ts\": \"2026-11-03 14:47:44\", \"station\": \"3号工位\", \"defect_type\": \"划痕\", \"confidence\": 0.911, \"batch\": \"B20261103\"}]}"
       ],
       "expect": {
+        "qty": 21,
+        "cited_ok": 20,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 5,
         "multi_bad": 0,
         "path_bad": 1,
@@ -100,6 +121,13 @@
         "[check_doc_conflict{param_name=标定周期(天)}] {\"param_name\": \"标定周期(天)\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"value\": 90}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"value\": 30}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突，两类文档取值不同：厂商手册=90、厂内SOP=30。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}"
       ],
       "expect": {
+        "qty": 19,
+        "cited_ok": 17,
+        "derived_ok": 0,
+        "unsourced": 1,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 0,
         "multi_bad": 0,
         "path_bad": 1,
@@ -131,6 +159,13 @@
         "[check_doc_conflict{param_name=光源亮度设定}] {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"value\": 80}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"value\": 65}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-09-15 夜班误判处置\", \"value\": 80}, {\"source\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-10-20 光源二次调整\", \"value\": 65}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突，两类文档取值不同：厂商手册=80、厂内SOP=65、调试记录=80、调试记录=65。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}"
       ],
       "expect": {
+        "qty": 28,
+        "cited_ok": 28,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 1,
         "multi_bad": 0,
         "path_bad": 0,
@@ -154,6 +189,13 @@
         "[query_defect_log{device_id=CX-101,group_by=day,time_from=2026-10-01}] {\"device_id\": \"CX-101\", \"time_from\": \"2026-10-01 00:00:00\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-09 00:00:00\", \"count\": 21, \"false_positive\": 5, \"rate\": 0.2381}, {\"key\": \"2026-11-05 00:00:00\", \"count\": 20, \"false_positive\": 5, \"rate\": 0.25}, {\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 5, \"rate\": 0.2941}, {\"key\": \"2026-11-13 00:00:00\", \"count\": 17, \"false_positive\": 5, \"rate\": 0.2941}, {\"key\": \"2026-11-07 00:00:00\", \"count\": 9, \"false_positive\": 4, \"rate\": 0.4444}, {\"key\": \"2026-11-08 00:00:00\", \"count\": 21, \"false_positive\": 3, \"rate\": 0.1429}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 17, \"false_positive\": 3, \"rate\": 0.1765}, {\"key\": \"2026-11-11 00:00:00\", \"count\": 13, \"false_positive\": 3, \"rate\": 0.2308}, \"...共 14 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-07 20:19:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.93, \"batch\": \"B20261104\"}, {\"ts\": \"2026-11-05 19:16:53\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.928, \"batch\": \"B20261100\"}, {\"ts\": \"2026-11-02 01:34:28\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.922, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-10 07:02:02\", \"station\": \"1号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.914, \"batch\": \"B20261107\"}, {\"ts\": \"2026-11-02 14:22:41\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.91, \"batch\": \"B20261108\"}]}"
       ],
       "expect": {
+        "qty": 13,
+        "cited_ok": 13,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 1,
         "multi_bad": 0,
         "path_bad": 0,
@@ -178,6 +220,13 @@
         "[query_defect_log{device_id=CX-101,group_by=day,time_from=2026-10-15}] {\"device_id\": \"CX-101\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-09 00:00:00\", \"count\": 21, \"false_positive\": 5, \"rate\": 0.2381}, {\"key\": \"2026-11-05 00:00:00\", \"count\": 20, \"false_positive\": 5, \"rate\": 0.25}, {\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 5, \"rate\": 0.2941}, {\"key\": \"2026-11-13 00:00:00\", \"count\": 17, \"false_positive\": 5, \"rate\": 0.2941}, {\"key\": \"2026-11-07 00:00:00\", \"count\": 9, \"false_positive\": 4, \"rate\": 0.4444}, {\"key\": \"2026-11-08 00:00:00\", \"count\": 21, \"false_positive\": 3, \"rate\": 0.1429}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 17, \"false_positive\": 3, \"rate\": 0.1765}, {\"key\": \"2026-11-11 00:00:00\", \"count\": 13, \"false_positive\": 3, \"rate\": 0.2308}, \"...共 14 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-07 20:19:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.93, \"batch\": \"B20261104\"}, {\"ts\": \"2026-11-05 19:16:53\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.928, \"batch\": \"B20261100\"}, {\"ts\": \"2026-11-02 01:34:28\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.922, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-10 07:02:02\", \"station\": \"1号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.914, \"batch\": \"B20261107\"}, {\"ts\": \"2026-11-02 14:22:41\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.91, \"batch\": \"B20261108\"}]}"
       ],
       "expect": {
+        "qty": 13,
+        "cited_ok": 12,
+        "derived_ok": 1,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 1,
         "multi_bad": 0,
         "path_bad": 0,
@@ -205,6 +254,13 @@
         "[query_light_usage{device_id=CX-103}] {\"device_id\": \"CX-103\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 6415, \"rated_life_hours\": 8000, \"over_life_hours\": 0, \"remaining_hours\": 1585, \"brightness_set\": 78, \"last_replaced_at\": \"2024-11-08 00:00:00\", \"brightness_history\": [{\"ts\": \"2024-11-08 09:00:00\", \"value\": 78}], \"degradation_estimate\": \"寿命正常\"}"
       ],
       "expect": {
+        "qty": 22,
+        "cited_ok": 22,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 0,
         "multi_bad": 0,
         "path_bad": 0,
@@ -216,14 +272,21 @@
     {
       "id": "I5",
       "source": "32704d4 / 2026-11-17 18:57:54",
-      "covers": "lookup 的引文通道：10 条 claim 走 quote，不算 path_ok",
-      "why": "claims 豁免撤除后，lookup 也会自产 claim；这条防止新通道被误判",
-      "fixed_by": "c8a146f / a7757f5",
+      "covers": "lookup 的引文通道：10 条 claim 走 quote；引文核对通过同时计入 cited_ok 和 qty，不再是「不计入任何分母」的旁路",
+      "why": "原来 evidence 缺 [search_manual{}] 前缀，10 条全落进 cite_oob（证据不可见→标灰），expect 又全是 0，于是这条夹具一直在空转、却报 PASS。补前缀后 qty=10/cited_ok=10/quote_ok=10，才真的在测引文通道。",
+      "fixed_by": "e609f4d+（本次体检）",
       "final": "{\"conclusion\": \"E-101 表示相机未连接或通讯中断，属于设备自身异常中的图像采集与通讯类第 1 号告警。\\n等级为 critical，需立即停机处理。常见原因是网线松脱、相机掉电。\\n处置方法：检查相机供电与网线连接，确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。\\n需要注意的是，该告警期间设备无法成像，所有判定结果均不可信。\", \"claims\": [{\"text\": \"E-101 的含义是相机未连接或通讯中断\", \"quote\": \"含义：相机未连接或通讯中断\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"E-101 的告警等级为 critical\", \"quote\": \"告警码 E-101，等级 critical\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"E-101 的常见原因是网线松脱、相机掉电\", \"quote\": \"常见原因：网线松脱、相机掉电\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"处置时要检查相机供电与网线连接，并确认交换机端口状态\", \"quote\": \"处置：检查相机供电与网线连接，确认交换机端口状态\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"恢复连接后要重新触发一次采集，确认图像正常再恢复生产\", \"quote\": \"恢复连接后重新触发一次采集，确认图像正常再恢复生产\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"该告警期间设备无法成像，所有判定结果均不可信\", \"quote\": \"该告警期间设备无法成像，所有判定结果均不可信\", \"ref\": \"search_manual#chunks[0].text\"}, {\"text\": \"告警码首字母 E 表示设备自身异常\", \"quote\": \"E 开头为设备自身异常\", \"ref\": \"search_manual#chunks[1].text\"}, {\"text\": \"三位数字的第一位 1 表示图像采集与通讯\", \"quote\": \"1 为图像采集与通讯\", \"ref\": \"search_manual#chunks[1].text\"}, {\"text\": \"E-101 属于图像采集类第 1 号告警\", \"quote\": \"因此 E-101 属于图像采集类第 1 号告警\", \"ref\": \"search_manual#chunks[1].text\"}, {\"text\": \"等级 critical 需立即停机处理\", \"quote\": \"严重等级分三级：critical 需立即停机处理\", \"ref\": \"search_manual#chunks[1].text\"}]}",
       "evidence": [
-        "{\"query\": \"E-101 这个告警是什么意思\", \"chunks\": [{\"text\": \"E-101 相机未连接或通讯中断\\n告警码 E-101，等级 critical。含义：相机未连接或通讯中断。常见原因：网线松脱、相机掉电。处置：检查相机供电与网线连接，确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。该告警期间设备无法成像，所有判定结果均不可信。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-101 相机未连接或通讯中断\", \"score\": 0.7789}, {\"text\": \"1.1 告警码编码规则\\n告警码采用「字母-三位数字」格式。首字母区分告警来源：E 开头为设备自身异常，W 开头为判定质量异常。三位数字的第一位区分子系统：1 为图像采集与通讯，2 为光源，3 为标定，4 为图像质量，5 为判定与质量统计。因此 E-101 属于图像采集类第 1 号告警，E-201 属于光源类第 1 号告警，W-502 属于判定质量类第 2 号告警。严重等级分三级：critical 需立即停机处理，warning 需当日处理，info 为提示性告警可并入日常保养处理。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"1.1 告警码编码规则\", \"score\": 0.6909}, {\"text\": \"E-102 触发信号超时\\n告警码 E-102，等级 warning。含义：触发信号超时。常见原因：PLC 触发回路异常、编码器信号丢失。处置：检查 PLC 触发输出与编码器线缆，核对触发延迟设定是否与产线节拍匹配；表现为偶发漏拍，即产品未被完整成像。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-102 触发信号超时\", \"score\": 0.6839}, {\"text\": \"2026-09-15 夜班误判处置\\n3 号线 CX-101 夜班误判率由 18% 升至 31%。为快速压制，将光源亮度由 85 下调至 80，误判率短期回落至 22%，一周后再次上升。\", \"source_doc\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-09-15 夜班误判处置\", \"score\": 0.6779}, {\"text\": \"E-301 标定数据无效或过期\\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-301 标定数据无效或过期\", \"score\": 0.6675}]}"
+        "[search_manual{}] {\"query\": \"E-101 这个告警是什么意思\", \"chunks\": [{\"text\": \"E-101 相机未连接或通讯中断\\n告警码 E-101，等级 critical。含义：相机未连接或通讯中断。常见原因：网线松脱、相机掉电。处置：检查相机供电与网线连接，确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。该告警期间设备无法成像，所有判定结果均不可信。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-101 相机未连接或通讯中断\", \"score\": 0.7789}, {\"text\": \"1.1 告警码编码规则\\n告警码采用「字母-三位数字」格式。首字母区分告警来源：E 开头为设备自身异常，W 开头为判定质量异常。三位数字的第一位区分子系统：1 为图像采集与通讯，2 为光源，3 为标定，4 为图像质量，5 为判定与质量统计。因此 E-101 属于图像采集类第 1 号告警，E-201 属于光源类第 1 号告警，W-502 属于判定质量类第 2 号告警。严重等级分三级：critical 需立即停机处理，warning 需当日处理，info 为提示性告警可并入日常保养处理。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"1.1 告警码编码规则\", \"score\": 0.6909}, {\"text\": \"E-102 触发信号超时\\n告警码 E-102，等级 warning。含义：触发信号超时。常见原因：PLC 触发回路异常、编码器信号丢失。处置：检查 PLC 触发输出与编码器线缆，核对触发延迟设定是否与产线节拍匹配；表现为偶发漏拍，即产品未被完整成像。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-102 触发信号超时\", \"score\": 0.6839}, {\"text\": \"2026-09-15 夜班误判处置\\n3 号线 CX-101 夜班误判率由 18% 升至 31%。为快速压制，将光源亮度由 85 下调至 80，误判率短期回落至 22%，一周后再次上升。\", \"source_doc\": \"现场调试记录 2026-09\", \"doc_type\": \"调试记录\", \"section\": \"2026-09-15 夜班误判处置\", \"score\": 0.6779}, {\"text\": \"E-301 标定数据无效或过期\\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-301 标定数据无效或过期\", \"score\": 0.6675}]}"
       ],
       "expect": {
+        "qty": 10,
+        "cited_ok": 10,
+        "derived_ok": 0,
+        "unsourced": 0,
+        "quote_ok": 10,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 0,
         "multi_bad": 0,
         "path_bad": 0,
@@ -255,6 +318,13 @@
         "[check_doc_conflict{param_name=标定周期(天)}] {\"param_name\": \"标定周期(天)\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"value\": 90}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"value\": 30}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突，两类文档取值不同：厂商手册=90、厂内SOP=30。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}"
       ],
       "expect": {
+        "qty": 21,
+        "cited_ok": 20,
+        "derived_ok": 1,
+        "unsourced": 0,
+        "quote_ok": 0,
+        "quote_bad": 0,
+        "cite_oob": 0,
         "multi_ok": 1,
         "multi_bad": 0,
         "path_bad": 0,

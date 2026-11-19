@@ -70,7 +70,14 @@ def check(case):
 
     exp = case["expect"]
     fails = []
-    for k in ("multi_ok", "multi_bad", "path_bad", "ref_ambiguous"):
+    # 比的键必须覆盖"分母与分子的构成"。
+    # 原来只比 multi_ok/path_bad/ref_ambiguous，于是发生过的两件事都抓不到：
+    #   1) 引文型 claim 不进 qty —— 一条引文用例 qty=0，看着"没样本"，实际有 10 条
+    #   2) evidence 前缀丢了 → 全部落进 cite_oob → 判据空转，而 expect 全是 0 时照样 PASS
+    # cite_oob 单独锁，就是为了让"证据还原失败"这件事变红，而不是安静通过。
+    for k in ("multi_ok", "multi_bad", "path_bad", "ref_ambiguous",
+              "qty", "cited_ok", "derived_ok", "unsourced",
+              "quote_ok", "quote_bad", "cite_oob"):
         if k in exp and stats[k] != exp[k]:
             fails.append(f"{k}={stats[k]}，期望 {exp[k]}")
     if "misquoted_count" in exp and len(misquoted) != exp["misquoted_count"]:

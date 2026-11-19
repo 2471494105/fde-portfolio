@@ -146,6 +146,22 @@ def _steps_ok(lo, hi, steps):
 # 那条守"我建议什么"，这条守"我声称什么"。
 #
 # 只收完成态的表述。单独的"修复""复位"不收——"建议修复镜头"是完全合法的。
+# 出处率的绝对口径。只看"回环后有没有变多"会让同一份输出被判两种结果：
+# 实测 H1 与 H5 未溯源都是 4 条、出处率同在 74%~78%，H1 因为在回环里
+# 从 2 条涨到 4 条被判失败，H5 从一开始就是 4 条却判通过。
+# "有没有发生过回环"和质量无关，不该决定裁决。
+#
+# 双条件，任一不过即失败：
+#   cite_rate < CITE_RATE_FLOOR        一半以上的数核不了，不叫通过
+#   unsourced_rate > UNSOURCED_RATE_MAX  未溯源占比过高
+# 第二个用比例不用绝对条数：条数会跟 qty 大小耦合——qty=22 里 4 条（18%）
+# 和 qty=10 里 4 条（40%）质量差一倍，用同一条线判会误伤前者。
+# 少量未溯源可以（模型自己算的比值本来就没有字段可指，_verify_derived
+# 已经给了算式出路），占两成就该算没在引用。
+# qty == 0 时不判：没有带数字的 claim 是没有样本，不是 0 分。
+CITE_RATE_FLOOR = 0.60
+UNSOURCED_RATE_MAX = 0.20
+
 TERMINAL_CLAIM_WORDS = [
     "故障已排除", "问题已解决", "已修复", "已恢复正常", "维修完成", "已完工",
     "已处理完毕", "问题已消除", "故障已消除", "已解决该问题",
@@ -337,6 +353,23 @@ def judge(traj, state):
                         f" miss={cs.get('path_miss') or 0}"
                         f" bad={cs.get('ref_bad') or 0}）")
 
+    # 出处率门槛。misquoted 那条趋势判据保留——它抓的是"回环把 2 条变 4 条"的真退化，
+    # 和这里的绝对口径不重叠：趋势管"越改越差"，门槛管"本来就差"。
+    cs = cite_stats or {}
+    _qty = int(cs.get("qty") or 0)
+    _cited_ok = int(cs.get("cited_ok") or 0)
+    _unsourced_n = int(cs.get("unsourced") or 0)
+    if _qty:
+        cite_rate = _cited_ok / _qty
+        unsourced_rate = _unsourced_n / _qty
+        cite_floor_ok = (cite_rate >= CITE_RATE_FLOOR) \
+            and (unsourced_rate <= UNSOURCED_RATE_MAX)
+    else:
+        # 没有带数字的 claim 不是 0 分，是没有样本——和五处"未运行"同一个原则
+        cite_rate = None
+        unsourced_rate = None
+        cite_floor_ok = True
+
     semantic_ok = (
         tool_rate >= 1.0
         and gb_rate >= 1.0
@@ -353,6 +386,7 @@ def judge(traj, state):
         and not terminal_hit
         and not req_miss
         and round_ok
+        and cite_floor_ok
     )
 
     # 归因：失败落在哪一类。
@@ -393,6 +427,19 @@ def judge(traj, state):
               f"写了终态声明({','.join(terminal_hit)})"
               f"——设备在现场，模型没有观测手段确认结果",
               words=terminal_hit)
+    if not cite_floor_ok:
+        why = []
+        if cite_rate is not None and cite_rate < CITE_RATE_FLOOR:
+            why.append(f"出处率 {_cited_ok}/{_qty} = {cite_rate:.0%}，低于 {CITE_RATE_FLOOR:.0%}")
+        if unsourced_rate is not None and unsourced_rate > UNSOURCED_RATE_MAX:
+            why.append(f"未溯源 {_unsourced_n}/{_qty} = {unsourced_rate:.0%}，"
+                       f"高于 {UNSOURCED_RATE_MAX:.0%}")
+        _fail("cite_floor", "model",
+              "引用覆盖不足（" + "；".join(why) + "）"
+              "——少引用和引用正确，在通过率上不能等价",
+              cite_rate=None if cite_rate is None else round(cite_rate, 3),
+              unsourced_rate=None if unsourced_rate is None else round(unsourced_rate, 3),
+              cited_ok=_cited_ok, qty=_qty, unsourced=_unsourced_n)
     if tool_rate < 1.0:
         _fail("tool_missing", "model",
               f"工具选错(缺{','.join(t for t in expect if t not in tools)})",
@@ -492,6 +539,10 @@ def judge(traj, state):
         "steps_ok": steps_ok,
         "blocked": blocked,
         "misquoted": misquoted,
+        # 单条出处率进报告：口径和门槛同源，读的人不用自己拿 cited_ok/qty 重算。
+        # 没有带数字的 claim 时是 None（没有样本），不是 0。
+        "cite_rate": (round(cite_rate, 3) if cite_rate is not None else None),
+        "cite_floor_ok": cite_floor_ok,
         "trace_ok": trace_ok,
         "fc_fail": fc_fail,
         "semantic_ok": semantic_ok,

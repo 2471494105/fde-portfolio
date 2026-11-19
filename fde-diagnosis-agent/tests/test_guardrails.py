@@ -3168,6 +3168,44 @@ class JudgeAttributionTest(unittest.TestCase):
         # 不断言 semantic_ok：这条用例的关键词是 3 选 0.5，只命中「无法」1 个，
         # 本来就会 conclusion_off。这条测试只负责证明"不误伤合法建议"。
 
+    # ---- 出处率门槛：少引用和引用正确，在通过率上不能等价 ----
+    #
+    # 2026-11-19 全量暴露出来的：H1 与 H5 未溯源都是 4 条、出处率同在 74%~78%，
+    # H1 因为在回环里从 2 涨到 4 判失败，H5 一开始就是 4 条却判通过。
+    # 判别差只在于"有没有发生过回环"——一个和质量无关的元事实。
+
+    def test_low_cite_rate_fails_without_any_retreat(self):
+        r = self._judge(final_text="无法确认，也没有足够证据",
+                        cite_stats={"qty": 15, "cited_ok": 3, "unsourced": 4})
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "cite_floor"][0]
+        self.assertEqual(item["owner"], "model")
+        self.assertAlmostEqual(item["basis"]["cite_rate"], 0.2)
+
+    def test_one_unsourced_is_tolerated(self):
+        # 留一条余量：模型自己算的比值本来就没字段可指（_verify_derived 给了算式出路）。
+        # 全部按"必须有 ref"打死，它以后连算式都不敢写——问题没消失，只是查不到。
+        r = self._judge(final_text="无法确认，也没有足够证据",
+                        cite_stats={"qty": 10, "cited_ok": 9, "unsourced": 1})
+        self.assertNotIn("cite_floor", [f["code"] for f in r["failure"]])
+        self.assertTrue(r["semantic_ok"])
+
+    def test_unsourced_rate_is_a_ratio_not_a_count(self):
+        # 4 条未溯源在 qty=22 里（18%）该过，在 qty=10 里（40%）该红。
+        # 用绝对条数判会把这两种当成一回事。
+        ok_big = self._judge(final_text="无法确认，也没有足够证据",
+                             cite_stats={"qty": 22, "cited_ok": 18, "unsourced": 4})
+        self.assertNotIn("cite_floor", [f["code"] for f in ok_big["failure"]])
+        bad_small = self._judge(final_text="无法确认，也没有足够证据",
+                                cite_stats={"qty": 10, "cited_ok": 6, "unsourced": 4})
+        self.assertIn("cite_floor", [f["code"] for f in bad_small["failure"]])
+
+    def test_no_numeric_claims_is_not_zero_score(self):
+        # 0/0 不是 0 分，是没有样本。和五处"未运行"同一个原则。
+        r = self._judge(final_text="无法确认，也没有足够证据", cite_stats={})
+        self.assertNotIn("cite_floor", [f["code"] for f in r["failure"]])
+        self.assertIsNone(r["cite_rate"])
+
     def test_asked_instead_of_answering_is_named(self):
         # 追问本身没错，但这条用例要求直接给结论 → 失败原因必须是"追问了"
         r = self._judge(intent="clarify", tool_names=[],

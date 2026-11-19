@@ -261,6 +261,15 @@ def judge(traj, state):
             deduped_ok = got is want
 
     # 意图层：考的是"有没有听懂用户在问什么"，不是"诊断得对不对"
+    #
+    # 但先要分清"判错"和"根本没判"。中转站抖的时候 understand 的调用会失败，
+    # nodes.py 退回兜底（有设备号就 lookup、没有就 clarify），intent 自然对不上期望——
+    # 那不是模型判错，是模型压根没被问成。这条通道原来完全不可见：
+    # fallback_reason 在 nodes.py 里赋了值转头就丢，判据只看到 intent=lookup。
+    # 2026-11-19 全量就是这么把 9 条环境故障记到了模型账上。
+    #
+    # 和下面 svc_fail 那一条同一个原则：**基础设施故障不许算成模型能力**。
+    fb = state.get("fallback_reason") or ""
     intent_expect = traj.get("expect_intent")
     intent_ok = True
     if intent_expect:
@@ -342,11 +351,16 @@ def judge(traj, state):
         failure.append(item)
 
     if not intent_ok:
-        _fail("intent_wrong", "model",
-              f"意图判错({state.get('intent') or '空'}，应为{intent_expect})",
-              got=state.get("intent") or "空", expect=intent_expect)
+        # owner 分两档：模型真判错是 model；降级兜底出来的是 env。
+        # 这一档如果混了，报告上"模型能力"这个数字就同时装着中转站的抖动，
+        # 而两者的修法完全相反——一个是调 prompt，一个是等链路恢复。
+        _fail("intent_wrong", "env" if fb else "model",
+              f"意图判错({state.get('intent') or '空'}，应为{intent_expect})"
+              + (f"·实为降级兜底：{fb[:60]}" if fb else ""),
+              got=state.get("intent") or "空", expect=intent_expect,
+              fallback=fb[:80])
     if not ask_ok:
-        _fail("no_clarify", "model", ask_detail, intent=state.get("intent"))
+        _fail("no_clarify", "env" if fb else "model", ask_detail, intent=state.get("intent"))
     if forbid_words:
         _fail("forbid_word", "model",
               f"出现禁用表述({','.join(forbid_words)})", words=forbid_words)
@@ -431,6 +445,9 @@ def judge(traj, state):
         # 只有 route_by 能说"规则命中了 8 条"，加上它才能说这 8 条里
         # 几条是模型会判错、被规则纠正的（救人），几条是规则自己也判错的（误伤）。
         "model_intent": state.get("model_intent") or "",
+        # 这一条是不是降级跑的。进报告才能算"剔除环境干扰后的通过率"——
+        # 一批里混着几条根本没判成的，任何通过率都没有意义。
+        "fallback": fb,
         # 期望意图也进报告：规则好坏要与它比，不该在汇总时再去回查夹具。
         "expect_intent": intent_expect or "",
         "tools": tools,
@@ -741,8 +758,34 @@ def main():
     print(f"预算耗尽      {budget_n}/{n}   （还想查但额度已尽，这几条结论是半成品）")
     print(f"判断够了收工  {enough_n}/{n}   （模型自己判断证据够了，正常结束）")
     print(f"引用自查回环  {check_n}/{n}   （被 check 拦下、把原因回喂后重出才通过的条数）")
-    intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
-    print(f"意图判错      {intent_bad}/{n}")
+    # 意图判错只算"模型真判错"。降级兜底出来的 intent 不是它判的，
+    # 混进来会把中转站的抖动算成模型的能力，而且虚高得毫无痕迹。
+    intent_bad = sum(1 for r in results
+                     if r.get("intent_ok") is False and not r.get("fallback"))
+    print(f"意图判错      {intent_bad}/{n}   （只算模型真判错，降级兜底的不计入）")
+
+    # 环境干扰分两类：① 调用直接失败（run_error / svc_fail）
+    #                 ② understand 降级兜底（fallback）
+    # 两类都不该进"模型能力"的分母——一个是没跑起来，一个是没判成。
+    # 这条统计存在的理由：2026-11-19 那轮 26 条里 15 条被干扰，
+    # 报出来的 34.6% 只是把中转站抖动平均到了模型头上。
+    def _env_hit(r):
+        return bool(r.get("fallback")) or any(
+            f.get("owner") == "env" for f in (r.get("failure") or [])
+        )
+
+    fb_n = sum(1 for r in results if r.get("fallback"))
+    env_n = sum(1 for r in results if _env_hit(r))
+    clean_rows = [r for r in results if not _env_hit(r)]
+    clean_n = len(clean_rows)
+    clean_ok = sum(1 for r in clean_rows if r.get("semantic_ok"))
+    print(f"环境干扰      {env_n}/{n}   "
+          f"（{fb_n} 条意图判断降级兜底 + {env_n - fb_n} 条调用直接失败）")
+    if clean_n:
+        print(f"剔除后正确率  {clean_ok}/{clean_n} = {clean_ok / clean_n:.1%}   "
+              f"（只算跑成的那些，被干扰的不算它的能力）")
+    else:
+        print("剔除后正确率  不适用（全部用例都被环境干扰，这一轮无效）")
     # 规则层的好坏必须成三行看，只报"命中几条"等于没报：
     #   命中  = 规则接管了多少条
     #   救人  = 模型本来会判错（model_intent ≠ 期望），规则把它纠对了
@@ -852,6 +895,15 @@ def main():
         "enough": enough_n,
         "check_rounds_n": check_n,
         "intent_bad": intent_bad,
+        # 环境干扰与"剔除后正确率"必须进报告，而且必须带口径。
+        # 只报 semantic_rate 会把中转站抖动平均进模型能力；
+        # 只报 clean_rate 又会变成"挑好看的那个报"。
+        # 两个都留着，谁引用哪个就得同时说清它是哪个口径。
+        "fallback_n": fb_n,
+        "env_n": env_n,
+        "clean_n": clean_n,
+        "clean_ok": clean_ok,
+        "clean_rate": (round(clean_ok / clean_n, 4) if clean_n else None),
         # 规则层的三个数：命中 / 救人 / 误伤。只有命中数时看不出好坏，
         # 而"误伤"是这套方案最贵的失败模式——规则绕过了模型判据，错了没人兜。
         "rule_hit": len(rule_hit),

@@ -1,0 +1,201 @@
+{
+  "id": "I5",
+  "saved_at": "2026-11-19 18:10:41",
+  "traj_fp": "5788b9608c33",
+  "traj": {
+    "id": "I5",
+    "type": "意图",
+    "input": "E-101 这个告警是什么意思",
+    "expect_tools": [
+      "search_manual"
+    ],
+    "forbid_tools": [
+      "query_device_profile"
+    ],
+    "expect_group_by": [],
+    "final_keywords": [],
+    "forbid_words": [
+      "请问是哪一台",
+      "请提供设备编号"
+    ],
+    "expect_intent": "knowledge",
+    "expect_ask": false,
+    "steps_range": [
+      1,
+      6
+    ]
+  },
+  "state": {
+    "tool_names": [
+      "search_manual"
+    ],
+    "final": {
+      "conclusion": "E-101 的含义是“相机未连接或通讯中断”，告警等级为 critical，按等级定义需立即停机处理。\n按告警码编码规则，E 开头表示设备自身异常，三位数字首位 1 对应图像采集与通讯，因此 E-101 属于图像采集类第 1 号告警。\n常见原因为网线松脱、相机掉电；处置需检查相机供电与网线连接、确认交换机端口状态，恢复连接后重新触发一次采集，确认图像正常再恢复生产。\n该告警期间设备无法成像，所有判定结果均不可信。",
+      "claims": [
+        {
+          "text": "E-101 的含义是相机未连接或通讯中断。",
+          "quote": "含义：相机未连接或通讯中断。",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "E-101 的告警等级为 critical。",
+          "quote": "等级 critical",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "critical 等级需立即停机处理。",
+          "quote": "critical 需立即停机处理",
+          "ref": "search_manual#chunks[1].text"
+        },
+        {
+          "text": "E 开头的告警码表示设备自身异常。",
+          "quote": "E 开头为设备自身异常",
+          "ref": "search_manual#chunks[1].text"
+        },
+        {
+          "text": "三位数字的第一位 1 表示图像采集与通讯。",
+          "quote": "1 为图像采集与通讯",
+          "ref": "search_manual#chunks[1].text"
+        },
+        {
+          "text": "E-101 属于图像采集类第 1 号告警。",
+          "quote": "因此 E-101 属于图像采集类第 1 号告警",
+          "ref": "search_manual#chunks[1].text"
+        },
+        {
+          "text": "常见原因为网线松脱、相机掉电。",
+          "quote": "常见原因：网线松脱、相机掉电。",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "处置需检查相机供电与网线连接。",
+          "quote": "检查相机供电与网线连接",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "处置需确认交换机端口状态。",
+          "quote": "确认交换机端口状态",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "恢复连接后需重新触发一次采集。",
+          "quote": "恢复连接后重新触发一次采集",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "需确认图像正常再恢复生产。",
+          "quote": "确认图像正常再恢复生产",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "该告警期间设备无法成像。",
+          "quote": "该告警期间设备无法成像",
+          "ref": "search_manual#chunks[0].text"
+        },
+        {
+          "text": "该告警期间所有判定结果均不可信。",
+          "quote": "所有判定结果均不可信",
+          "ref": "search_manual#chunks[0].text"
+        }
+      ]
+    },
+    "final_text": "E-101 的含义是“相机未连接或通讯中断”，告警等级为 critical，按等级定义需立即停机处理。\n按告警码编码规则，E 开头表示设备自身异常，三位数字首位 1 对应图像采集与通讯，因此 E-101 属于图像采集类第 1 号告警。\n常见原因为网线松脱、相机掉电；处置需检查相机供电与网线连接、确认交换机端口状态，恢复连接后重新触发一次采集，确认图像正常再恢复生产。\n该告警期间设备无法成像，所有判定结果均不可信。\n- E-101 的含义是相机未连接或通讯中断。[search_manual]\n- E-101 的告警等级为 critical。[search_manual]\n- critical 等级需立即停机处理。[search_manual]\n- E 开头的告警码表示设备自身异常。[search_manual]\n- 三位数字的第一位 1 表示图像采集与通讯。[search_manual]\n- E-101 属于图像采集类第 1 号告警。[search_manual]\n- 常见原因为网线松脱、相机掉电。[search_manual]\n- 处置需检查相机供电与网线连接。[search_manual]\n- 处置需确认交换机端口状态。[search_manual]\n- 恢复连接后需重新触发一次采集。[search_manual]\n- 需确认图像正常再恢复生产。[search_manual]\n- 该告警期间设备无法成像。[search_manual]\n- 该告警期间所有判定结果均不可信。[search_manual]",
+    "steps": 1,
+    "blocked": [],
+    "misquoted": [],
+    "cite_stats": {
+      "qty": 0,
+      "pct": 0,
+      "cited_ok": 0,
+      "cited_path": 0,
+      "cite_oob": 0,
+      "path_ok": 0,
+      "path_bad": 0,
+      "path_miss": 0,
+      "json_bad": 0,
+      "unsourced": 0,
+      "ref_bad": 0,
+      "cite_cut": 0,
+      "json_fixed": 0,
+      "derived_ok": 0,
+      "derived_bad": 0,
+      "range_ok": 0,
+      "range_bad": 0,
+      "ref_ambiguous": 0,
+      "multi_ok": 0,
+      "multi_bad": 0,
+      "qual_ok": 0,
+      "qual_bad": 0,
+      "qual_unsourced": 0,
+      "quote_ok": 13,
+      "quote_bad": 0,
+      "bare_conclusion": 0,
+      "svc_fail": 0,
+      "ev_mismatch": 0,
+      "cited": 0,
+      "ev": 1
+    },
+    "stop_reason": "",
+    "check_retry": 0,
+    "unknown": [],
+    "evidence": [
+      {
+        "tool": "search_manual",
+        "args": {
+          "query": "E-101 这个告警是什么意思"
+        },
+        "result": {
+          "query": "E-101 这个告警是什么意思",
+          "chunks": [
+            {
+              "text": "E-101 相机未连接或通讯中断\n告警码 E-101，等级 critical。含义：相机未连接或通讯中断。常见原因：网线松脱、相机掉电。处置：检查相机供电与网线连接，确认交换机端口状态；恢复连接后重新触发一次采集，确认图像正常再恢复生产。该告警期间设备无法成像，所有判定结果均不可信。",
+              "source_doc": "告警码对照表 ALM-2026",
+              "doc_type": "告警码表",
+              "section": "E-101 相机未连接或通讯中断",
+              "score": 0.7789
+            },
+            {
+              "text": "1.1 告警码编码规则\n告警码采用「字母-三位数字」格式。首字母区分告警来源：E 开头为设备自身异常，W 开头为判定质量异常。三位数字的第一位区分子系统：1 为图像采集与通讯，2 为光源，3 为标定，4 为图像质量，5 为判定与质量统计。因此 E-101 属于图像采集类第 1 号告警，E-201 属于光源类第 1 号告警，W-502 属于判定质量类第 2 号告警。严重等级分三级：critical 需立即停机处理，warning 需当日处理，info 为提示性告警可并入日常保养处理。",
+              "source_doc": "告警码对照表 ALM-2026",
+              "doc_type": "告警码表",
+              "section": "1.1 告警码编码规则",
+              "score": 0.6909
+            },
+            {
+              "text": "E-102 触发信号超时\n告警码 E-102，等级 warning。含义：触发信号超时。常见原因：PLC 触发回路异常、编码器信号丢失。处置：检查 PLC 触发输出与编码器线缆，核对触发延迟设定是否与产线节拍匹配；表现为偶发漏拍，即产品未被完整成像。",
+              "source_doc": "告警码对照表 ALM-2026",
+              "doc_type": "告警码表",
+              "section": "E-102 触发信号超时",
+              "score": 0.6839
+            },
+            {
+              "text": "2026-09-15 夜班误判处置\n3 号线 CX-101 夜班误判率由 18% 升至 31%。为快速压制，将光源亮度由 85 下调至 80，误判率短期回落至 22%，一周后再次上升。",
+              "source_doc": "现场调试记录 2026-09",
+              "doc_type": "调试记录",
+              "section": "2026-09-15 夜班误判处置",
+              "score": 0.6779
+            },
+            {
+              "text": "E-301 标定数据无效或过期\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。",
+              "source_doc": "告警码对照表 ALM-2026",
+              "doc_type": "告警码表",
+              "section": "E-301 标定数据无效或过期",
+              "score": 0.6675
+            }
+          ]
+        },
+        "turn": 1,
+        "ev_no": 1
+      }
+    ],
+    "intent": "knowledge",
+    "intent_conf": 0.95,
+    "route_by": "model",
+    "model_intent": "knowledge"
+  },
+  "meta": {
+    "commit": "f1296de",
+    "code_hash": "15213764895e",
+    "cases_hash": "1c088b9a1209"
+  }
+}

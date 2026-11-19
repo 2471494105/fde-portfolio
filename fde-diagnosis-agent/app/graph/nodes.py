@@ -476,6 +476,9 @@ def understand(state):
         # 规则错和模型错的归因方式完全不同，混在一起就什么都看不出来。
         route_by=route_by,
         model_intent=model_intent,
+        # 降级要留痕。判据只看到 intent=lookup 会把它记成"模型判错"，
+        # 而真相应是"这一次根本没判成"——两者的修法完全不同。
+        fallback_reason=fallback_reason[:120],
     )
 
     return {
@@ -501,6 +504,10 @@ def understand(state):
         # 缺任一个，规则误伤率都算不出来（例如只知 rule:act_verb 生效，
         # 不知道模型原本想判 diagnose 还是 lookup）。
         "model_intent": model_intent,
+        # 必须进 state 而不是只发 trace：run_eval 传 trace_run=False，
+        # 评测链不落 runs/，只写 trace 等于报告里没有这个字段，
+        # 也就永远算不出"这批里有多少条是降级跑的"。
+        "fallback_reason": fallback_reason,
         # slots 是合并写：本轮确认的覆盖上去，没确认的保留旧值
         "slots": {
             "device_id": ids[0] if ids else prev_dev,

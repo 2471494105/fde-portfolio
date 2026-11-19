@@ -121,6 +121,14 @@ class State(TypedDict, total=False):
     # 规则对而模型错 = 规则救了一条；规则和模型都错 = 规则误伤。
     # 只有 route_by 没有它，只能知道"这轮是谁判的"，算不出"模型本来会判成什么"。
     model_intent: str
+    # 意图判断那一步**是不是没跑成**。空串 = 模型正常判过；非空 = 调用失败或
+    # 输出不是合法 JSON，已经退回兜底（"有设备号就 lookup、没有就 clarify"）。
+    #
+    # 这个字段存在的唯一理由：让评测分得清"模型判错"和"模型根本没判"。
+    # 2026-11-19 全量实测：中转站抖的时候 9 条被 fallback 成 lookup，下游判据
+    # 全部记成 intent_wrong / owner=model —— 基础设施故障记到了模型账上。
+    # 原来这个字符串在 nodes.py 里赋了值转头就丢，谁都不知道发生过降级。
+    fallback_reason: str
 
     # 会话相关（多轮）
     turn: int                              # 第几轮，intake 每轮 +1
@@ -212,6 +220,9 @@ RESET_EACH_TURN = {
     # 同 route_by：每轮重判。不清会把上一轮模型判的结果带到下一轮，
     # 而这一轮如果被规则覆盖，模型其实也给了新判断，旧值就成了噪音。
     "model_intent": "",
+    # 同 route_by：降级标记必须每轮清。不清的话第 1 轮抖了一次，
+    # 第 2 轮明明正常判了，报告上还挂着 fallback，等于把干净的一轮也标成污染。
+    "fallback_reason": "",
     "final": "",  # 必须是空串不是 {}：final_to_text({}) 返回字符串 "{}"，_current_final 会当它非空
     "final_text": "",
     "blocked": [],

@@ -1,0 +1,169 @@
+{
+ "meta": {
+  "ts": "2026-11-19 17:20:23",
+  "commit": "f1296de",
+  "provider": "openai",
+  "model": "deepseek-v4.1-flash-1017",
+  "base_url": "http://127.0.0.1:9/v1",
+  "cases_hash": "1c088b9a1209",
+  "code_hash": "15213764895e",
+  "cases_total": 26,
+  "evaluated": 1,
+  "workers": 1,
+  "use_checkpoint": true
+ },
+ "summary": {
+  "n": 1,
+  "semantic_ok": 0,
+  "semantic_rate": 0.0,
+  "tool_rate": 1.0,
+  "gb_rate": 0.0,
+  "kw_rate": 0.0,
+  "kw_n": 1,
+  "kw_na": 0,
+  "steps_bad": 0,
+  "budget_exhausted": 0,
+  "enough": 0,
+  "check_rounds_n": 0,
+  "intent_bad": 0,
+  "fallback_n": 1,
+  "env_n": 1,
+  "clean_n": 0,
+  "clean_ok": 0,
+  "clean_rate": null,
+  "rule_hit": 0,
+  "rule_saved": 0,
+  "rule_harm": 0,
+  "rule_net": 0,
+  "ask_bad": 0,
+  "deduped_grey": 0,
+  "intent_conf_low_n": 0,
+  "fc_fail": 0,
+  "blocked_n": 0,
+  "trace_ok_n": 1,
+  "trace_rate": 1.0,
+  "cite_hit": 14,
+  "cite_qty": 14,
+  "failure_kinds": {
+   "intent_wrong": 1,
+   "gb_missing": 1,
+   "conclusion_off": 1
+  },
+  "cite_rate": 1.0,
+  "cite_cut": 0,
+  "json_fixed": 0,
+  "misquote_n": 0,
+  "range_ok": 0,
+  "range_bad": 0,
+  "elapsed_s": 7.8
+ },
+ "results": [
+  {
+   "id": "A4",
+   "type": "算法",
+   "intent": "lookup",
+   "intent_ok": false,
+   "ask_ok": true,
+   "deduped_env": "",
+   "intent_conf": 1.0,
+   "route_by": "model",
+   "model_intent": "lookup",
+   "fallback": "意图判断调用失败（APIConnectionError），退回按设备号判断",
+   "expect_intent": "diagnose",
+   "tools": [
+    "query_device_profile",
+    "query_defect_log",
+    "query_work_order"
+   ],
+   "steps": 3,
+   "stop_reason": "",
+   "check_rounds": 0,
+   "tool_rate": 1.0,
+   "gb_rate": 0.0,
+   "kw_rate": 0.0,
+   "kw_na": false,
+   "kw_hit": [],
+   "req_miss": [],
+   "steps_ok": true,
+   "blocked": [],
+   "misquoted": [],
+   "trace_ok": true,
+   "fc_fail": false,
+   "semantic_ok": false,
+   "round_ok": true,
+   "round_detail": "",
+   "turns": 0,
+   "reasons": [
+    "意图判错(lookup，应为diagnose)·实为降级兜底：意图判断调用失败（APIConnectionError），退回按设备号判断",
+    "取证维度不足(缺defect_type)",
+    "判断错/结论未命中（调了 3 个工具，结论仍没落在关键词上）"
+   ],
+   "failure": [
+    {
+     "code": "intent_wrong",
+     "owner": "env",
+     "basis": {
+      "got": "lookup",
+      "expect": "diagnose",
+      "fallback": "意图判断调用失败（APIConnectionError），退回按设备号判断"
+     }
+    },
+    {
+     "code": "gb_missing",
+     "owner": "model",
+     "basis": {
+      "missing": [
+       "defect_type"
+      ]
+     }
+    },
+    {
+     "code": "conclusion_off",
+     "owner": "model",
+     "basis": {
+      "kw_rate": 0.0,
+      "tools": [
+       "query_device_profile",
+       "query_defect_log",
+       "query_work_order"
+      ],
+      "kw_hit": []
+     }
+    }
+   ],
+   "cite_stats": {
+    "qty": 14,
+    "pct": 4,
+    "cited_ok": 14,
+    "cited_path": 14,
+    "cite_oob": 0,
+    "path_ok": 14,
+    "path_bad": 0,
+    "path_miss": 0,
+    "json_bad": 0,
+    "unsourced": 0,
+    "ref_bad": 0,
+    "cite_cut": 0,
+    "json_fixed": 0,
+    "derived_ok": 0,
+    "derived_bad": 0,
+    "range_ok": 0,
+    "range_bad": 0,
+    "ref_ambiguous": 0,
+    "multi_ok": 0,
+    "multi_bad": 0,
+    "qual_ok": 0,
+    "qual_bad": 0,
+    "qual_unsourced": 0,
+    "quote_ok": 0,
+    "quote_bad": 0,
+    "bare_conclusion": 0,
+    "svc_fail": 0,
+    "ev_mismatch": 0,
+    "cited": 14,
+    "ev": 3
+   },
+   "final_head": "### CX-103（3号线 / 1-3号工位）  | 项 | 值 | |---|---| | 相机 | CV-X420 + CA-H200CX | | 镜头 | 16mm | | 光源 | CA-DC21E | | 安装日期 | 2024-11-08 00:00:00 | | 保养周期 | 90 天 | | 日志条数"
+  }
+ ]
+}

@@ -1,0 +1,54 @@
+{
+  "id": "I1",
+  "saved_at": "2026-11-19 17:58:51",
+  "traj_fp": "d5eeabf623b0",
+  "traj": {
+    "id": "I1",
+    "expect_intent": "clarify",
+    "type": "信息不全",
+    "input": "我们线体误判率突然飙升了，帮我看看什么原因",
+    "expect_tools": [],
+    "forbid_tools": [
+      "query_defect_log",
+      "query_light_usage",
+      "query_calibration",
+      "create_work_order"
+    ],
+    "expect_group_by": [],
+    "final_keywords": [
+      "哪一台",
+      "设备编号"
+    ],
+    "expect_ask": true,
+    "steps_range": [
+      0,
+      0
+    ]
+  },
+  "state": {
+    "tool_names": [],
+    "final": {
+      "conclusion": "你提到「线体误判率突然飙升」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+      "claims": [],
+      "advice": []
+    },
+    "final_text": "你提到「线体误判率突然飙升」，还缺一个设备编号。\n\n当前库里有 CX-101 ~ CX-105；如果涉及多台，说设备号或工位号都行。",
+    "steps": 0,
+    "blocked": [],
+    "misquoted": [],
+    "cite_stats": {},
+    "stop_reason": "",
+    "check_retry": 0,
+    "unknown": [],
+    "evidence": [],
+    "intent": "clarify",
+    "intent_conf": 0.95,
+    "route_by": "model",
+    "model_intent": "diagnose"
+  },
+  "meta": {
+    "commit": "f1296de",
+    "code_hash": "15213764895e",
+    "cases_hash": "1c088b9a1209"
+  }
+}

@@ -1,0 +1,15 @@
+[
+  {
+    "order_id": "WO-20261119-001",
+    "device_id": "CX-101",
+    "root_cause": "3号线CX-101光源CA-DC21E累计点亮8620小时已超额定寿命8000小时（超出620小时），亮度衰减导致1号工位误判率升至57.63%",
+    "severity": "high",
+    "actions": "[\"设备科更换 CA-DC21E 光源（累计 8620 小时，超额定 8000 小时）\", \"换灯后按规程重新标定 CX-101，并复测 1 号工位误判率\", \"换灯后观察亮度设定是否需要从当前 65 回调，暂不调整其他参数\", \"把 65 亮度设定与文档冲突项一并留痕，待工艺确认口径后再定标准值\"]",
+    "evidence_refs": "[\"query_light_usage#cumulative_hours\", \"query_light_usage#rated_life_hours\", \"query_light_usage#over_life_hours\", \"query_light_usage#brightness_history\", \"query_defect_log{group_by=station,batch,day}#by_group.station[0].rate\"]",
+    "idempotency_key": "3e90fea048e2d78caf82a75c819c9954",
+    "status": "待处理",
+    "assignee_group": "设备科",
+    "created_at": "2026-11-19 15:48:27.213829",
+    "root_cause_code": "light_degradation"
+  }
+]

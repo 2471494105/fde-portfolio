@@ -1,0 +1,340 @@
+{
+  "id": "A3",
+  "saved_at": "2026-11-19 17:51:25",
+  "traj_fp": "8827fb1b1267",
+  "traj": {
+    "id": "A3",
+    "expect_intent": "diagnose",
+    "type": "算法",
+    "input": "CX-102 误判率上去了，帮我看看",
+    "expect_tools": [
+      "query_defect_log"
+    ],
+    "forbid_tools": [],
+    "expect_group_by": [
+      "batch"
+    ],
+    "final_keywords": [
+      "批次"
+    ],
+    "expect_ask": false,
+    "steps_range": [
+      4,
+      null
+    ]
+  },
+  "state": {
+    "tool_names": [
+      "query_device_profile",
+      "query_defect_log",
+      "query_defect_log",
+      "query_calibration",
+      "query_light_usage",
+      "query_defect_log"
+    ],
+    "final": {
+      "conclusion": "误判集中在物料批次 B20261105，属该批次来料特征偏出模型适用分布导致的批次漂移；标定与光源均正常，可排除硬件方向",
+      "claims": [
+        {
+          "text": "整体误判率为 0.23（46/200）",
+          "value": 0.23,
+          "unit": "比例",
+          "ref": "query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}#false_positive_rate"
+        },
+        {
+          "text": "B20261105 批次误判率 50.62%",
+          "value": 50.62,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].rate"
+        },
+        {
+          "text": "该批次共 81 条记录",
+          "value": 81,
+          "unit": "条",
+          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].count"
+        },
+        {
+          "text": "其中 41 条为误判",
+          "value": 41,
+          "unit": "条",
+          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups[0].false_positive"
+        },
+        {
+          "text": "全部 46 条误判中 89.1% 来自这一个批次（=41/46）",
+          "value": 89.1,
+          "unit": "%",
+          "ref": null,
+          "derived": true,
+          "expr": "41/46"
+        },
+        {
+          "text": "对照批次误判率显著更低：B20261107 为 0.2、B20261104 为 0.0667、B20261101 为 0",
+          "ref": "query_defect_log{group_by=batch,time_from=2026-10-15}#groups",
+          "items": [
+            {
+              "key": "B20261107",
+              "field": "rate",
+              "value": 0.2
+            },
+            {
+              "key": "B20261104",
+              "field": "rate",
+              "value": 0.0667
+            },
+            {
+              "key": "B20261101",
+              "field": "rate",
+              "value": 0.0
+            }
+          ]
+        },
+        {
+          "text": "误判未集中在单一工位：2号工位 0.2951、3号工位 0.2055",
+          "ref": "query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}#by_group.station",
+          "items": [
+            {
+              "key": "2号工位",
+              "field": "rate",
+              "value": 0.2951
+            },
+            {
+              "key": "3号工位",
+              "field": "rate",
+              "value": 0.2055
+            }
+          ]
+        },
+        {
+          "text": "缺陷类型也不集中：污渍 0.3636、凹坑 0.2321",
+          "ref": "query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}#by_group.defect_type",
+          "items": [
+            {
+              "key": "污渍",
+              "field": "rate",
+              "value": 0.3636
+            },
+            {
+              "key": "凹坑",
+              "field": "rate",
+              "value": 0.2321
+            }
+          ]
+        },
+        {
+          "text": "光源累计点亮 5120 小时",
+          "value": 5120,
+          "unit": "小时",
+          "ref": "query_light_usage#cumulative_hours"
+        },
+        {
+          "text": "额定寿命 8000 小时",
+          "value": 8000,
+          "unit": "小时",
+          "ref": "query_light_usage#rated_life_hours"
+        },
+        {
+          "text": "距额定寿命还剩 2880 小时，未超寿命",
+          "value": 2880,
+          "unit": "小时",
+          "ref": "query_light_usage#remaining_hours"
+        },
+        {
+          "text": "亮度设定一直为 80，无下调记录",
+          "ref": "query_light_usage#brightness_history",
+          "items": [
+            {
+              "key": "2025-05-20",
+              "field": "value",
+              "value": 80
+            }
+          ]
+        },
+        {
+          "text": "最近一次标定 2026-11-01 漂移 0.338 px，结果通过",
+          "value": 0.338,
+          "unit": "px",
+          "ref": "query_calibration#records[0].drift_px"
+        },
+        {
+          "text": "对应漂移量 0.057 mm",
+          "value": 0.057,
+          "unit": "mm",
+          "ref": "query_calibration#records[0].drift_mm"
+        },
+        {
+          "text": "距最近一次标定 13 天，漂移趋势平稳",
+          "value": 13,
+          "unit": "天",
+          "ref": "query_calibration#days_since_last"
+        },
+        {
+          "text": "历次标定漂移无单向上升：08-05 为 0.821、08-19 为 0.259、09-10 为 0.666、09-25 为 0.961、10-15 为 0.612 px",
+          "ref": "query_calibration#records",
+          "items": [
+            {
+              "key": "2026-08-05",
+              "field": "drift_px",
+              "value": 0.821
+            },
+            {
+              "key": "2026-08-19",
+              "field": "drift_px",
+              "value": 0.259
+            },
+            {
+              "key": "2026-09-10",
+              "field": "drift_px",
+              "value": 0.666
+            },
+            {
+              "key": "2026-09-25",
+              "field": "drift_px",
+              "value": 0.961
+            },
+            {
+              "key": "2026-10-15",
+              "field": "drift_px",
+              "value": 0.612
+            }
+          ]
+        },
+        {
+          "text": "本机设定的保养/标定周期为 90 天，当前未超期",
+          "value": 90,
+          "unit": "天",
+          "ref": "query_device_profile#maintenance_cycle_days"
+        }
+      ],
+      "advice": [
+        "先隔离并复检 B20261105 批次：抽该批次过杀品做人工复判，确认是真污渍/凹坑还是物料表面色差、纹理变化造成的假缺陷",
+        "同步通知来料检验查该批次的供应商、生产日期与表面处理工艺，与该批次之前的物料做对比",
+        "把 B20261105 的误判图像作为验证集，评估是否需放宽「污渍」「凹坑」两类在该批次下的置信度阈值——阈值是所有工位共用的，改动前请工艺/算法确认口径，不要单机改",
+        "若复判确认物料本身正常且阈值调整后误判回落，可结案；若确认物料确实异常，则按来料不良处理，不改模型",
+        "光源与标定本次无需动作：亮度设定未动、寿命余 2880 小时，最近标定漂移 0.338 px 通过且趋势平稳，但建议下一轮仍按 90 天周期复标"
+      ]
+    },
+    "final_text": "误判集中在物料批次 B20261105，属该批次来料特征偏出模型适用分布导致的批次漂移；标定与光源均正常，可排除硬件方向\n- 整体误判率为 0.23（46/200）[query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}]\n- B20261105 批次误判率 50.62%[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 该批次共 81 条记录[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 其中 41 条为误判[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 全部 46 条误判中 89.1% 来自这一个批次（=41/46）[无出处]\n- 对照批次误判率显著更低：B20261107 为 0.2、B20261104 为 0.0667、B20261101 为 0[query_defect_log{group_by=batch,time_from=2026-10-15}]\n- 误判未集中在单一工位：2号工位 0.2951、3号工位 0.2055[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}]\n- 缺陷类型也不集中：污渍 0.3636、凹坑 0.2321[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}]\n- 光源累计点亮 5120 小时[query_light_usage]\n- 额定寿命 8000 小时[query_light_usage]\n- 距额定寿命还剩 2880 小时，未超寿命[query_light_usage]\n- 亮度设定一直为 80，无下调记录[query_light_usage]\n- 最近一次标定 2026-11-01 漂移 0.338 px，结果通过[query_calibration]\n- 对应漂移量 0.057 mm[query_calibration]\n- 距最近一次标定 13 天，漂移趋势平稳[query_calibration]\n- 历次标定漂移无单向上升：08-05 为 0.821、08-19 为 0.259、09-10 为 0.666、09-25 为 0.961、10-15 为 0.612 px[query_calibration]\n- 本机设定的保养/标定周期为 90 天，当前未超期[query_device_profile]\n* 先隔离并复检 B20261105 批次：抽该批次过杀品做人工复判，确认是真污渍/凹坑还是物料表面色差、纹理变化造成的假缺陷\n* 同步通知来料检验查该批次的供应商、生产日期与表面处理工艺，与该批次之前的物料做对比\n* 把 B20261105 的误判图像作为验证集，评估是否需放宽「污渍」「凹坑」两类在该批次下的置信度阈值——阈值是所有工位共用的，改动前请工艺/算法确认口径，不要单机改\n* 若复判确认物料本身正常且阈值调整后误判回落，可结案；若确认物料确实异常，则按来料不良处理，不改模型\n* 光源与标定本次无需动作：亮度设定未动、寿命余 2880 小时，最近标定漂移 0.338 px 通过且趋势平稳，但建议下一轮仍按 90 天周期复标",
+    "steps": 6,
+    "blocked": [],
+    "misquoted": [],
+    "cite_stats": {
+      "qty": 17,
+      "pct": 2,
+      "cited_ok": 16,
+      "cited_path": 16,
+      "cite_oob": 0,
+      "path_ok": 16,
+      "path_bad": 0,
+      "path_miss": 0,
+      "json_bad": 0,
+      "unsourced": 0,
+      "ref_bad": 0,
+      "cite_cut": 0,
+      "json_fixed": 0,
+      "derived_ok": 1,
+      "derived_bad": 0,
+      "range_ok": 0,
+      "range_bad": 0,
+      "ref_ambiguous": 0,
+      "multi_ok": 5,
+      "multi_bad": 0,
+      "qual_ok": 0,
+      "qual_bad": 0,
+      "qual_unsourced": 0,
+      "quote_ok": 0,
+      "quote_bad": 0,
+      "bare_conclusion": 0,
+      "svc_fail": 0,
+      "ev_mismatch": 0,
+      "cited": 16,
+      "ev": 6
+    },
+    "stop_reason": "enough",
+    "check_retry": 0,
+    "unknown": [],
+    "evidence": [
+      {
+        "tool": "query_device_profile",
+        "args": {
+          "device_id": "CX-102"
+        },
+        "sig": "device_id=CX-102",
+        "result": "[query_device_profile{device_id=CX-102}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2802\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"2025-05-20 00:00:00\", \"maintenance_cycle_days\": 90, \"log_count\": 200, \"latest_log_at\": \"2026-11-14 23:49:51\"}",
+        "truncated": false,
+        "ev_no": 1,
+        "turn": 1
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-102",
+          "group_by": "day,station,defect_type",
+          "time_from": "2025-10-01"
+        },
+        "sig": "device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01",
+        "result": "[query_defect_log{device_id=CX-102,group_by=day,station,defect_type,time_from=2025-10-01}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2025-10-01 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"day,station,defect_type\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 8, \"rate\": 0.4706}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, \"...共 14 项，仅送前 2 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"day\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": \"17\", \"false_positive\": \"8\", \"rate\": \"0.4706\"}, {\"key\": \"2026-11-10 00:00:00\", \"count\": \"18\", \"false_positive\": \"5\", \"rate\": \"0.2778\"}, \"...共 14 项，仅送前 2 项\"], \"station\": [{\"key\": \"2号工位\", \"count\": \"61\", \"false_positive\": \"18\", \"rate\": \"0.2951\"}, {\"key\": \"3号工位\", \"count\": \"73\", \"false_positive\": \"15\", \"rate\": \"0.2055\"}, \"...共 3 项，仅送前 2 项\"], \"defect_type\": [{\"key\": \"污渍\", \"count\": \"44\", \"false_positive\": \"16\", \"rate\": \"0.3636\"}, {\"key\": \"凹坑\", \"count\": \"56\", \"false_positive\": \"13\", \"rate\": \"0.2321\"}, \"...共 4 项，仅送前 2 项\"]}}",
+        "truncated": false,
+        "ev_no": 2,
+        "turn": 1
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-102",
+          "group_by": "day",
+          "time_from": "2026-10-15"
+        },
+        "sig": "device_id=CX-102,group_by=day,time_from=2026-10-15",
+        "result": "[query_defect_log{device_id=CX-102,group_by=day,time_from=2026-10-15}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"2026-11-02 00:00:00\", \"count\": 17, \"false_positive\": 8, \"rate\": 0.4706}, {\"key\": \"2026-11-10 00:00:00\", \"count\": 18, \"false_positive\": 5, \"rate\": 0.2778}, {\"key\": \"2026-11-01 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-12 00:00:00\", \"count\": 16, \"false_positive\": 5, \"rate\": 0.3125}, {\"key\": \"2026-11-06 00:00:00\", \"count\": 17, \"false_positive\": 4, \"rate\": 0.2353}, {\"key\": \"2026-11-07 00:00:00\", \"count\": 19, \"false_positive\": 3, \"rate\": 0.1579}, {\"key\": \"2026-11-14 00:00:00\", \"count\": 17, \"false_positive\": 3, \"rate\": 0.1765}, {\"key\": \"2026-11-05 00:00:00\", \"count\": 16, \"false_positive\": 3, \"rate\": 0.1875}, \"...共 14 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-04 18:59:04\", \"station\": \"2号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.915, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-14 06:52:37\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.915, \"batch\": \"B20261105\"}]}",
+        "truncated": false,
+        "ev_no": 3,
+        "turn": 1
+      },
+      {
+        "tool": "query_calibration",
+        "args": {
+          "device_id": "CX-102",
+          "limit": 6
+        },
+        "sig": "device_id=CX-102,limit=6",
+        "result": "[query_calibration{device_id=CX-102,limit=6}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"records\": [{\"ts\": \"2026-11-01 14:00:00\", \"drift_px\": 0.338, \"drift_mm\": 0.057, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-10-15 13:00:00\", \"drift_px\": 0.612, \"drift_mm\": 0.089, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-25 13:00:00\", \"drift_px\": 0.961, \"drift_mm\": 0.158, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-10 14:00:00\", \"drift_px\": 0.666, \"drift_mm\": 0.105, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 15:00:00\", \"drift_px\": 0.259, \"drift_mm\": 0.04, \"result\": \"通过\", \"operator\": \"王敏\"}, {\"ts\": \"2026-08-05 13:00:00\", \"drift_px\": 0.821, \"drift_mm\": 0.135, \"result\": \"通过\", \"operator\": \"王敏\"}], \"last_calibration_at\": \"2026-11-01 14:00:00\", \"days_since_last\": 13, \"drift_trend\": \"平稳\", \"window\": {\"time_from\": null, \"time_to\": null}}",
+        "truncated": false,
+        "ev_no": 4,
+        "turn": 1
+      },
+      {
+        "tool": "query_light_usage",
+        "args": {
+          "device_id": "CX-102"
+        },
+        "sig": "device_id=CX-102",
+        "result": "[query_light_usage{device_id=CX-102}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 5120, \"rated_life_hours\": 8000, \"over_life_hours\": 0, \"remaining_hours\": 2880, \"brightness_set\": 80, \"last_replaced_at\": \"2025-05-20 00:00:00\", \"brightness_history\": [{\"ts\": \"2025-05-20 09:00:00\", \"value\": 80}], \"degradation_estimate\": \"寿命正常\"}",
+        "truncated": false,
+        "ev_no": 5,
+        "turn": 1
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-102",
+          "group_by": "batch",
+          "time_from": "2026-10-15"
+        },
+        "sig": "device_id=CX-102,group_by=batch,time_from=2026-10-15",
+        "result": "[query_defect_log{device_id=CX-102,group_by=batch,time_from=2026-10-15}] {\"device_id\": \"CX-102\", \"state\": \"found\", \"time_from\": \"2026-10-15 00:00:00\", \"time_to\": \"2026-11-14 23:49:51\", \"group_by\": \"batch\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"B20261105\", \"count\": 81, \"false_positive\": 41, \"rate\": 0.5062}, {\"key\": \"B20261107\", \"count\": 15, \"false_positive\": 3, \"rate\": 0.2}, {\"key\": \"B20261104\", \"count\": 15, \"false_positive\": 1, \"rate\": 0.0667}, {\"key\": \"B20261106\", \"count\": 12, \"false_positive\": 1, \"rate\": 0.0833}, {\"key\": \"B20261101\", \"count\": 17, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261100\", \"count\": 14, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261102\", \"count\": 12, \"false_positive\": 0, \"rate\": 0.0}, {\"key\": \"B20261109\", \"count\": 12, \"false_positive\": 0, \"rate\": 0.0}, \"...共 10 项，仅送前 8 项\"], \"samples\": [{\"ts\": \"2026-11-06 10:24:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.937, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-08 04:44:54\", \"station\": \"2号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.926, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-10 03:25:29\", \"station\": \"3号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.921, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-04 18:59:04\", \"station\": \"2号工位\", \"defect_type\": \"凹坑\", \"confidence\": 0.915, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-14 06:52:37\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.915, \"batch\": \"B20261105\"}]}",
+        "truncated": false,
+        "ev_no": 6,
+        "turn": 1
+      }
+    ],
+    "intent": "diagnose",
+    "intent_conf": 0.92,
+    "route_by": "rule:change+dev",
+    "model_intent": "diagnose"
+  },
+  "meta": {
+    "commit": "f1296de",
+    "code_hash": "15213764895e",
+    "cases_hash": "1c088b9a1209"
+  }
+}

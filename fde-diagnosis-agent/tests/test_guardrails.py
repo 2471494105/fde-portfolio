@@ -3110,6 +3110,46 @@ class JudgeAttributionTest(unittest.TestCase):
         st.update(kw)
         return run_eval.judge(traj or dict(self.BASE_TRAJ), st)
 
+    # ---- 降级兜底的归因：环境故障不许记到模型账上 ----
+    #
+    # 2026-11-19 全量实测出来的：中转站抖的时候 understand 的调用失败，
+    # nodes.py 退回兜底（有设备号就 lookup），判据只看到 intent=lookup 对不上期望，
+    # 就记成 intent_wrong / owner=model。26 条里 9 条这么被冤枉的，
+    # 报出来的 34.6% 有一半是中转站的抖动而不是模型的能力。
+    #
+    # 下面三条钉住的就是这件事：**判据不造假（该失败还是失败），但归因必须归对人。**
+
+    def test_intent_wrong_is_model_fault_when_no_fallback(self):
+        traj = dict(self.BASE_TRAJ)
+        traj["expect_intent"] = "diagnose"
+        r = self._judge(traj, intent="lookup", final_text="CX-101 的设备档案如下")
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "intent_wrong"][0]
+        self.assertEqual(item["owner"], "model")   # 模型真判错 → 记在模型账上
+        self.assertEqual(r["fallback"], "")        # 而且报告里明确"这一条没降级"
+
+    def test_intent_wrong_is_env_fault_when_fallback(self):
+        traj = dict(self.BASE_TRAJ)
+        traj["expect_intent"] = "diagnose"
+        r = self._judge(traj, intent="lookup",
+                        fallback_reason="意图判断调用失败（InternalServerError），退回按设备号判断")
+        # 判据不造假：降级跑出来的这条仍然不算通过，不许因为"是环境的错"就放行
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "intent_wrong"][0]
+        self.assertEqual(item["owner"], "env")     # 但归因归环境
+        self.assertTrue(item["basis"]["fallback"].startswith("意图判断调用失败"))
+        self.assertTrue(r["fallback"].startswith("意图判断调用失败"))
+
+    def test_no_clarify_follows_the_same_owner_rule(self):
+        # 该反问却没反问，根源同样可能是"根本没判成"——两条归因必须同步，
+        # 只改一条会让同一轮里出现"intent 归环境、clarify 归模型"的自相矛盾。
+        traj = dict(self.BASE_TRAJ)
+        traj["expect_ask"] = True
+        r = self._judge(traj, intent="diagnose",
+                        fallback_reason="意图判断输出不是合法 JSON（已重试一次）")
+        item = [f for f in r["failure"] if f["code"] == "no_clarify"][0]
+        self.assertEqual(item["owner"], "env")
+
     def test_asked_instead_of_answering_is_named(self):
         # 追问本身没错，但这条用例要求直接给结论 → 失败原因必须是"追问了"
         r = self._judge(intent="clarify", tool_names=[],

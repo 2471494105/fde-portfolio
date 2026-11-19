@@ -21,7 +21,7 @@ from typing import Annotated, TypedDict
 #
 # 现在兜底交给 _add_list（它接受 None）；state_ver 只负责"这条会话是哪一版 schema、
 # 迁移过没有"，是可观测性，不是防线。两者分工别搞反。
-STATE_VER = 2
+STATE_VER = 3
 
 
 def _add_list(a, b):
@@ -110,6 +110,12 @@ class State(TypedDict, total=False):
     # 现在低于 CONF_ASK 直接降级追问，介于两条线之间则在结论里带免责说明。
     intent_conf: float
     intent_note: str
+    # 这一轮的意图是谁定的：`rule:<规则名>` 还是 `model`。
+    # 和 intent_conf 分开看：conf 是模型自报的把握，route_by 是**实际生效的判断来源**。
+    # 有它才能回答"这条被规则钉死的用例，模型本来会判成什么、判错了没有"——
+    # 也就是规则的真实误伤率。只记进 trace 不够：run_eval 传 trace_run=False，
+    # 评测链不落 runs/，那个字段在报告里等于不存在（记了没人拿得到 = 没记）。
+    route_by: str
 
     # 会话相关（多轮）
     turn: int                              # 第几轮，intake 每轮 +1
@@ -195,6 +201,9 @@ class State(TypedDict, total=False):
 # slots：它们的语义是"保留"，不是"重置"。
 RESET_EACH_TURN = {
     "steps": 0,
+    # understand 每轮重新判定路由来源。不清的话第 1 轮被规则命中的用例，
+    # 第 2 轮明明走的是模型，报告上还写着 rule:xxx——误伤率统计会凭空多出一条。
+    "route_by": "",
     "final": "",  # 必须是空串不是 {}：final_to_text({}) 返回字符串 "{}"，_current_final 会当它非空
     "final_text": "",
     "blocked": [],

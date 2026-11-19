@@ -893,6 +893,83 @@ class ClaimContractTest(unittest.TestCase):
         self.assertTrue(any("契约" in m for m in res["misquoted"]))
 
 
+class DerivedClaimTest(unittest.TestCase):
+    """派生值：ref 为空但给了算式，重算才认。
+
+    为什么单独立类而不是并进 ClaimContractTest：这不是"引用格式"的变体，
+    是判据多认了一种数——从"必须指到字段"放宽到"指到字段 **或** 能重算"。
+    混进引用测试里，以后改引用格式会顺手改到它。
+
+    放行的边界必须精确，否则这条路会变成洗白通道：
+      有算式且算得对 → 成立；有算式但算错 → 失败；没算式 → 仍然标灰。
+    """
+
+    GROUPS = ('{"false_positive_rate": 0.1541, "groups": ['
+              '{"key": "1号工位", "count": 34, "rate": 0.5882}]}')
+
+    def _verify(self, doc):
+        final = json.dumps(doc, ensure_ascii=False)
+        ev = [{"result": self.GROUPS, "tool": "query_defect_log", "turn": 1,
+               "truncated": False, "ev_no": 1, "sig": None}]
+        state = {"final": final, "evidence": ev, "turn": 1,
+                 "user_msg": "", "tool_names": [], "steps": 0}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("derived", model="m", provider="p", base_url="b"):
+                return nodes.verify(state)
+        finally:
+            trace.RUNS_DIR = old
+
+    def test_ratio_in_text_counts_as_derived(self):
+        # 20/27 = 74.07% —— H4/H5/I8 那类"自己算的占比"的真实写法
+        res = self._verify({"conclusion": "1号工位占多数", "claims": [
+            {"text": "1号工位占全部误判的 74%（=20/27）", "value": 74,
+             "unit": "%", "ref": None}]})
+        self.assertEqual(res["blocked"], [], "给了算式就不该再标灰")
+        self.assertEqual(res["misquoted"], [])
+        self.assertEqual(res["cite_stats"]["derived_ok"], 1)
+        self.assertEqual(res["cite_stats"]["derived_bad"], 0)
+        self.assertEqual(res["cite_stats"]["unsourced"], 0)
+
+    def test_wrong_arithmetic_is_a_failure(self):
+        # 20/30 = 66.7%，写成 74 → 这是算错，不是没出处
+        res = self._verify({"conclusion": "占比 74%", "claims": [
+            {"text": "占 74%（=20/30）", "value": 74, "unit": "%", "ref": None}]})
+        self.assertEqual(res["cite_stats"]["derived_bad"], 1)
+        self.assertEqual(res["cite_stats"]["unsourced"], 0)
+        self.assertTrue(res["misquoted"], "算错必须留下失败明细")
+
+    def test_no_expr_still_green_grey(self):
+        # 没算式：维持原判（标灰），不能被新逻辑顺手放行
+        res = self._verify({"conclusion": "占比 74%", "claims": [
+            {"text": "占 74%", "value": 74, "unit": "%", "ref": None}]})
+        self.assertEqual(res["cite_stats"]["unsourced"], 1)
+        self.assertEqual(res["cite_stats"]["derived_ok"], 0)
+
+    def test_expr_field_wins_and_percent_scaling(self):
+        # 显式 expr 优先；20/27 = 0.7407 会被 % 换算到 74.07，与写的 74 相符
+        res = self._verify({"conclusion": "占比高", "claims": [
+            {"text": "占比 74", "value": 74, "unit": "%", "ref": None,
+             "derived": True, "expr": "20/27"}]})
+        self.assertEqual(res["cite_stats"]["derived_ok"], 1)
+        self.assertEqual(res["misquoted"], [])
+
+    def test_model_text_is_never_evaled(self):
+        # 安全边界：把代码塞进算式，必须被拒（且绝不能被求值）
+        res = self._verify({"conclusion": "占比 74%", "claims": [
+            {"text": "占 74%（=__import__('os').getcwd()）",
+             "value": 74, "unit": "%", "ref": None}]})
+        self.assertEqual(res["cite_stats"]["derived_ok"], 0,
+                         "非纯算术表达式不得被求值")
+        self.assertEqual(res["cite_stats"]["unsourced"], 1)
+
+    def test_division_by_zero_does_not_crash(self):
+        res = self._verify({"conclusion": "占比 74%", "claims": [
+            {"text": "占 74%（=20/0）", "value": 74, "unit": "%", "ref": None}]})
+        self.assertEqual(res["cite_stats"]["derived_bad"], 1)
+
+
 class RangeClaimTest(unittest.TestCase):
     """区间 claim（`6%~11%`、`2–4 条`）：用一个 value 塞不下，得写 value_max。
 

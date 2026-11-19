@@ -4,8 +4,10 @@
 程序只做三件模型做不好的事：L1 信息补全、工具执行、结论校验。
 """
 
+import ast
 import datetime
 import json
+import operator
 import os
 import re
 import time
@@ -107,8 +109,11 @@ SYSTEM_PROMPT = """你是产线上的视觉检测设备诊断助手（FDE）。
      field 是那条记录里装着这个数的字段名，不确定可以省略。
      不要写成一条 value 然后 ref 指整个数组——那样判据只能确认数字出现过，
      确认不了它属于哪条记录。
-   - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，并在 text 里写算式：
-     {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null}
+   - 自己算出来的值（比值 / 差值 / 加总）ref 写 null，但**必须给算式**，否则这条
+     会被记成"没有出处"。算式写在 text 的括号里，或单独放 expr 字段：
+     {"text": "74%（=20/27）", "value": 74, "unit": "%", "ref": null, "derived": true, "expr": "20/27"}
+     算式要能直接算出 value——百分比会自动按 % 换算，20/27 这样写就够了。
+     算错了比不写更糟：不写只标灰，写错判引用失败。
    - 自己定的验收目标、假设值，ref 也写 null。
    - 没有数字的论述写进 conclusion 或 advice，不要塞进 claims。
    - ref 写错比写 null 更糟：拿不准就不写字段路径，写 null。
@@ -485,6 +490,10 @@ def understand(state):
         "missing": list(data.get("missing") or []),
         "param_names": [str(p).strip() for p in (data.get("param_names") or []) if str(p).strip()],
         "intent_reason": reason,
+        # 写进 state 而不是只发 trace：run_eval 传 trace_run=False，评测链不落 runs/，
+        # 只在 trace 里记等于报告里根本没有这个字段。规则误伤率要能被算出来，
+        # 它必须跟着每条结果一起进报告。
+        "route_by": route_by,
         # slots 是合并写：本轮确认的覆盖上去，没确认的保留旧值
         "slots": {
             "device_id": ids[0] if ids else prev_dev,
@@ -845,11 +854,26 @@ def _plan_notes(state, used):
     # 会变的内容（工具预算、跨轮摘要、重试提醒）一律追加到 messages 末尾——
     # 之前把预算拼在 system 开头，步数一涨第一句就变，后面 2000+ token 全部按未命中计费，
     # 实测一条 8 步的用例 5 次 plan 缓存命中率是 0/2265、0/3203、0/4591、0/5265、0/5513。
+    left = max(0, MAX_STEPS - used)
     notes = [
         f"[工具预算] 已用 {used}/{MAX_STEPS} 次。"
         "判断标准不是「还剩几次」，而是「够不够」：能给出根因和处置就停，不够才继续。"
         "如果用户本轮已明确要求某个动作（例如建单），在根因已明确时优先完成该动作。"
     ]
+    # 快到头了：这时候"还能再查一次"是有诱惑力的，代价却是可能一次结论都交不出来。
+    # A3 实测就是这么烧满 12 步、final 为空、关键词 0 命中——查得越多，收得越晚，
+    # 结论反而一个字都没有。所以最后两次不该被当成"还能再查"的额度，而是"收口"的额度。
+    #
+    # 为什么不直接把 MAX_STEPS 调大：那只是把同一个失败点往后挪几分钟。
+    # 预算的意义是"到点必须交卷"，不是"多给几次机会"。
+    if left <= 2:
+        notes.append(
+            f"[收口提醒] 只剩 {left} 次工具调用了。"
+            "现在优先把已经查到的东西写成结论：根因给到能给的粒度，"
+            "查不到的那部分明确列出来（例如「X 在文档里没有记载」），"
+            "不要在最后这一次调用上再开一个新的取证方向。"
+            "交一个被标注了缺口的半成品，比交白卷好。"
+        )
     # 把 understand 第一轮写下的缺口带回来。
     # 改之前这个字段只写不读：UNDERSTAND_PROMPT 里要求模型填 missing，
     # understand 把它写进 state，ask_user 拿它拼追问文案，trace 记了一笔，
@@ -1652,6 +1676,108 @@ def _value_match(v, got, unit, tol=0.02):
     return abs(g - t) <= max(tol, abs(t) * 0.01)
 
 
+# ---------------------------------------------------------------------------
+# 派生值：模型自己算出来的数字
+#
+# 判据只认两种数：从工具返回里抄来的（要给 ref），和算出来的（要给算式）。
+# 第三种"既没 ref 也没算式"才是编的。
+#
+# 为什么必须重算而不是一律放行：放行等于把"我算的"和"我编的"合并成一类，
+# 模型很快学会用一句假算式洗白任意数字。
+#
+# 为什么必须而不是一律判死：判死等于告诉模型"别算"，而很多结论的核心
+# 恰恰是比值（20/27 = 74%）。它会把算式删掉、数字照样留在结论里——
+# 问题没消失，只是从"能查的"退化成"查不到的"。
+#
+# 所以：算式可求值 + 结果对得上 → 成立；算式给了但算错 → 判失败（derived_wrong）。
+# 前者是能力，后者是错误，两者必须分开计，否则"会算"和"会编"在报表上长得一样。
+# ---------------------------------------------------------------------------
+
+_BINOPS = {ast.Add: operator.add, ast.Sub: operator.sub,
+           ast.Mult: operator.mul, ast.Div: operator.truediv}
+
+# 「（=20/27）」「(= 37 / 200 )」「（=0.5）」
+_DERIVED_RE = re.compile(r"[（(]\s*=\s*([^）)]+?)\s*[）)]")
+# 算式里只允许这些字符，别的一律当"不是算式"
+_EXPR_CHARS = re.compile(r"^[\d\.\+\-\*\/\(\)\s%×÷％]+$")
+
+
+def _safe_arith(expr):
+    """只算 + - * / 和括号，绝不用 eval。
+
+    expr 来自模型输出。在这里 eval 等于把"模型能不能写对 JSON"升级成
+    "模型能不能在这台机器上执行任意代码"——一个烂算式就能变成一次入侵。
+    白名单 AST 是唯一可接受的做法：认得哪些节点，其余直接拒绝。
+    """
+    e = (expr or "").replace("×", "*").replace("÷", "/")
+    e = e.replace("％", "%").replace("%", "/100")   # 「20%」按 0.2 算
+    try:
+        node = ast.parse(e, mode="eval").body
+    except (SyntaxError, ValueError, TypeError):
+        return None
+
+    def ev(n):
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return float(n.value)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.USub):
+            x = ev(n.operand)
+            return None if x is None else -x
+        if isinstance(n, ast.BinOp) and type(n.op) in _BINOPS:
+            a, b = ev(n.left), ev(n.right)
+            if a is None or b is None:
+                return None
+            if isinstance(n.op, ast.Div):
+                return None if b == 0 else a / b
+            return _BINOPS[type(n.op)](a, b)
+        raise ValueError("节点不在白名单")
+
+    try:
+        return ev(node)
+    except (ValueError, TypeError, ZeroDivisionError):
+        return None
+
+
+def _derive_expr(c, text):
+    """取算式：显式 expr 字段优先，其次 text 里形如（=20/27）的括号。
+
+    两种都支持是故意的。prompt 改了，模型不一定立刻照做；而 text 里的算式
+    它一直在写（prompt 本来就要求"在 text 里写算式"）。只认显式字段，
+    等于把已经存在的那些算式全部作废——修 bug 顺手把旧数据打成错，是另一种 bug。
+    """
+    expr = str((c or {}).get("expr") or "").strip()
+    if expr:
+        return expr
+    m = _DERIVED_RE.search(text or "")
+    if not m:
+        return ""
+    inner = m.group(1).strip()
+    return inner if _EXPR_CHARS.match(inner) else ""
+
+
+def _verify_derived(c, text, v, unit):
+    """派生值重算。返回 (是否成立, 判失败的理由)。
+
+    理由为空  = 没给可用算式（不是错，是没给），调用方按"未溯源"标灰。
+    理由非空  = 给了算式但对不上（这是错，判失败）。
+    """
+    expr = _derive_expr(c, text)
+    if not expr:
+        return False, ""
+    r = _safe_arith(expr)
+    if r is None:
+        return False, f"算式「={expr}」无法求值"
+    try:
+        t = float(v)
+    except (TypeError, ValueError):
+        return False, ""
+    # 百分比：结论写 74（unit=%），算式给 20/27 = 0.74 → 先换到同一口径再比
+    if unit == "%" and 0 < r <= 1 and t > 1:
+        r *= 100
+    if abs(r - t) <= max(0.02, abs(t) * 0.01):
+        return True, ""
+    return False, f"算式「={expr}」得 {r:g}，与写的 {t:g} 不符"
+
+
 def _render_claims(doc):
     """把结构化结论渲染成人话，供 UI 显示和评测关键词匹配。
 
@@ -1710,6 +1836,9 @@ def _new_stats():
             # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
             "json_fixed": 0,
+            # derived_ok   ref 为空但给了算式，重算对得上 —— 算出来的数，可验
+            # derived_bad  ref 为空、给了算式，但算错了 —— 这是真错，判失败
+            "derived_ok": 0, "derived_bad": 0,
             # range_ok   区间 claim，两端都能在 ref 指向的那段原文里找到
             # range_bad  区间 claim 但撑不住：ref 指着数值字段，或端点不在该原文里
             "range_ok": 0, "range_bad": 0,
@@ -1955,8 +2084,18 @@ def _verify_claims(doc, ev, stats, blocked, misquoted, fails=None):
                 stats["qual_unsourced"] += 1
                 blocked.append(text or "（空）")
             else:
-                stats["unsourced"] += 1
-                blocked.append(text or str(v))
+                # 没有 ref 不等于编的：模型自己算的比值/差值本来就没有字段可指。
+                # 给它一条"交算式就能验"的路。否则它只会学会不写算式、
+                # 把数字留在结论里——问题没消失，只是从"可查"退化成"查不到"。
+                d_ok, d_why = _verify_derived(c, text, v, unit)
+                if d_ok:
+                    stats["derived_ok"] += 1
+                elif d_why:
+                    stats["derived_bad"] += 1
+                    _fail("derived_wrong", f"{text}（{d_why}）")
+                else:
+                    stats["unsourced"] += 1
+                    blocked.append(text or str(v))
             continue
 
         m = _REF_PAT.match(str(ref))

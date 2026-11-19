@@ -381,6 +381,10 @@ def judge(traj, state):
         # "按「X」理解"或被改成追问。判错看 intent_ok，两个口径别混——
         # 混在一起会让"模型诚实"和"模型判错"变成同一个数字。
         "intent_conf": state.get("intent_conf"),
+        # 这一轮的路由来源：rule:<规则名> / model。
+        # 和 intent_conf 分开：conf 是模型自报，route_by 是实际生效的那条判断。
+        # 有它 + model_intent（trace 里）才能算"规则钉死的那些用例，模型本来会判错多少"。
+        "route_by": state.get("route_by") or "",
         "tools": tools,
         "steps": steps,
         "stop_reason": stop_reason,
@@ -678,6 +682,12 @@ def main():
     print(f"该反问未反问  {ask_bad}/{n}   （信息不全时该追问，直接作答等于假装知道）")
     print(f"幂等未验证    {dedup_grey}/{n}   （建单工具连不上，这项判不了，标灰放行）")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
+    # 派生值：ref 为 null 但给了算式，判据重算过。
+    # 和上一行成对出现——给了算式却算错的是 failure，没算式的是标灰。
+    # 混在一起就分不出"模型会算"和"模型在编"，而这两者的修法完全不同。
+    d_ok = sum((r.get("cite_stats") or {}).get("derived_ok", 0) for r in results)
+    d_bad = sum((r.get("cite_stats") or {}).get("derived_bad", 0) for r in results)
+    print(f"派生值重算    {d_ok} 成 / {d_bad} 败   （ref 为空但给了算式：重算对得上才算数）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
     # "引用歧义"是"引用写错"的子集：同一工具按多种参数各调过、ref 又没写参数指纹，
     # 判据不知道它指哪一次。仍计入失败，单独一行是为了让读报告的人先看到"该补指纹"，

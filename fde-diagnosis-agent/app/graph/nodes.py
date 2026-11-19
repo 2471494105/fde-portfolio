@@ -1322,8 +1322,30 @@ def _current_question(state):
 
 
 def _has_write_intent(state):
+    """用户是否已经授权这次写操作。两个来源取 OR。
+
+    1. 用户原话里出现"建单"这类**连写**形态 —— 纯词表，不依赖模型。
+    2. understand 判他这一轮是 action。
+
+    为什么必须有第 2 条：第 1 条只认连写。"再帮我给 CX-101 建一次刚才那个换光源的
+    工单"是动宾分离，词表一个都没命中；而 understand 的 prompt 里 action 的例子
+    原句就写着"再建一次刚才那个单"，它判对了（intent=action, confidence 0.72）。
+    闸门却不看这个判断，自己用词表重算一遍返回 False。
+
+    2026-11-19 W1 实测后果：第 2 轮两次 create_work_order 都被这条闸拦成
+    "用户没有要求建单"，evidence 里只有第 1 轮那条 deduped=false ——
+    用例判 idem_miss。失败原因不是模型没做幂等，是防线把请求本身吞了。
+
+    这不是放松，是把该归谁判的事还回去：
+      - "用户要不要建单"是**语义** → 模型判（understand 的 intent）
+      - "建单必须可追溯"是**约束** → 规则守（根因 / 证据引用 / 设备存在 / 幂等 四道闸）
+    原来让一张词表同时干这两件事，而它只能干后者的一半。
+    注意第 2 条只给"许可"，不给"豁免"：引用校验、根因校验照样在后面逐条跑。
+    """
     q = _current_question(state)
-    return any(kw in q for kw in WRITE_INTENT_KW)
+    if any(kw in q for kw in WRITE_INTENT_KW):
+        return True
+    return state.get("intent") == "action"
 
 
 def act(state):

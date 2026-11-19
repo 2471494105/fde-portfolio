@@ -215,30 +215,44 @@ TRAJECTORIES = [
         "steps_range": (0, 0),
     },
 
-    # ---------- W1-W3：建单 ----------
+    # ---------- W1/W3：建单（W1 是多轮：建单 → 再建一次应去重） ----------
     {
         "id": "W1",
         "expect_intent": "action",
         "type": "建单",
-        "input": "CX-101 光源累计已经 8620 小时超了额定寿命，1号工位误判 58%，文档冲突的事先放一边，直接按 65 亮度给我建单让设备科换灯",
+        # 两轮：第 1 轮真建单，第 2 轮"再建一次"应当去重。
+        #
+        # 为什么必须合成一条，而不是 W1/W2 各跑各的：
+        # W2 原先的输入是"再帮我给 CX-101 建一次**刚才那个**换光源的工单"，
+        # 但它是独立用例、没有会话上下文——那"刚才那个"在它自己这一轮里
+        # 根本不存在，只能指望数据库里留着上一次跑出来的残单。于是它变成
+        # 一次跨试次的状态依赖，两个方向都不反映模型能力：
+        #   干净库首跑：模型建了新单、返回 deduped=False → 判失败（假红，
+        #               而"现场确实没有重复单"时建新单本来就是对的）
+        #   脏库再跑  ：撞上历史残留直接 returns deduped=True → 判通过
+        #               （假绿，那个绿来自上一次运行，不是这一轮做对了）
+        # 依据：Anthropic《Demystifying evals for AI agents》——"Each trial
+        # should be 'isolated' by starting from a clean environment … Shared
+        # state can also artificially inflate performance."
+        #
+        # 合并后，第 2 轮的 deduped=True 必然来自本 trial 的第 1 轮，同一条
+        # 断言同时证明两件事：第 1 轮真的建了新单（否则第 2 轮没有单可撞）、
+        # 第 2 轮没有重复建。这也是这套系统本来就有的能力——多轮槽位继承，
+        # 用真实会话来测它，比用数据库残留模拟更接近生产。
+        "turns": [
+            "CX-101 光源累计已经 8620 小时超了额定寿命，1号工位误判 58%，"
+            "文档冲突的事先放一边，直接按 65 亮度给我建单让设备科换灯",
+            "再帮我给 CX-101 建一次刚才那个换光源的工单",
+        ],
+        "input": "再帮我给 CX-101 建一次刚才那个换光源的工单",
         "expect_tools": ["create_work_order"],
         "forbid_tools": [],
         "expect_group_by": [],
         "final_keywords": ["工单", "WO-"],
         "expect_ask": False,
-        "steps_range": (2, None),
-    },
-    {
-        "id": "W2",
-        "expect_intent": "action",
-        "type": "建单",
-        "input": "再帮我给 CX-101 建一次刚才那个换光源的工单",
-        "expect_tools": ["create_work_order"],
-        "forbid_tools": [],
-        "expect_group_by": [],
-        "final_keywords": [],
-        "expect_ask": False,
         "expect_deduped": True,
+        # steps / tool_names 每轮由 RESET_EACH_TURN 清零，所以这里量的是
+        # 第 2 轮：建单本身 1 步起。
         "steps_range": (1, None),
     },
     {

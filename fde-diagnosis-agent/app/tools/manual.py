@@ -167,17 +167,42 @@ def _conflict_for_one(param_name, keys, cur):
     if has_conflict:
         authoritative = min(values, key=lambda v: DOC_PRIORITY.get(v["doc_type"], 9))["doc_type"]
 
+    # 冲突说明按实际取值分组来写。
+    # 原来这里写死"两类文档取值不同"，而 values 可能来自四份文档
+    # （厂商手册 / 厂内SOP / 保养计划 / 质量目标）——四行摆在那里、句子却说"两类"，
+    # 模型读到的冲突规模就是错的。依据 Anthropic《Writing effective tools for
+    # agents》的 "return only high signal information"：不给低信息的枚举，
+    # 也不给与实际数据不符的固定措辞。
+    conflict_note = "各文档取值一致"
+    if has_conflict:
+        by_value = {}
+        for v in values:
+            if v["value"] is None:
+                continue
+            by_value.setdefault(str(v["value"]), []).append(v["doc_type"])
+        missing_docs = [v["doc_type"] for v in values if v["value"] is None]
+        detail = "；".join(
+            f"{val}（{'、'.join(types)}）" for val, types in by_value.items()
+        )
+        conflict_note = (
+            f"存在冲突：{len(by_value)} 种取值——{detail}。"
+            "取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。"
+        )
+        if missing_docs:
+            # 没给出该参数的文档同样影响判断：它意味着"以哪份为准"这件事
+            # 在文档层面上并不完整，模型不该默认剩下那份就是对的。
+            conflict_note += (
+                f"另有 {len(missing_docs)} 份文档未给出该参数"
+                f"（{'、'.join(missing_docs)}）。"
+            )
+
     out = {
         "param_name": chosen,
         "has_conflict": has_conflict,
         "value_count": len(distinct),
         "conflicts": values,
         "likely_authoritative": authoritative,
-        "note": (
-            "存在冲突，两类文档取值不同：" + "、".join(
-                f"{v['doc_type']}={v['value']}" for v in values
-            ) + "。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。"
-        ) if has_conflict else "各文档取值一致",
+        "note": conflict_note,
     }
     # 归一化过就明说，否则引用时会拿"光源亮度"去写 ref，而库里只有"光源亮度设定"——
     # 引用失败又被判成模型编造，其实是工具悄悄换了个名。

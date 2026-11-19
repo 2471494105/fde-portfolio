@@ -281,8 +281,8 @@ class WriteIntentGuardTest(unittest.TestCase):
         nodes.TOOL_IMPLS.clear()
         nodes.TOOL_IMPLS.update(self._orig)
 
-    def _run(self, question, device="CX-101", refs=None):
-        """question=None 表示 state 里没有 user 消息。"""
+    def _run(self, question, device="CX-101", refs=None, intent=""):
+        """question=None 表示 state 里没有 user 消息；intent 是 understand 的判定。"""
         if refs is None:
             refs = ["query_calibration#last"]
         msgs = []
@@ -310,6 +310,7 @@ class WriteIntentGuardTest(unittest.TestCase):
             "device_ids": [device],
             "device_id": device,
             "turn": 1,
+            "intent": intent,
             # 建单前会核对引用，所以这里必须给一条真实证据。
             # 不给的话，测的就不是"写意图闸放行"，而是"引用校验拦截"——两件事混在一起。
             "evidence": [{"tool": "query_calibration",
@@ -368,6 +369,31 @@ class WriteIntentGuardTest(unittest.TestCase):
         self.assertIn("error", res)
         self.assertEqual(res.get("blocked_by"), "write_intent")
         self.assertEqual(self.calls, [])
+
+    def test_action_intent_covers_split_verb_phrasing(self):
+        """动宾分离的合法建单要求不该被词表吃掉。
+
+        2026-11-19 W1 实测："再帮我给 CX-101 建一次刚才那个换光源的工单"
+        —— 词表只认"建单/建工单"这类连写，整句一个都没命中，
+        而 understand 判的 intent 正是 action（它的 prompt 里 action 的例子
+        原句就是"再建一次刚才那个单"）。闸门自己重算一遍，把一次合法建单拦成
+        "用户没有要求建单"，用例判 idem_miss。
+
+        语义归模型、约束归规则：这里验的是"许可"来自模型判定。
+        """
+        res, out = self._run(
+            "再帮我给 CX-101 建一次刚才那个换光源的工单", intent="action")
+        self.assertNotIn("error", res)
+        self.assertEqual(len(self.calls), 1, "intent=action 且证据成立，应当落到 QMS")
+
+    def test_action_intent_does_not_bypass_ref_check(self):
+        """intent 只给许可，不给豁免：引用还是假的，照样拦在建单之前。"""
+        res, _ = self._run(
+            "再帮我给 CX-101 建一次刚才那个换光源的工单",
+            intent="action", refs=["1号工位误判率57.6%"])
+        self.assertIn("error", res)
+        self.assertIn("证据引用", res["error"])
+        self.assertEqual(self.calls, [], "引用对不上就不能落到 QMS")
 
 
 class IdemKeyTest(unittest.TestCase):
@@ -3384,6 +3410,69 @@ class FixtureStepsRangeTest(unittest.TestCase):
         self.assertTrue(_steps_ok(0, 8, 8))
         # 下界照守
         self.assertFalse(_steps_ok(4, None, 3))
+
+
+class FixtureDedupedContractTest(unittest.TestCase):
+    """幂等断言不许依赖跨试次的状态残留。
+
+    2026-11-19 实测：库里挂着 7 张历史工单，其中 CX-101+light_degradation 有三张、
+    一张仍是"待处理"。原先那条独立用例 W2（"再帮我建一次**刚才那个**"）没有会话
+    上下文，它拿到的 deduped=True 来自 11-15 的残留——判据判通过，但那个绿不是
+    这一轮做对了。干净库首跑则反向出错：模型建了新单、返回 deduped=False → 判失败，
+    而那一刻它的行为其实是对的（现场确实没有重复单）。
+
+    依据 Anthropic《Demystifying evals for AI agents》："Each trial should be
+    'isolated' by starting from a clean environment … Shared state can also
+    artificially inflate performance."
+
+    修法是把 W1/W2 合成一条多轮用例：第 2 轮的 deduped=True 必然来自本 trial 的第 1
+    轮，同一条断言同时证明"真的建了新单"和"没有重复建"。这里把这条原则固化成断言，
+    防止以后又加一条独立单轮用例来期望 dedup。
+    """
+
+    def test_expectation_is_a_real_bool(self):
+        """"false" 这种字符串会让 `got is want` 永远不相等。
+
+        judge 里 `want` 直接进 `is` 比较，所以它必须真的是 bool；字符串 "False"
+        肉眼看着像"要求新建"，实际永远判红，而且没有任何报错。
+        """
+        from eval import trajectories as T
+        for c in T.TRAJECTORIES:
+            if "expect_deduped" in c:
+                self.assertIsInstance(
+                    c["expect_deduped"], bool,
+                    f"{c['id']} 的 expect_deduped 必须是 bool，"
+                    f"现在写的是 {c['expect_deduped']!r}",
+                )
+
+    def test_dedup_true_requires_a_prior_turn(self):
+        """要求"去重"的用例必须自己先建出那张单。
+
+        单轮用例拿到的 deduped=True 只可能来自数据库里上一次运行的残留。
+        """
+        from eval import trajectories as T
+        for c in T.TRAJECTORIES:
+            if c.get("expect_deduped") is True:
+                turns = c.get("turns") or []
+                self.assertGreaterEqual(
+                    len(turns), 2,
+                    f"{c['id']} 期望 deduped=True，但没有前一轮来建出那张单："
+                    "这个绿只能来自跨试次的残留",
+                )
+
+    def test_w1_builds_then_dedupes(self):
+        """W1 是"建单 → 再建一次"，两轮都在同一条用例里。"""
+        from eval import trajectories as T
+        cases = {c["id"]: c for c in T.TRAJECTORIES}
+        w1 = cases["W1"]
+        self.assertIs(w1.get("expect_deduped"), True)
+        self.assertEqual(len(w1.get("turns") or []), 2)
+        # judge 拿到的是最后一轮的 state，input 必须与之一致
+        self.assertEqual(w1["input"], w1["turns"][-1])
+        # 两轮必须指向同一台设备，否则第 2 轮撞不上第 1 轮建的那张单，
+        # 这条用例就退化成"两次都建新单"，dedup 断言必然失败。
+        for t in w1["turns"]:
+            self.assertIn("CX-101", t)
 
 
 class DocConflictMultiParamTest(unittest.TestCase):

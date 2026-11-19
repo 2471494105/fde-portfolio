@@ -231,9 +231,17 @@ def judge(traj, state):
     # 只找 order_id + deduped 的话，第一种会被报成"未命中幂等"，
     # 而 W2 的实际情形正是这样：模型发现 QMS 挂了、如实报告、
     # 还指出"已有两张同类工单不必重复新建"，行为完全正确却被判失败。
+    #
+    # 三态而不是"只认 True"：写成 expect_deduped=False 却什么都不判，
+    # 等于配置写了、判据不执行——那正是单向评测的入口
+    # （Anthropic《Demystifying evals for AI agents》："Test both the cases where
+    # a behavior *should* occur and where it *shouldn't*. One-sided evals create
+    # one-sided optimization."）。当前用例里只有 W1 的第二轮用 True，它靠
+    # "库里已有第一轮那张单"证明第一轮真的建了新单；False 留给"要求真建新单"的场景。
     deduped_ok = True
     deduped_env = ""
-    if traj.get("expect_deduped"):
+    if "expect_deduped" in traj:
+        want = traj["expect_deduped"]
         results = [
             _result_dict(e.get("result")) for e in state.get("evidence", [])
             if (_result_dict(e.get("result")) or {}).get("order_id")
@@ -247,7 +255,10 @@ def judge(traj, state):
             # 一次都没连上：幂等这项无从验证。标灰——不计失败，也不冒充通过。
             deduped_env = str(errs[-1])[:120]
         else:
-            deduped_ok = bool(results) and results[-1].get("deduped") is True
+            # 取最后一次建单的返回。没有建单记录就是 None——既不是"新建"
+            # 也不是"去重"，两种期望都该失败。
+            got = results[-1].get("deduped") if results else None
+            deduped_ok = got is want
 
     # 意图层：考的是"有没有听懂用户在问什么"，不是"诊断得对不对"
     intent_expect = traj.get("expect_intent")
@@ -517,11 +528,12 @@ def main():
         f"code_hash={meta['code_hash']}  cases_hash={meta['cases_hash']}\n"
     )
 
-    # 建单类共享 mock QMS 的外部状态：W2 考的是"再建一次应返回已存在"，
-    # 与 W1 并发会交叉，幂等结果不可信。强制串行，且排在并发批之后。
-    # 多轮类也必须串行，但原因不同：它们要共用 checkpointer（见 one()），
-    # 而 checkpointer 是进程内单例、只有一条连接，并发写会直接报
-    # "another command is already in progress"。
+    # 建单类共享 mock QMS 的外部状态（同一张 work_orders 表）：并发跑会让
+    # 这些用例的建单结果彼此交叉，幂等判定不可信。多轮类也必须串行，但原因
+    # 不同：它们要共用 checkpointer（见 one()），而 checkpointer 是进程内
+    # 单例、只有一条连接，并发写会直接报 "another command is already in
+    # progress"。W1 同时命中两类——它是一条"建单 + 再建一次应去重"的多轮用例。
+    # 表本身在每个全量开始前由 mock_qms/reset.py 清空，保证这次跑的起点确定。
     serial = [t for t in targets if t["type"] == "建单" or t.get("turns")]
     parallel = [t for t in targets if not (t["type"] == "建单" or t.get("turns"))]
 
@@ -612,6 +624,12 @@ def main():
                 }
                 with (ROOT / "eval" / "history.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                # 通过的用例顺手存一份参考解。以后改判据时，这些"已知的好答案"
+                # 会被重新判一遍——如果它们红了，问题在判据不在模型。
+                # 依据：Anthropic《Demystifying evals》Step 2 的 reference solution。
+                if r.get("semantic_ok"):
+                    from eval import reference as _ref
+                    _ref.save_reference(traj, state, meta)
             except Exception:
                 pass  # 落盘失败不能中断评测
 

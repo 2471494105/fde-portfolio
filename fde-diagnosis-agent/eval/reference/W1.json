@@ -1,0 +1,340 @@
+{
+  "id": "W1",
+  "saved_at": "2026-11-19 15:49:49",
+  "traj_fp": "c3bf198375cd",
+  "traj": {
+    "id": "W1",
+    "expect_intent": "action",
+    "type": "建单",
+    "turns": [
+      "CX-101 光源累计已经 8620 小时超了额定寿命，1号工位误判 58%，文档冲突的事先放一边，直接按 65 亮度给我建单让设备科换灯",
+      "再帮我给 CX-101 建一次刚才那个换光源的工单"
+    ],
+    "input": "再帮我给 CX-101 建一次刚才那个换光源的工单",
+    "expect_tools": [
+      "create_work_order"
+    ],
+    "forbid_tools": [],
+    "expect_group_by": [],
+    "final_keywords": [
+      "工单",
+      "WO-"
+    ],
+    "expect_ask": false,
+    "expect_deduped": true,
+    "steps_range": [
+      1,
+      null
+    ]
+  },
+  "state": {
+    "tool_names": [
+      "query_device_profile",
+      "query_light_usage",
+      "query_defect_log",
+      "create_work_order"
+    ],
+    "final": {
+      "conclusion": "本次没有新建工单：CX-101 的光源衰减故障已有一张未关闭的工单 WO-20261119-001，系统按去重规则返回了该工单（状态待处理，已分派设备科）",
+      "claims": [
+        {
+          "text": "光源累计点亮 8620 小时",
+          "value": 8620,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#cumulative_hours"
+        },
+        {
+          "text": "额定寿命 8000 小时",
+          "value": 8000,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#rated_life_hours"
+        },
+        {
+          "text": "已超额定寿命 620 小时，剩余寿命 0 小时",
+          "value": 620,
+          "unit": "小时",
+          "ref": "query_light_usage{device_id=CX-101}#over_life_hours"
+        },
+        {
+          "text": "当前亮度设定为 65",
+          "value": 65,
+          "unit": "无",
+          "ref": "query_light_usage{device_id=CX-101}#brightness_set"
+        },
+        {
+          "text": "亮度设定逐次下调",
+          "ref": "query_light_usage{device_id=CX-101}#brightness_history",
+          "items": [
+            {
+              "key": "2025-03-12",
+              "field": "value",
+              "value": 85
+            },
+            {
+              "key": "2026-09-15",
+              "field": "value",
+              "value": 80
+            },
+            {
+              "key": "2026-10-20",
+              "field": "value",
+              "value": 65
+            }
+          ]
+        },
+        {
+          "text": "1号工位过杀率 0.5882（20/34），你说的 58% 与工具值基本吻合",
+          "value": 0.5882,
+          "unit": "无",
+          "ref": "query_defect_log{device_id=CX-101,group_by=station}#groups[0].rate"
+        },
+        {
+          "text": "3号工位过杀率 0.1064（5/47），明显低于 1 号工位",
+          "value": 0.1064,
+          "unit": "无",
+          "ref": "query_defect_log{device_id=CX-101,group_by=station}#groups[1].rate"
+        },
+        {
+          "text": "2号工位过杀率 0.0625（2/32）",
+          "value": 0.0625,
+          "unit": "无",
+          "ref": "query_defect_log{device_id=CX-101,group_by=station}#groups[2].rate"
+        },
+        {
+          "text": "窗口内误判共 27 条，整体误判率 0.2389",
+          "value": 27,
+          "unit": "条",
+          "ref": "query_defect_log{device_id=CX-101,group_by=station}#false_positive_count"
+        },
+        {
+          "text": "窗口内总记录 113 条",
+          "value": 113,
+          "unit": "条",
+          "ref": "query_defect_log{device_id=CX-101,group_by=station}#total"
+        },
+        {
+          "text": "本机保养周期设定 90 天",
+          "value": 90,
+          "unit": "天",
+          "ref": "query_device_profile{device_id=CX-101}#maintenance_cycle_days"
+        },
+        {
+          "text": "误判日志共 200 条，最近一条在 2026-11-14",
+          "value": 200,
+          "unit": "条",
+          "ref": "query_device_profile{device_id=CX-101}#log_count"
+        },
+        {
+          "text": "超寿命亮度衰减后误判率通常上升 10%-25%",
+          "value": 10,
+          "value_max": 25,
+          "unit": "%",
+          "ref": "query_light_usage{device_id=CX-101}#degradation_estimate"
+        }
+      ],
+      "advice": [
+        "不需要重复建单：已有 WO-20261119-001（状态待处理，设备科）覆盖「更换 CX-101 光源 CA-DC21E」这一根因分类，你要的动作就在这张单里",
+        "若需要追加或修改动作，请在这张未关闭工单上补充，而不是新建；工单关闭后若再现同类故障，才能正常开新单",
+        "提醒：亮度 65 目前已是设备实际设定，工单写「维持 65」是保持现状；厂内 SOP WI-QC-015 2.1 为 65、厂商手册 3.2 出厂标准为 80，两处取值不一致的口径仍待工艺确认",
+        "换灯后必须按厂商手册 4.1 重新标定，并复采 50 件标准样件验证判定稳定性",
+        "换灯后仍要复测 1 号工位过杀率，若依旧显著高于 3 号工位（当前 0.5882 vs 0.1064），需单独排查该工位镜头与光源对应关系"
+      ]
+    },
+    "final_text": "本次没有新建工单：CX-101 的光源衰减故障已有一张未关闭的工单 WO-20261119-001，系统按去重规则返回了该工单（状态待处理，已分派设备科）\n- 光源累计点亮 8620 小时[query_light_usage{device_id=CX-101}]\n- 额定寿命 8000 小时[query_light_usage{device_id=CX-101}]\n- 已超额定寿命 620 小时，剩余寿命 0 小时[query_light_usage{device_id=CX-101}]\n- 当前亮度设定为 65[query_light_usage{device_id=CX-101}]\n- 亮度设定逐次下调[query_light_usage{device_id=CX-101}]\n- 1号工位过杀率 0.5882（20/34），你说的 58% 与工具值基本吻合[query_defect_log{device_id=CX-101,group_by=station}]\n- 3号工位过杀率 0.1064（5/47），明显低于 1 号工位[query_defect_log{device_id=CX-101,group_by=station}]\n- 2号工位过杀率 0.0625（2/32）[query_defect_log{device_id=CX-101,group_by=station}]\n- 窗口内误判共 27 条，整体误判率 0.2389[query_defect_log{device_id=CX-101,group_by=station}]\n- 窗口内总记录 113 条[query_defect_log{device_id=CX-101,group_by=station}]\n- 本机保养周期设定 90 天[query_device_profile{device_id=CX-101}]\n- 误判日志共 200 条，最近一条在 2026-11-14[query_device_profile{device_id=CX-101}]\n- 超寿命亮度衰减后误判率通常上升 10%-25%[query_light_usage{device_id=CX-101}]\n* 不需要重复建单：已有 WO-20261119-001（状态待处理，设备科）覆盖「更换 CX-101 光源 CA-DC21E」这一根因分类，你要的动作就在这张单里\n* 若需要追加或修改动作，请在这张未关闭工单上补充，而不是新建；工单关闭后若再现同类故障，才能正常开新单\n* 提醒：亮度 65 目前已是设备实际设定，工单写「维持 65」是保持现状；厂内 SOP WI-QC-015 2.1 为 65、厂商手册 3.2 出厂标准为 80，两处取值不一致的口径仍待工艺确认\n* 换灯后必须按厂商手册 4.1 重新标定，并复采 50 件标准样件验证判定稳定性\n* 换灯后仍要复测 1 号工位过杀率，若依旧显著高于 3 号工位（当前 0.5882 vs 0.1064），需单独排查该工位镜头与光源对应关系",
+    "steps": 4,
+    "blocked": [],
+    "misquoted": [],
+    "cite_stats": {
+      "qty": 13,
+      "pct": 1,
+      "cited_ok": 13,
+      "cited_path": 13,
+      "cite_oob": 0,
+      "path_ok": 13,
+      "path_bad": 0,
+      "path_miss": 0,
+      "json_bad": 0,
+      "unsourced": 0,
+      "ref_bad": 0,
+      "cite_cut": 0,
+      "json_fixed": 0,
+      "derived_ok": 0,
+      "derived_bad": 0,
+      "range_ok": 0,
+      "range_bad": 0,
+      "ref_ambiguous": 0,
+      "multi_ok": 1,
+      "multi_bad": 0,
+      "qual_ok": 0,
+      "qual_bad": 0,
+      "qual_unsourced": 0,
+      "quote_ok": 0,
+      "quote_bad": 0,
+      "bare_conclusion": 0,
+      "svc_fail": 0,
+      "ev_mismatch": 0,
+      "cited": 13,
+      "ev": 10
+    },
+    "stop_reason": "enough",
+    "check_retry": 0,
+    "unknown": [],
+    "evidence": [
+      {
+        "tool": "query_device_profile",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"2025-03-12 00:00:00\", \"maintenance_cycle_days\": 90, \"log_count\": 200, \"latest_log_at\": \"2026-11-14 17:19:52\"}",
+        "truncated": false,
+        "ev_no": 1,
+        "turn": 1
+      },
+      {
+        "tool": "query_light_usage",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_light_usage{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 8620, \"rated_life_hours\": 8000, \"over_life_hours\": 620, \"remaining_hours\": 0, \"brightness_set\": 65, \"last_replaced_at\": \"2024-09-20 00:00:00\", \"brightness_history\": [{\"ts\": \"2025-03-12 09:00:00\", \"value\": 85}, {\"ts\": \"2026-09-15 14:20:00\", \"value\": 80}, {\"ts\": \"2026-10-20 10:05:00\", \"value\": 65}], \"degradation_estimate\": \"已超额定寿命，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源\"}",
+        "truncated": false,
+        "ev_no": 2,
+        "turn": 1
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-101",
+          "group_by": "station,batch,day",
+          "time_from": "2026-04-01"
+        },
+        "sig": "device_id=CX-101,group_by=station,batch,day,time_from=2026-04-01",
+        "result": "[query_defect_log{device_id=CX-101,group_by=station,batch,day,time_from=2026-04-01}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-04-01 00:00:00\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"station,batch,day\", \"total\": 200, \"false_positive_count\": 46, \"false_positive_rate\": 0.23, \"groups\": [{\"key\": \"1号工位\", \"count\": 59, \"false_positive\": 34, \"rate\": 0.5763}, {\"key\": \"3号工位\", \"count\": 79, \"false_positive\": 9, \"rate\": 0.1139}, \"...共 3 项，仅送前 2 项\"], \"samples\": [{\"ts\": \"2026-11-07 20:19:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.93, \"batch\": \"B20261104\"}, {\"ts\": \"2026-11-05 19:16:53\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.928, \"batch\": \"B20261100\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"station\": [{\"key\": \"1号工位\", \"count\": \"59\", \"false_positive\": \"34\", \"rate\": \"0.5763\"}, {\"key\": \"3号工位\", \"count\": \"79\", \"false_positive\": \"9\", \"rate\": \"0.1139\"}, \"...共 3 项，仅送前 2 项\"], \"batch\": [{\"key\": \"B20261104\", \"count\": \"19\", \"false_positive\": \"7\", \"rate\": \"0.3684\"}, {\"key\": \"B20261100\", \"count\": \"25\", \"false_positive\": \"6\", \"rate\": \"0.24\"}, \"...共 10 项，仅送前 2 项\"], \"day\": [{\"key\": \"2026-11-09 00:00:00\", \"count\": \"21\", \"false_positive\": \"5\", \"rate\": \"0.2381\"}, {\"key\": \"2026-11-05 00:00:00\", \"count\": \"20\", \"false_positive\": \"5\", \"rate\": \"0.25\"}, \"...共 14 项，仅送前 2 项\"]}}",
+        "truncated": false,
+        "ev_no": 3,
+        "turn": 1
+      },
+      {
+        "tool": "create_work_order",
+        "args": {
+          "device_id": "CX-101",
+          "root_cause": "3号线CX-101光源CA-DC21E累计点亮8620小时已超额定寿命8000小时（超出620小时），亮度衰减导致1号工位误判率升至57.63%",
+          "root_cause_code": "light_degradation",
+          "severity": "high",
+          "actions": [
+            "设备科更换 CA-DC21E 光源（累计 8620 小时，超额定 8000 小时）",
+            "换灯后按规程重新标定 CX-101，并复测 1 号工位误判率",
+            "换灯后观察亮度设定是否需要从当前 65 回调，暂不调整其他参数",
+            "把 65 亮度设定与文档冲突项一并留痕，待工艺确认口径后再定标准值"
+          ],
+          "evidence_refs": [
+            "query_light_usage#cumulative_hours",
+            "query_light_usage#rated_life_hours",
+            "query_light_usage#over_life_hours",
+            "query_light_usage#brightness_history",
+            "query_defect_log{group_by=station,batch,day}#by_group.station[0].rate"
+          ]
+        },
+        "sig": "actions=['设备科更换 CA-DC21E 光源（累计 8620 小时，超额定 8000 小时）', '换灯后按规程重新标定 CX-101，并复测 1 …",
+        "result": "[create_work_order{actions=['设备科更换 CA-DC21E 光源（累计 8620 小时，超额定 8000 小时）', '换灯后按规程重新标定 CX-101，并复测 1 …}] {\"order_id\": \"WO-20261119-001\", \"status\": \"待处理\", \"deduped\": false, \"assignee_group\": \"设备科\", \"message\": \"已建单，分派至设备科\"}",
+        "truncated": false,
+        "ev_no": 4,
+        "turn": 1
+      },
+      {
+        "tool": "check_doc_conflict",
+        "args": {
+          "param_name": "光源亮度设定,光源额定寿命(小时)"
+        },
+        "sig": "param_name=光源亮度设定,光源额定寿命(小时)",
+        "result": "[check_doc_conflict{param_name=光源亮度设定,光源额定寿命(小时)}] {\"param_name\": \"光源亮度设定,光源额定寿命(小时)\", \"has_conflict\": true, \"checked\": [\"光源亮度设定\", \"光源额定寿命(小时)\"], \"conflict_params\": [\"光源亮度设定\"], \"by_param\": {\"光源亮度设定\": {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [\"{'source': 'CV-X系列视觉检测系统操作手册（厂商版·摘录）', 'doc_type': '厂商手册', 'section': '3.2 光源亮度设定', 'value': 80}\", \"{'source': '视觉检测作业指导书 WI-QC-015', 'doc_type': '厂内SOP', 'section': '2.1 光源亮度设定', 'value': 65}\", \"{'source': '现场调试记录 2026-09', 'doc_type': '调试记录', 'section': '2026-09-15 夜班误判处置', 'value': 80}\", \"{'source': '现场调试记录 2026-09', 'doc_type': '调试记录', 'section': '2026-10-20 光源二次调整', 'value': 65}\"], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突，两类文档取值不同：厂商手册=80、厂内SOP=65、调试记录=80、调试记录=65。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}, \"光源额定寿命(小时)\": {\"param_name\": \"光源额定寿命(小时)\", \"has_conflict\": false, \"message\": \"该参数名未在任何文档中出现，请改用可用参数名重查\", \"available_params\": [\"传送带速度(m/s)\", \"光源亮度设定\", \"光源更换周期(小时)\", \"判定置信度阈值\", \"日误判率上报阈值(%)\", \"标定允许漂移(mm)\", \"标定周期(天)\", \"相机曝光(us)\", \"...共 11 项，仅送前 8 项\"], \"suggestions\": []}}, \"note\": \"共查 2 个参数，其中 1 个存在冲突：光源亮度设定。取证时不要自行挑选，须说明冲突并请人工确认以哪份为准。\", \"unresolved_params\": [\"光源额定寿命(小时)\"]}",
+        "truncated": false,
+        "ev_no": 5,
+        "turn": 1
+      },
+      {
+        "tool": "search_manual",
+        "args": {
+          "query": "光源亮度设定标准值与标定周期要求",
+          "top_k": 4
+        },
+        "sig": "query=光源亮度设定标准值与标定周期要求,top_k=4",
+        "result": "[search_manual{query=光源亮度设定标准值与标定周期要求,top_k=4}] {\"query\": \"光源亮度设定标准值与标定周期要求\", \"chunks\": [{\"text\": \"2.1 光源亮度设定\\n为降低能耗并延长光源寿命，现场将光源亮度设定为 65。夜班环境光较弱，该设定下图像对比度仍可满足判定要求。若出现批量误判，可临时上调至 75。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"score\": 0.8511}, {\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.8156}, {\"text\": \"E-201 光源亮度低于设定值\\n告警码 E-201，等级 warning。含义：光源亮度低于设定值。常见原因：光源老化、驱动电流不足。处置：先测量实际亮度与设定值偏差，再检查光源驱动电流；若偏差由衰减引起，需评估光源累计点亮时长，按保养计划安排更换，不要仅靠上调亮度设定压住告警。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-201 光源亮度低于设定值\", \"score\": 0.8139}, {\"text\": \"3.2 光源亮度设定\\n光源亮度出厂标准设定为 80（可调范围 0-100）。亮度低于 70 时，暗色工件的边缘对比度下降约 15%，建议同步调整曝光或增益。亮度过高会导致高反光表面过曝，出现伪缺陷。调整亮度后应重新采集 50 件标准样件验证判定稳定性。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"score\": 0.8135}]}",
+        "truncated": false,
+        "ev_no": 6,
+        "turn": 1
+      },
+      {
+        "tool": "query_device_profile",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_device_profile{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"line\": \"3号线\", \"station\": \"1-3号工位\", \"camera_model\": \"In-Sight 2801\", \"lens_model\": \"16mm\", \"light_model\": \"CA-DC21E\", \"install_date\": \"2025-03-12 00:00:00\", \"maintenance_cycle_days\": 90, \"log_count\": 200, \"latest_log_at\": \"2026-11-14 17:19:52\"}",
+        "truncated": false,
+        "ev_no": 7,
+        "turn": 2
+      },
+      {
+        "tool": "query_light_usage",
+        "args": {
+          "device_id": "CX-101"
+        },
+        "sig": "device_id=CX-101",
+        "result": "[query_light_usage{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 8620, \"rated_life_hours\": 8000, \"over_life_hours\": 620, \"remaining_hours\": 0, \"brightness_set\": 65, \"last_replaced_at\": \"2024-09-20 00:00:00\", \"brightness_history\": [{\"ts\": \"2025-03-12 09:00:00\", \"value\": 85}, {\"ts\": \"2026-09-15 14:20:00\", \"value\": 80}, {\"ts\": \"2026-10-20 10:05:00\", \"value\": 65}], \"degradation_estimate\": \"已超额定寿命，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源\"}",
+        "truncated": false,
+        "ev_no": 8,
+        "turn": 2
+      },
+      {
+        "tool": "query_defect_log",
+        "args": {
+          "device_id": "CX-101",
+          "group_by": "station"
+        },
+        "sig": "device_id=CX-101,group_by=station",
+        "result": "[query_defect_log{device_id=CX-101,group_by=station}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"time_from\": \"2026-11-07 17:19:52\", \"time_to\": \"2026-11-14 17:19:52\", \"group_by\": \"station\", \"total\": 113, \"false_positive_count\": 27, \"false_positive_rate\": 0.2389, \"groups\": [{\"key\": \"1号工位\", \"count\": 34, \"false_positive\": 20, \"rate\": 0.5882}, {\"key\": \"3号工位\", \"count\": 47, \"false_positive\": 5, \"rate\": 0.1064}, {\"key\": \"2号工位\", \"count\": 32, \"false_positive\": 2, \"rate\": 0.0625}], \"samples\": [{\"ts\": \"2026-11-07 20:19:55\", \"station\": \"3号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.93, \"batch\": \"B20261104\"}, {\"ts\": \"2026-11-10 07:02:02\", \"station\": \"1号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.914, \"batch\": \"B20261107\"}, {\"ts\": \"2026-11-11 22:39:56\", \"station\": \"3号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.898, \"batch\": \"B20261109\"}, {\"ts\": \"2026-11-07 21:30:41\", \"station\": \"1号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.884, \"batch\": \"B20261105\"}, {\"ts\": \"2026-11-13 00:15:06\", \"station\": \"1号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.882, \"batch\": \"B20261103\"}]}",
+        "truncated": false,
+        "ev_no": 9,
+        "turn": 2
+      },
+      {
+        "tool": "create_work_order",
+        "args": {
+          "device_id": "CX-101",
+          "root_cause": "光源累计点亮 8620 小时已超额定寿命 8000 小时、亮度衰减导致 1 号工位过杀集中",
+          "root_cause_code": "light_degradation",
+          "severity": "high",
+          "actions": [
+            "更换 CX-101 光源（型号 CA-DC21E），覆盖 1-3 号工位",
+            "换灯后按厂商手册 4.1 重新标定",
+            "换灯后按厂内 SOP WI-QC-015 2.1 将亮度设定维持 65，并复采 50 件标准样件验证判定稳定性",
+            "复测 1 号工位过杀率，若仍偏高单独排查该工位镜头"
+          ],
+          "evidence_refs": [
+            "query_light_usage{device_id=CX-101}#cumulative_hours",
+            "query_light_usage{device_id=CX-101}#over_life_hours",
+            "query_light_usage{device_id=CX-101}#brightness_set",
+            "query_defect_log{device_id=CX-101,group_by=station}#groups[0].rate",
+            "query_device_profile{device_id=CX-101}#maintenance_cycle_days"
+          ]
+        },
+        "sig": "actions=['更换 CX-101 光源（型号 CA-DC21E），覆盖 1-3 号工位', '换灯后按厂商手册 4.1 重新标定', '换灯后按厂内 S…",
+        "result": "[create_work_order{actions=['更换 CX-101 光源（型号 CA-DC21E），覆盖 1-3 号工位', '换灯后按厂商手册 4.1 重新标定', '换灯后按厂内 S…}] {\"order_id\": \"WO-20261119-001\", \"status\": \"待处理\", \"deduped\": true, \"assignee_group\": \"设备科\", \"message\": \"该设备这类故障已有一张未关闭的工单，本次未新建，返回原来那张\"}",
+        "truncated": false,
+        "ev_no": 10,
+        "turn": 2
+      }
+    ],
+    "intent": "action",
+    "intent_conf": 0.95,
+    "route_by": "model",
+    "model_intent": "action"
+  },
+  "meta": {
+    "commit": "908997d",
+    "code_hash": "b3020b714c7a",
+    "cases_hash": "1c088b9a1209"
+  }
+}

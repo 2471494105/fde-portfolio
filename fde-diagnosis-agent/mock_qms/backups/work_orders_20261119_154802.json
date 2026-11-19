@@ -1,0 +1,15 @@
+[
+  {
+    "order_id": "WO-20261119-001",
+    "device_id": "CX-101",
+    "root_cause": "光源累计点亮 8620 小时、超额定寿命 620 小时，亮度衰减导致过杀集中在 1号工位",
+    "severity": "high",
+    "actions": "[\"断电后更换 1号工位光源 CA-DC21E 新灯，记录更换日期与旧灯累计点亮时数 8620 小时\", \"换灯后亮度先按厂内SOP WI-QC-015 的 65 复测（厂商手册口径为 80，两者冲突需人工确认后再锁定）\", \"换灯后重新标定 1号工位相机并复测，确认 1号工位误判率由 58.82% 回落至 3号工位 10.64% 的量级\", \"复测通过后关闭工单，把新灯更换日期、亮度设定与标定结果记入设备档案\"]",
+    "evidence_refs": "[\"query_light_usage#cumulative_hours\", \"query_light_usage#rated_life_hours\", \"query_light_usage#over_life_hours\", \"query_light_usage#brightness_history\", \"query_defect_log{group_by=station,defect_type,batch}#by_group.station[0].rate\", \"query_defect_log{group_by=station,defect_type,batch}#by_group.station[1].rate\", \"query_defect_log{group_by=station,defect_type,batch}#by_group.batch[0].rate\"]",
+    "idempotency_key": "3e90fea048e2d78caf82a75c819c9954",
+    "status": "待处理",
+    "assignee_group": "设备科",
+    "created_at": "2026-11-19 15:45:47.018390",
+    "root_cause_code": "light_degradation"
+  }
+]

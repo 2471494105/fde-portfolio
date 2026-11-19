@@ -1,0 +1,15 @@
+[
+  {
+    "order_id": "WO-20261119-001",
+    "device_id": "CX-101",
+    "root_cause": "光源累计点亮 8620 小时已超额定寿命 8000 小时，亮度衰减导致 1 号工位误判集中",
+    "severity": "high",
+    "actions": "[\"设备科更换 CA-DC21E 光源，更换后按 65 亮度设定复归\", \"更换后对 1 号工位重新标定并复测误判率\", \"复测确认 1 号工位误判率回落后再恢复满产\"]",
+    "evidence_refs": "[\"query_light_usage#over_life_hours\", \"query_light_usage#cumulative_hours\", \"query_defect_log{group_by=station,defect_type,batch}#groups[0].rate\", \"query_defect_log{group_by=station,defect_type,batch}#groups[1].rate\"]",
+    "idempotency_key": "3e90fea048e2d78caf82a75c819c9954",
+    "status": "待处理",
+    "assignee_group": "设备科",
+    "created_at": "2026-11-19 15:41:37.919070",
+    "root_cause_code": "light_degradation"
+  }
+]

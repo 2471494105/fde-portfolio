@@ -419,6 +419,52 @@ class MultiDimGroupByTest(unittest.TestCase):
         self.assertIsNone(diagnosis._parse_dims("bad"))
 
 
+class SigMatchTest(unittest.TestCase):
+    """调用指纹的解析与匹配（2026-11-19）。
+
+    背景：group_by 支持多维后，值里的逗号与参数分隔符是同一个字符。
+    `{group_by=station,batch}` 既可能是"一个多维参数"，也可能被读成
+    "group_by=station + 一个没有键的 batch"。整串等值比对下，模型抄的自然
+    写法永远匹配不上，指纹退化成"同工具全候选"——等于没写。
+    修法：没有 "=" 的片段并回上一个键，并改成子集匹配。
+    """
+
+    def test_value_comma_is_merged_into_previous_key(self):
+        pairs = nodes._split_sig("device_id=CX-102,group_by=station,batch")
+        self.assertEqual(pairs, {"device_id": "CX-102", "group_by": "station+batch"})
+
+    def test_two_pairs_are_not_merged(self):
+        self.assertEqual(nodes._split_sig("a=1,b=2"), {"a": "1", "b": "2"})
+
+    def test_semicolon_also_separates(self):
+        self.assertEqual(nodes._split_sig("a=1;b=2"), {"a": "1", "b": "2"})
+
+    def test_model_omits_device_id(self):
+        """模型常只抄 group_by，候选里还有 device_id —— 应当匹配成功。"""
+        self.assertTrue(nodes._sig_matches(
+            "group_by=station,batch",
+            "device_id=CX-102,group_by=station,batch"))
+
+    def test_comma_and_plus_are_equivalent(self):
+        self.assertTrue(nodes._sig_matches(
+            "group_by=station+batch",
+            "device_id=CX-102,group_by=station,batch"))
+
+    def test_different_value_does_not_match(self):
+        """单维 station 不能匹配到 station+batch —— 前缀不是子集。"""
+        self.assertFalse(nodes._sig_matches(
+            "group_by=station",
+            "device_id=CX-102,group_by=station,batch"))
+
+    def test_empty_sig_never_matches(self):
+        self.assertFalse(nodes._sig_matches("", "device_id=CX-102"))
+
+    def test_extra_candidate_keys_are_ok(self):
+        self.assertTrue(nodes._sig_matches(
+            "group_by=station,batch",
+            "group_by=station,batch,time_from=2026-10-14"))
+
+
 class MultiValueClaimTest(unittest.TestCase):
     """多值 claim：一条 claim 里装 N 个「标识 + 数值」对。
 

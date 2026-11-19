@@ -1181,6 +1181,47 @@ def _call_sig(args):
     return sig if len(sig) <= 80 else sig[:79] + "…"
 
 
+def _split_sig(sig):
+    """把 `device_id=CX-102,group_by=station,batch` 拆成键值对。
+
+    不能直接按逗号 split：group_by 从 2026-11-19 起支持多维（"station,batch"），
+    值内的逗号和参数分隔符是同一个字符。规则是——**没有 "=" 的片段并回上一个
+    键的值**。于是 `group_by=station,batch` 得到 {"group_by": "station+batch"}，
+    而 `a=1,b=2` 仍是两个键。
+    """
+    pairs, key = {}, None
+    for tok in re.split(r"[,;]", str(sig or "")):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "=" in tok:
+            key, val = tok.split("=", 1)
+            pairs[key.strip()] = val.strip()
+        elif key:
+            pairs[key] = pairs[key] + "+" + tok
+    return pairs
+
+
+def _norm_sig_val(v):
+    """逗号与加号视为等价：模型可能把多维值写成 station,batch 或 station+batch。"""
+    return str(v).replace(",", "+").replace(" ", "")
+
+
+def _sig_matches(model_sig, cand_sig):
+    """模型写的指纹是否被候选覆盖（子集匹配，值归一）。
+
+    用子集而不是全等：模型常只抄最有区分力的那个参数（如只写 group_by），
+    全等比会一律不匹配、退化成"同工具全候选"，指纹等于白写。
+    """
+    m, c = _split_sig(model_sig), _split_sig(cand_sig)
+    if not m:
+        return False
+    for k, v in m.items():
+        if k not in c or _norm_sig_val(c[k]) != _norm_sig_val(v):
+            return False
+    return True
+
+
 def _payload(res, limit=1600, tool=None, sig=""):
     """统一出口：模型看到的文本 与 evidence 存的，必须是同一份。
 
@@ -1515,7 +1556,7 @@ def _unresolvable_refs(refs, state):
         # 指纹只收窄不判死，理由与 _verify_claims 一致：
         # 匹配不上可能是参数抄错（真错，后面的路径校验会抓住），也可能是被裁出窗口。
         if sig:
-            narrowed = [c for c in cands if c.get("sig") == sig]
+            narrowed = [c for c in cands if _sig_matches(sig, c.get("sig"))]
             if narrowed:
                 cands = narrowed
 
@@ -1930,10 +1971,10 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted, fails=None
             _fail("tool_unknown", f"{text}（出处写了不存在的工具名 {tool}）")
         return
 
-    # 指纹只收窄不排除，理由同 _verify_claims：匹配不上可能是被裁，可能是抄错参数，
+    # 指纹只收窄不排除：匹配不上可能是被裁，可能是抄错参数，
     # 两种情况都不该在这里判死；抄错参数的那条，下面的"原文必须在里面"会抓住它。
     if sig:
-        narrowed = [c for c in cands if c.get("sig") == sig]
+        narrowed = [c for c in cands if _sig_matches(sig, c.get("sig"))]
         if narrowed:
             cands = narrowed
 

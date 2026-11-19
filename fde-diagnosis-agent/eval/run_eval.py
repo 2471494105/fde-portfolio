@@ -706,9 +706,18 @@ def main():
                   and r.get("intent") == r["expect_intent"]]
     rule_harm = [r for r in rule_hit
                  if r.get("expect_intent") and r.get("intent") != r["expect_intent"]]
-    print(f"规则命中      {len(rule_hit)}/{n}   （被确定性规则接管的条数）")
+    print(f"规则命中      {len(rule_hit)}/{n}   （规则接管的条数；命中多不等于规则有效，看下面两行）")
     print(f"规则救人      {len(rule_saved)} 条   （模型本来会判错、规则纠正了）")
     print(f"规则误伤      {len(rule_harm)} 条   （规则自己判错，比模型判错更贵）")
+    # 单看"命中 8"最容易的误读是"规则有效"。把三个数压成一个净收益，
+    # 让"8 条命中但 0 救 0 伤"这个事实在报表上自己浮出来——
+    # 这不是说规则没用，只是这批用例没覆盖到模型会判错的场景，测不出收益。
+    net = len(rule_saved) - len(rule_harm)
+    if net == 0:
+        print(f"规则净收益    {net:+d}   （救人-误伤；为 0 = 这批没测出规则的增量价值，"
+              f"不表示规则无用）")
+    else:
+        print(f"规则净收益    {net:+d}   （救人-误伤）")
     # 低置信 != 判错。这一行统计的是"有多少条结论是带不确定交付的"——
     # 用户会在结论里看到"按「X」理解"，或者干脆被改成追问。
     # 把它和 intent_bad 分开，才能看出模型是在诚实报不确定，还是在判错。
@@ -799,6 +808,8 @@ def main():
         "rule_hit": len(rule_hit),
         "rule_saved": len(rule_saved),
         "rule_harm": len(rule_harm),
+        # 净收益：命中数本身不说明规则有用，救人-误伤才是。
+        "rule_net": len(rule_saved) - len(rule_harm),
         "ask_bad": ask_bad,
         "deduped_grey": dedup_grey,
         "intent_conf_low_n": conf_low,

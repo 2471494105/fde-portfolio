@@ -13,12 +13,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# 决定模型行为的文件：改其中任何一个都可能让历史结论失效
+# 会让历史结论失效的文件。判断标准不是"只算模型可见行为"，而是
+# **改它之后，同一批用例跑出来的数字可能变**——图拓扑、state 字段结构、
+# 判据口径，三者和 prompt 一样能让旧报表失去可比性。
 BEHAVIOR_FILES = (
     "app/graph/nodes.py",
+    # 图拓扑：路由函数的输出和 add_conditional_edges 的映射表决定能走哪些边。
+    # 2026-11-19 的 KeyError: 'plan' 就是这张表少一个 key——那次修复改变了
+    # 可观测结果（原来崩、现在跑得通），但它曾经不在这个列表里，hash 纹丝不动。
+    "app/graph/build.py",
+    # 字段结构：加一个字段就是多一份可观测输出。
+    "app/graph/state.py",
     "app/graph/llm.py",
     "app/tools/schemas.py",
     "app/tools/workorder.py",
+    # 判据口径：改它不改模型，但会改"通过"的定义。kw_rate 假满分修正、
+    # 标灰通过单列、规则净收益都在这份文件里——口径变了，数字就不能横着比。
+    "eval/run_eval.py",
 )
 
 

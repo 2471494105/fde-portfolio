@@ -358,14 +358,21 @@ def judge(traj, state):
     cs = cite_stats or {}
     _qty = int(cs.get("qty") or 0)
     _cited_ok = int(cs.get("cited_ok") or 0)
+    _derived_ok = int(cs.get("derived_ok") or 0)
     _unsourced_n = int(cs.get("unsourced") or 0)
     if _qty:
-        cite_rate = _cited_ok / _qty
+        # covered = 指到字段的 + 算式算对的。
+        # derived_ok 也是"可核验"：值能从算式复算出来，比"指到某个字段"更强。
+        # 只认 cited_ok 会把 35 条合法算式算成"没出处"——
+        # 实测 A5 就被这一条误伤：10/20 是 50%，加上 8 条 derived 其实是 90%。
+        covered = _cited_ok + _derived_ok
+        cite_rate = covered / _qty
         unsourced_rate = _unsourced_n / _qty
         cite_floor_ok = (cite_rate >= CITE_RATE_FLOOR) \
             and (unsourced_rate <= UNSOURCED_RATE_MAX)
     else:
         # 没有带数字的 claim 不是 0 分，是没有样本——和五处"未运行"同一个原则
+        covered = 0
         cite_rate = None
         unsourced_rate = None
         cite_floor_ok = True
@@ -430,7 +437,8 @@ def judge(traj, state):
     if not cite_floor_ok:
         why = []
         if cite_rate is not None and cite_rate < CITE_RATE_FLOOR:
-            why.append(f"出处率 {_cited_ok}/{_qty} = {cite_rate:.0%}，低于 {CITE_RATE_FLOOR:.0%}")
+            why.append(f"出处率 {covered}/{_qty} = {cite_rate:.0%}，低于 {CITE_RATE_FLOOR:.0%}"
+                       f"（指到字段 {_cited_ok} + 算式算对 {_derived_ok}）")
         if unsourced_rate is not None and unsourced_rate > UNSOURCED_RATE_MAX:
             why.append(f"未溯源 {_unsourced_n}/{_qty} = {unsourced_rate:.0%}，"
                        f"高于 {UNSOURCED_RATE_MAX:.0%}")
@@ -439,7 +447,8 @@ def judge(traj, state):
               "——少引用和引用正确，在通过率上不能等价",
               cite_rate=None if cite_rate is None else round(cite_rate, 3),
               unsourced_rate=None if unsourced_rate is None else round(unsourced_rate, 3),
-              cited_ok=_cited_ok, qty=_qty, unsourced=_unsourced_n)
+              cited_ok=_cited_ok, derived_ok=_derived_ok, covered=covered,
+              qty=_qty, unsourced=_unsourced_n)
     if tool_rate < 1.0:
         _fail("tool_missing", "model",
               f"工具选错(缺{','.join(t for t in expect if t not in tools)})",
@@ -779,7 +788,10 @@ def main():
     # 这类值占了大多数。真正该看的是明确出处率 = cited_ok / qty。
     cite_hit = sum((r.get("cite_stats") or {}).get("cited_ok", 0) for r in results)
     cite_qty = sum((r.get("cite_stats") or {}).get("qty", 0) for r in results)
+    cite_derived = sum((r.get("cite_stats") or {}).get("derived_ok", 0) for r in results)
+    cite_cover = cite_hit + cite_derived
     cite_rate = (cite_hit / cite_qty) if cite_qty else 0.0
+    cover_rate = (cite_cover / cite_qty) if cite_qty else 0.0
     # 引文型 claim（knowledge）：模型抄的那句原文，回原文核对的结果。
     # 单独一行、不和"明确出处率"混：那一行的分母是"带数字的事实"，
     # 而 knowledge 的结论多数压根没有数字——混在一起会让两条路径都读不准。
@@ -824,6 +836,11 @@ def main():
     # 指标为 0 时先怀疑分母，这是假绿灯清单的第一条。
     if cite_qty:
         print(f"明确出处率    {cite_hit}/{cite_qty} = {cite_rate:.1%}   （数字带 ref 且指到字段的比例）")
+        # 判据用的是"可核验"口径（ref 指到 或 算式算对），这里必须并排印出来。
+        # 两个数不一样不是错，是两件事：一个问"指没指到出处"，一个问"能不能核出来"。
+        # 只印前者、判据用后者，读报告的人会对不上账。
+        print(f"可核验率      {cite_cover}/{cite_qty} = {cover_rate:.1%}   "
+              f"（指到字段 {cite_hit} + 算式算对 {cite_derived}；判据用的是这个）")
     else:
         print("明确出处率    未运行   （本次结论没有可核对的数字；0/0 不是满分，是没有样本）")
     quote_n = quote_ok + quote_bad
@@ -1022,8 +1039,11 @@ def main():
         "trace_rate": round(trace_ok_n / n, 4) if n else 0.0,
         "cite_hit": cite_hit,
         "cite_qty": cite_qty,
+        "cite_derived": cite_derived,
+        "cite_cover": cite_cover,
         "failure_kinds": dict(sorted(kinds.items(), key=lambda kv: -kv[1])),
         "cite_rate": round(cite_rate, 4),
+        "cover_rate": round(cover_rate, 4),
         "cite_cut": cite_cut,
         "json_fixed": json_fixed,
         "misquote_n": misquote_n,

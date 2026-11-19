@@ -1083,9 +1083,11 @@ def check(state):
     stats = _new_stats()
     _verify_claims(doc, used, stats, blocked, misquoted)
 
-    # 回环过一次时的唯一判据：不许拿 null 换通过。
+    # 回环过一次后的趋势判据：不许拿 null 换通过。
     # 指错的 ref 全改成 null，misquoted 清零，但那些数从"指错了"变成"没指"——
     # 后者不报错，却比前者更差。这条不显式记下来，模型就有一条零成本过关的路。
+    # 它抓的是"回环把 2 条变 4 条"这个方向性退化，和 judge 里的绝对值门槛
+    # （cite_floor：出处率 < 60% 或未溯源 > 20%）不重叠，两条都要在。
     if retry >= MAX_CHECK_RETRY:
         if stats["unsourced"] > unsourced0:
             notes.append(
@@ -1927,7 +1929,10 @@ def _new_stats():
     某个 key，然后在某个分支里 KeyError——而那个分支恰好只在真跑时才进。
     """
     return {"qty": 0, "pct": 0,
-            "cited_ok": 0,          # 引用成立（= path_ok，保留旧名给汇总用）
+            # 分母：值得核出处的 claim 条数。
+            # 含数值型、多值型、区间型、引文型；不含纯定性断言（没有可核的值）。
+            # 引文型以前不计入，导致它没给 ref 时 unsourced 涨而分母不动。
+            "cited_ok": 0,          # 引用成立（= path_ok + 引文核对通过，保留旧名给汇总用）
             "cited_path": 0,        # 走的是字段路径
             # cite_oob  引的工具在本轮视野内没有返回（多为上下文裁剪所致）→ 标灰放行
             "cite_oob": 0,
@@ -2069,6 +2074,9 @@ def _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted, fails=None
             continue
         if not [s for s in segs if _norm_quote(s) not in _norm_quote(g)]:
             stats["quote_ok"] += 1
+            # 引文核对通过也是"可核验"，和数值型指到字段等价，必须进分子。
+            # 不进分子的话，引文型只在失败时才动分母，覆盖率会被单边拉低。
+            stats["cited_ok"] += 1
             return
     stats["quote_bad"] += 1
     first = next(g for g in hits if isinstance(g, str))
@@ -2162,7 +2170,11 @@ def _verify_claims(doc, ev, stats, blocked, misquoted, fails=None):
         v = c.get("value")
         quote = str(c.get("quote") or "").strip()
         if v is None and quote:
-            # 引文型：没有数字，但有它声称抄来的原文，回原文核对
+            # 引文型：没有数字，但有它声称抄来的原文，回原文核对。
+            # 先计 qty 再判——引文型也是"一条需要出处的断言"。
+            # 以前 qty 只在下面累加，导致引文没 ref 时 unsourced 涨而分母不动，
+            # unsourced/qty 能算出超过 100% 的数。
+            stats["qty"] += 1
             _verify_quote(c, text, quote, by_tool, stats, blocked, misquoted, fails)
             continue
         # 多值型：`value` 为空但有 items，交给下面的 items 分支逐条配对

@@ -3200,6 +3200,15 @@ class JudgeAttributionTest(unittest.TestCase):
                                 cite_stats={"qty": 10, "cited_ok": 6, "unsourced": 4})
         self.assertIn("cite_floor", [f["code"] for f in bad_small["failure"]])
 
+    def test_derived_counts_as_covered(self):
+        # 算式算对也是"可核验"：值能从算式复算出来，比"指到某个字段"更强。
+        # 只认 cited_ok 会把合法算式算成"没出处"——实测 A5 就是被这一条误伤：
+        # 10/20 是 50%，加上 8 条 derived 其实是 90%。
+        r = self._judge(final_text="无法确认，也没有足够证据",
+                        cite_stats={"qty": 20, "cited_ok": 10,
+                                    "derived_ok": 8, "unsourced": 2})
+        self.assertNotIn("cite_floor", [f["code"] for f in r["failure"]])
+
     def test_no_numeric_claims_is_not_zero_score(self):
         # 0/0 不是 0 分，是没有样本。和五处"未运行"同一个原则。
         r = self._judge(final_text="无法确认，也没有足够证据", cite_stats={})

@@ -154,7 +154,13 @@ def judge(traj, state):
     kws = traj.get("final_keywords", [])
     flat = _norm(readable)
     kw_hit = [k for k in kws if _norm(k) in flat]
-    kw_rate = (len(kw_hit) / len(kws)) if kws else 1.0
+    # 没设关键词 ≠ 命中率 100%。原来这里 `if kws else 1.0`，于是 I2/W2/W3/I5
+    # 这四条"判据根本没验过结论"的用例，在报表上和"关键词全中"长得一模一样：
+    # 既拉高了平均值，又让人以为它们被验过。
+    # 改成 None —— 不判失败（判据没设条件不等于模型答错，和标灰同一立场），
+    # 但不进命中率的分母，并在汇总里单列条数。
+    kw_na = not kws
+    kw_rate = (len(kw_hit) / len(kws)) if kws else None
 
     # 结论层有两条独立的证据通道，不是"对/错"二选一：
     #   1) 说对了词——kw_rate
@@ -179,7 +185,10 @@ def judge(traj, state):
     # 结论达标 = 说对了词，或产生了对的结构事实。
     # 写成"或"而不是给 I3 开特例：特例是"这条用例单独放行"，
     # 而"查无"是一整类结论形态，任何一条问不存在对象的用例都该走这条路。
-    conclusion_ok = (kw_rate >= 0.5) or unknown_ok
+    # kw_rate 为 None 表示这条用例没设关键词，判据管不到结论：
+    # 按"不判失败"处理（缺判据不是模型的错），但这不代表"答得好"，
+    # 所以它既不进命中率分母，也单独计数。
+    conclusion_ok = (kw_rate is None) or (kw_rate >= 0.5) or unknown_ok
 
     lo, hi = traj["steps_range"]
     steps_ok = lo <= steps <= hi
@@ -383,15 +392,21 @@ def judge(traj, state):
         "intent_conf": state.get("intent_conf"),
         # 这一轮的路由来源：rule:<规则名> / model。
         # 和 intent_conf 分开：conf 是模型自报，route_by 是实际生效的那条判断。
-        # 有它 + model_intent（trace 里）才能算"规则钉死的那些用例，模型本来会判错多少"。
         "route_by": state.get("route_by") or "",
+        # 模型自己判的那个。和 route_by 成对才有意义：
+        # 只有 route_by 能说"规则命中了 8 条"，加上它才能说这 8 条里
+        # 几条是模型会判错、被规则纠正的（救人），几条是规则自己也判错的（误伤）。
+        "model_intent": state.get("model_intent") or "",
+        # 期望意图也进报告：规则好坏要与它比，不该在汇总时再去回查夹具。
+        "expect_intent": intent_expect or "",
         "tools": tools,
         "steps": steps,
         "stop_reason": stop_reason,
         "check_rounds": check_rounds,
         "tool_rate": round(tool_rate, 3),
         "gb_rate": round(gb_rate, 3),
-        "kw_rate": round(kw_rate, 3),
+        "kw_rate": (round(kw_rate, 3) if kw_rate is not None else None),
+        "kw_na": kw_na,
         "kw_hit": kw_hit,
         "req_miss": req_miss,
         "steps_ok": steps_ok,
@@ -530,7 +545,11 @@ def main():
                                  "basis": {"case": name},
                                  "hint": f"运行异常:{name}: {msg}"}],
                     "tools": [], "steps": 0, "tool_rate": 0, "gb_rate": 0,
-                    "kw_rate": 0, "steps_ok": False, "blocked": [], "misquoted": [],
+                    # 跑挂了就没有结论可判，kw_rate 记 None（不知道），
+                    # 不是 0——0 会把它当成"关键词一个都没中"拖低覆盖率的平均值，
+                    # 而这条本来就是 env 失败、不该参与模型能力统计。
+                    "kw_rate": None, "kw_na": False,
+                    "steps_ok": False, "blocked": [], "misquoted": [],
                     "trace_ok": False, "fc_fail": True,
                     "cite_stats": {}, "round_ok": False, "round_detail": "",
                     "turns": len(traj.get("turns") or []),
@@ -659,13 +678,37 @@ def main():
     print(f"结论空 claims {bare_n}/{n}   （结论写数字但不给 claims，等于把内容挪到检查外）")
     print(f"工具命中率    {sum(r['tool_rate'] for r in results) / n:.3f}（平均）")
     print(f"维度覆盖率    {sum(r['gb_rate'] for r in results) / n:.3f}（平均）")
-    print(f"终局命中率    {sum(r['kw_rate'] for r in results) / n:.3f}（平均）")
+    # 关键词覆盖 ≠ 整条通过。语义正确率（上面第一行）才是"整条判通过"的比例；
+    # 这一行只回答"设了关键词的那些用例，结论里的关键点中了几成"。
+    # 分母只算设了关键词的条数——原来按 n 平均，等于把 4 条没设关键词的
+    # 默认 1.0 也算进去，凭空抬高了这个数。
+    kw_n = sum(1 for r in results if r.get("kw_rate") is not None)
+    kw_sum = sum(r["kw_rate"] for r in results if r.get("kw_rate") is not None)
+    kw_na_n = n - kw_n
+    kw_part = f"{kw_sum / kw_n:.3f}（{kw_n} 条有设关键词" if kw_n else "不适用（0 条设关键词"
+    kw_part += f"，{kw_na_n} 条未设、不计入）" if kw_na_n else "）"
+    print(f"关键词覆盖    {kw_part}   （只管设了关键词的结论，不等于答得好）")
     print(f"步数越界      {steps_bad}/{n}   （按用例期望区间判）")
     print(f"预算耗尽      {budget_n}/{n}   （还想查但额度已尽，这几条结论是半成品）")
     print(f"判断够了收工  {enough_n}/{n}   （模型自己判断证据够了，正常结束）")
     print(f"引用自查回环  {check_n}/{n}   （被 check 拦下、把原因回喂后重出才通过的条数）")
     intent_bad = sum(1 for r in results if r.get("intent_ok") is False)
     print(f"意图判错      {intent_bad}/{n}")
+    # 规则层的好坏必须成三行看，只报"命中几条"等于没报：
+    #   命中  = 规则接管了多少条
+    #   救人  = 模型本来会判错（model_intent ≠ 期望），规则把它纠对了
+    #   误伤  = 规则自己也判错（最终 intent ≠ 期望）——代价最贵，因为它绕过了模型的判据
+    # model_intent 为空（跑挂/没给）的条数不进"救人"分母，否则会被当成"模型判错"。
+    rule_hit = [r for r in results if (r.get("route_by") or "").startswith("rule:")]
+    rule_saved = [r for r in rule_hit
+                  if r.get("expect_intent") and r.get("model_intent")
+                  and r["model_intent"] != r["expect_intent"]
+                  and r.get("intent") == r["expect_intent"]]
+    rule_harm = [r for r in rule_hit
+                 if r.get("expect_intent") and r.get("intent") != r["expect_intent"]]
+    print(f"规则命中      {len(rule_hit)}/{n}   （被确定性规则接管的条数）")
+    print(f"规则救人      {len(rule_saved)} 条   （模型本来会判错、规则纠正了）")
+    print(f"规则误伤      {len(rule_harm)} 条   （规则自己判错，比模型判错更贵）")
     # 低置信 != 判错。这一行统计的是"有多少条结论是带不确定交付的"——
     # 用户会在结论里看到"按「X」理解"，或者干脆被改成追问。
     # 把它和 intent_bad 分开，才能看出模型是在诚实报不确定，还是在判错。
@@ -682,6 +725,11 @@ def main():
     print(f"该反问未反问  {ask_bad}/{n}   （信息不全时该追问，直接作答等于假装知道）")
     print(f"幂等未验证    {dedup_grey}/{n}   （建单工具连不上，这项判不了，标灰放行）")
     print(f"有未溯源数字  {blocked_n}/{n}   （ref 写 null，标灰放行，不计失败）")
+    # "不计失败"不等于"答得好"。这行把"判通过但有未溯源数字"的条数单列：
+    # 结论可读却不可核，它出现在语义正确率的分子里，不出现在这行就会隐形。
+    grey_pass = sum(1 for r in results
+                    if r.get("semantic_ok") and (r.get("cite_stats") or {}).get("unsourced"))
+    print(f"标灰通过      {grey_pass}/{n}   （判通过但有未溯源数字：结论可读，但核不了）")
     # 派生值：ref 为 null 但给了算式，判据重算过。
     # 和上一行成对出现——给了算式却算错的是 failure，没算式的是标灰。
     # 混在一起就分不出"模型会算"和"模型在编"，而这两者的修法完全不同。
@@ -736,12 +784,21 @@ def main():
         "semantic_rate": round(ok / n, 4) if n else 0.0,
         "tool_rate": round(sum(r["tool_rate"] for r in results) / n, 4) if n else 0.0,
         "gb_rate": round(sum(r["gb_rate"] for r in results) / n, 4) if n else 0.0,
-        "kw_rate": round(sum(r["kw_rate"] for r in results) / n, 4) if n else 0.0,
+        # 关键词覆盖只在"设了关键词"的用例上求平均，分母是 kw_n 不是 n。
+        # 把没设关键词的按 1.0 算进去是假满分：它会同时抬高指标和掩盖"判据没验过"。
+        "kw_rate": (round(kw_sum / kw_n, 4) if kw_n else None),
+        "kw_n": kw_n,
+        "kw_na": kw_na_n,
         "steps_bad": steps_bad,
         "budget_exhausted": budget_n,
         "enough": enough_n,
         "check_rounds_n": check_n,
         "intent_bad": intent_bad,
+        # 规则层的三个数：命中 / 救人 / 误伤。只有命中数时看不出好坏，
+        # 而"误伤"是这套方案最贵的失败模式——规则绕过了模型判据，错了没人兜。
+        "rule_hit": len(rule_hit),
+        "rule_saved": len(rule_saved),
+        "rule_harm": len(rule_harm),
         "ask_bad": ask_bad,
         "deduped_grey": dedup_grey,
         "intent_conf_low_n": conf_low,

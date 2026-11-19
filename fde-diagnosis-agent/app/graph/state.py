@@ -21,7 +21,7 @@ from typing import Annotated, TypedDict
 #
 # 现在兜底交给 _add_list（它接受 None）；state_ver 只负责"这条会话是哪一版 schema、
 # 迁移过没有"，是可观测性，不是防线。两者分工别搞反。
-STATE_VER = 3
+STATE_VER = 4
 
 
 def _add_list(a, b):
@@ -116,6 +116,11 @@ class State(TypedDict, total=False):
     # 也就是规则的真实误伤率。只记进 trace 不够：run_eval 传 trace_run=False，
     # 评测链不落 runs/，那个字段在报告里等于不存在（记了没人拿得到 = 没记）。
     route_by: str
+    # 模型**自己**判的那个 intent：规则没覆盖时它就是生效值（和 intent 相同），
+    # 被规则覆盖时它与 intent 的分歧才是真正想知道的东西——
+    # 规则对而模型错 = 规则救了一条；规则和模型都错 = 规则误伤。
+    # 只有 route_by 没有它，只能知道"这轮是谁判的"，算不出"模型本来会判成什么"。
+    model_intent: str
 
     # 会话相关（多轮）
     turn: int                              # 第几轮，intake 每轮 +1
@@ -204,6 +209,9 @@ RESET_EACH_TURN = {
     # understand 每轮重新判定路由来源。不清的话第 1 轮被规则命中的用例，
     # 第 2 轮明明走的是模型，报告上还写着 rule:xxx——误伤率统计会凭空多出一条。
     "route_by": "",
+    # 同 route_by：每轮重判。不清会把上一轮模型判的结果带到下一轮，
+    # 而这一轮如果被规则覆盖，模型其实也给了新判断，旧值就成了噪音。
+    "model_intent": "",
     "final": "",  # 必须是空串不是 {}：final_to_text({}) 返回字符串 "{}"，_current_final 会当它非空
     "final_text": "",
     "blocked": [],

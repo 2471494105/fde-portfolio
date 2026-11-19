@@ -458,6 +458,11 @@ def understand(state):
         elif conf < CONF_OK:
             intent_note = f"意图置信度 {conf:.2f}，按「{intent}」理解，若不对请直接纠正"
 
+    # 模型自己判的那个 intent 提成变量：trace 和 state 都要用，
+    # 两处各写一遍表达式迟早漂移。规则覆盖它时，两个值的分歧本身就是
+    # 最有价值的样本（规则对、模型错，或反过来）。
+    model_intent = str(data.get("intent") or "").strip().lower()[:20]
+
     trace.emit(
         "understand",
         intent=intent,
@@ -470,9 +475,7 @@ def understand(state):
         # 判定来源：rule:<名字> / model。用来算每条规则的真实误伤率——
         # 规则错和模型错的归因方式完全不同，混在一起就什么都看不出来。
         route_by=route_by,
-        # 模型自己判的那个 intent 也留一份：规则覆盖它的时候，
-        # 这两个值的分歧本身就是最有价值的样本（规则对、模型错，或反过来）。
-        model_intent=str(data.get("intent") or "").strip().lower()[:20],
+        model_intent=model_intent,
     )
 
     return {
@@ -494,6 +497,10 @@ def understand(state):
         # 只在 trace 里记等于报告里根本没有这个字段。规则误伤率要能被算出来，
         # 它必须跟着每条结果一起进报告。
         "route_by": route_by,
+        # 和 route_by 成对：route_by 说"谁判的"，model_intent 说"模型本来判什么"。
+        # 缺任一个，规则误伤率都算不出来（例如只知 rule:act_verb 生效，
+        # 不知道模型原本想判 diagnose 还是 lookup）。
+        "model_intent": model_intent,
         # slots 是合并写：本轮确认的覆盖上去，没确认的保留旧值
         "slots": {
             "device_id": ids[0] if ids else prev_dev,

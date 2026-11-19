@@ -29,3 +29,23 @@ data/raw_secrets/
 # 有价值的那几次（真实诊断、异常分支样本）在 docs 与 eval 报告里引用，
 # 不靠这里留原始文件。历史 commit 里的旧产物仍可追溯。
 fde-diagnosis-agent/runs/
+
+# 学习 demo：不入库（2026-11-20 定）
+# fde-rag-demo 是练手项目，不参与作品仓库版本管理。
+fde-rag-demo/
+
+# 评测运行产物：每次跑都会变，不进版本库
+# 要引用某次结果，按 eval/报告状态.md 里登记的编号，到本地报告取。
+fde-diagnosis-agent/eval/report_*.json
+fde-diagnosis-agent/eval/history.jsonl
+fde-diagnosis-agent/eval/report_eval.json
+
+# 种子改动的备份与调试临时文件
+fde-diagnosis-agent/data/seed/*.bak_*
+fde-diagnosis-agent/eval/cache_probe*
+fde-diagnosis-agent/eval/_probe_cache.py
+fde-diagnosis-agent/eval/full_*_log.txt
+fde-diagnosis-agent/eval/full_*_err.txt
+fde-diagnosis-agent/eval/probe_*_out.txt
+fde-diagnosis-agent/eval/probe_*_err.txt
+fde-diagnosis-agent/mock_qms/backups/

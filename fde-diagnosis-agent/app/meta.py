@@ -27,6 +27,13 @@ BEHAVIOR_FILES = (
     "app/graph/llm.py",
     "app/tools/schemas.py",
     "app/tools/workorder.py",
+    # 工具实现。同一个 schema 背后一次能给多少，由这三份决定——2026-11-19
+    # 修 A3 绕路时，schema 本身没说错，是 diagnosis.py 一条 SQL 只聚合一个维度。
+    # 只登记 schemas 就会漏：改实现不动指纹，报告却继续声称"与旧基线可比"。
+    "app/tools/diagnosis.py",
+    "app/tools/manual.py",
+    # hint 文案随响应回给模型，改它就改了模型下一轮看到的东西。
+    "app/tools/hints.py",
     # 判据口径：改它不改模型，但会改"通过"的定义。kw_rate 假满分修正、
     # 标灰通过单列、规则净收益都在这份文件里——口径变了，数字就不能横着比。
     "eval/run_eval.py",

@@ -55,11 +55,14 @@ TOOL_SCHEMAS = [
                     "time_to": {"type": "string", "description": "结束时间，留空则取数据最新时间"},
                     "group_by": {
                         "type": "string",
-                        "enum": ["hour", "day", "station", "defect_type", "batch"],
                         "description": (
-                            "聚合维度：hour 小时 / day 按天（看误判率随时间上升还是陡变，"
+                            "聚合维度，可取：hour 小时 / day 按天（看误判率随时间上升还是陡变，"
                             "判断缓慢漂移类故障必须用这个维度）/ station 工位 / "
                             "defect_type 缺陷类型 / batch 物料批次。"
+                            "**可以一次传多个维度，用英文逗号连接，例如 station,batch**——"
+                            "一次调用会把每个维度分别聚合、分别返回，"
+                            "不要为了看几个维度就分几次调用。"
+                            "要换时间窗重看同一批维度时，也请把多个维度一次带上。"
                             "不知道选哪个时先查 station——误判最常见的形态是集中在单个工位，"
                             "而整体误判率看不出这一点。"
                         ),

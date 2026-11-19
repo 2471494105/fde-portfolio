@@ -48,11 +48,19 @@ def _cases_hash():
 
 
 def _used_group_by(state):
+    """这一轮用过哪些聚合维度。
+
+    2026-11-19 起 group_by 允许逗号分隔的多维（"station,batch"）。原来整串塞进
+    set，多维时要么整串 ≠ 期望单维度、要么不可哈希，会漏判；这里按逗号拆开，
+    同时兼容数组形式。
+    """
     cols = []
     for e in state.get("evidence", []):
         gb = e["args"].get("group_by") if isinstance(e["args"], dict) else None
-        if gb:
-            cols.append(gb)
+        if isinstance(gb, str):
+            cols.extend(x.strip() for x in gb.split(",") if x.strip())
+        elif isinstance(gb, (list, tuple)):
+            cols.extend(str(x).strip() for x in gb if str(x).strip())
     return set(cols)
 
 

@@ -386,6 +386,39 @@ class LightLifeFieldsTest(unittest.TestCase):
                              f"文案复述了寿命数字 {banned}，又造出第二个数据源")
 
 
+class MultiDimGroupByTest(unittest.TestCase):
+    """group_by 的多维解析（2026-11-19）。
+
+    A3 用例为了看 4 个维度、再换时间窗重验 3 个维度，调了 7 次 query_defect_log，
+    把 12 步预算吃满（1045 那次 budget_exhausted）。修法是让一次调用接收多维。
+    这里测"参数怎么拆"，DB 行为（各组独立聚合）靠单跑 A3/A4 验证。
+    """
+
+    def test_default_when_empty(self):
+        self.assertEqual(diagnosis._parse_dims(""), ["hour"])
+        self.assertEqual(diagnosis._parse_dims(None), ["hour"])
+
+    def test_single_dim(self):
+        self.assertEqual(diagnosis._parse_dims("batch"), ["batch"])
+
+    def test_multi_dim(self):
+        self.assertEqual(diagnosis._parse_dims("station,batch"), ["station", "batch"])
+
+    def test_dedup_keeps_order(self):
+        """同维度写两次要去重，且顺序不变——第一个维度决定 groups 用哪一组。"""
+        self.assertEqual(diagnosis._parse_dims("station,station,batch"),
+                         ["station", "batch"])
+
+    def test_whitespace_and_empty_segments_tolerated(self):
+        self.assertEqual(diagnosis._parse_dims(" station , , batch "),
+                         ["station", "batch"])
+
+    def test_unknown_dim_rejected(self):
+        """写错维度必须判 None（-> bad_args），不能静默降级成默认维度。"""
+        self.assertIsNone(diagnosis._parse_dims("station,bad"))
+        self.assertIsNone(diagnosis._parse_dims("bad"))
+
+
 class MultiValueClaimTest(unittest.TestCase):
     """多值 claim：一条 claim 里装 N 个「标识 + 数值」对。
 

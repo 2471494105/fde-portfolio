@@ -20,6 +20,19 @@ GROUP_EXPR = {
 }
 
 
+def _parse_dims(group_by):
+    """把 group_by 拆成维度列表；含非法维度或为空返回 None。
+
+    2026-11-19 起支持逗号分隔的多维（"station,batch"）：A3 为了看多个维度把
+    12 步预算吃满，根因是一次调用只能聚合一个维度。抽成纯函数是为了能不起
+    DB 就测参数解析这一段。
+    """
+    dims = [g.strip() for g in str(group_by or "hour").split(",") if g.strip()]
+    if not dims or any(g not in GROUP_EXPR for g in dims):
+        return None
+    return list(dict.fromkeys(dims))  # 去重并保持顺序
+
+
 def _parse_ts(value):
     if not value:
         return None
@@ -67,11 +80,20 @@ def query_device_profile(device_id: str) -> dict:
 
 def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
                      group_by: str = "hour") -> dict:
-    if group_by not in GROUP_EXPR:
+    """误判日志按维度聚合。
+
+    group_by 支持逗号分隔的多个维度（例如 "station,batch"），一次调用返回多组聚合。
+    2026-11-19 加：A3 用例为了看 4 个维度、再换时间窗重验 3 个维度，一共调了 7 次
+    本工具，把 12 步预算吃满（1045 那次 budget_exhausted）。维度数是"一次能问多少"
+    的问题，不该由模型用轮次去拼（Anthropic《Writing effective tools》consolidate）。
+    """
+    dims = _parse_dims(group_by)
+    if dims is None:
         # bad_args 和 no_defect_log 必须分开：一个是模型参数写错（该改参数再查），
         # 一个是库里确实没有（该拒答）。都用 error 字符串时上游分不出来。
-        return {"error": f"group_by 只支持 {sorted(GROUP_EXPR)}", "state": "bad_args",
-                "hint": HINT["bad_args"]}
+        return {"error": (f"group_by 只支持 {sorted(GROUP_EXPR)}；"
+                          "要同时看多个维度请用英文逗号连接，例如 station,batch"),
+                "state": "bad_args", "hint": HINT["bad_args"]}
 
     tf, tt = _parse_ts(time_from), _parse_ts(time_to)
 
@@ -86,16 +108,27 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
         tf = tf or (latest - timedelta(days=7))
         tt = tt or latest
 
-        expr = GROUP_EXPR[group_by]
-        cur.execute(f"""
-            SELECT {expr} AS key,
-                   count(*) AS cnt,
-                   count(*) FILTER (WHERE verdict = 'NG' AND is_actually_ok) AS fp
-            FROM defect_logs
-            WHERE device_id = %s AND ts >= %s AND ts <= %s
-            GROUP BY 1 ORDER BY 3 DESC, 2 DESC LIMIT 50
-        """, (device_id, tf, tt))
-        groups = cur.fetchall()
+        agg = {}
+        for d in dims:
+            expr = GROUP_EXPR[d]
+            cur.execute(f"""
+                SELECT {expr} AS key,
+                       count(*) AS cnt,
+                       count(*) FILTER (WHERE verdict = 'NG' AND is_actually_ok) AS fp
+                FROM defect_logs
+                WHERE device_id = %s AND ts >= %s AND ts <= %s
+                GROUP BY 1 ORDER BY 3 DESC, 2 DESC LIMIT 50
+            """, (device_id, tf, tt))
+            rows = cur.fetchall()
+            agg[d] = [
+                {
+                    "key": _fmt(r["key"]),
+                    "count": r["cnt"],
+                    "false_positive": r["fp"],
+                    "rate": round(r["fp"] / r["cnt"], 4) if r["cnt"] else 0.0,
+                }
+                for r in rows[:20]
+            ]
 
         cur.execute("""
             SELECT count(*) AS cnt,
@@ -116,24 +149,17 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
 
     total = tot["cnt"] or 0
     fp = tot["fp"] or 0
-    return {
+    out = {
         "device_id": device_id,
         "state": "found",
         "time_from": _fmt(tf),
         "time_to": _fmt(tt),
-        "group_by": group_by,
+        "group_by": ",".join(dims),
         "total": total,
         "false_positive_count": fp,
         "false_positive_rate": round(fp / total, 4) if total else 0.0,
-        "groups": [
-            {
-                "key": _fmt(g["key"]),
-                "count": g["cnt"],
-                "false_positive": g["fp"],
-                "rate": round(g["fp"] / g["cnt"], 4) if g["cnt"] else 0.0,
-            }
-            for g in groups[:20]
-        ],
+        # groups 保持旧形状（等于第一个维度），旧消费者与旧 evidence_refs 不必改
+        "groups": agg[dims[0]],
         "samples": [
             {
                 "ts": _fmt(s["ts"]),
@@ -145,6 +171,10 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
             for s in samples
         ],
     }
+    if len(dims) > 1:
+        # 多维时额外给分维度聚合；单维不加这个键，避免无谓胀大响应
+        out["by_group"] = agg
+    return out
 
 
 def query_calibration(device_id: str, limit: int = 5) -> dict:

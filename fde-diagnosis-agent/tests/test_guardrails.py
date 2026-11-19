@@ -3358,5 +3358,148 @@ class FixtureStepsRangeTest(unittest.TestCase):
             self.assertLessEqual(lo, hi, f"{c['id']} 的区间写反了")
 
 
+class DocConflictMultiParamTest(unittest.TestCase):
+    """check_doc_conflict 支持一次查多个参数（2026-11-19）。
+
+    单参数版本要跑三轮才能查三个参数，每轮占一格预算、算一次工具调用，
+    而这三轮在语义上是同一个问题（"两份文档对得上吗"）。拆开跑把一个判断
+    变成三次噪声，也容易被预算掐断。
+
+    约束：单参数时返回形状必须与旧版逐字段一致，老调用方不因这次改动而变。
+    """
+
+    def _cur(self, keys, rows_by_param):
+        class _Cur:
+            def __init__(self):
+                self._rows = []
+
+            def execute(self, sql, args=None):
+                if "jsonb_object_keys" in sql:
+                    self._rows = [{"k": k} for k in keys]
+                elif "WHERE params ? %s" in sql:
+                    self._rows = rows_by_param.get((args or ("",))[0], [])
+                else:
+                    self._rows = []
+
+            def fetchall(self):
+                return self._rows
+
+        return _Cur()
+
+    def _patch(self, cur):
+        conn = mock.MagicMock()
+        cur_cm = mock.MagicMock()
+        cur_cm.__enter__.return_value = cur
+        conn.cursor.return_value = cur_cm
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = conn
+        return mock.patch.object(manual, "connect", return_value=cm)
+
+    @staticmethod
+    def _rows(values):
+        return [
+            {"source": f"doc{i}", "doc_type": dt, "section": f"s{i}", "params": {"阈值": v}}
+            for i, (dt, v) in enumerate(values)
+        ]
+
+    def test_single_param_shape_unchanged(self):
+        cur = self._cur(["阈值"], {"阈值": self._rows([("厂内SOP", "0.8"), ("厂商手册", "0.9")])})
+        with self._patch(cur):
+            res = manual.check_doc_conflict("阈值")
+        self.assertTrue(res["has_conflict"])
+        self.assertEqual(res["value_count"], 2)
+        self.assertNotIn("by_param", res, "单参数不该走多参数结构，老调用方会读不到字段")
+
+    def test_multi_param_reports_each(self):
+        cur = self._cur(
+            ["阈值", "周期"],
+            {
+                "阈值": self._rows([("厂内SOP", "0.8"), ("厂商手册", "0.9")]),
+                "周期": [{"source": "p1", "doc_type": "保养计划", "section": "s0",
+                          "params": {"周期": "30"}}],
+            },
+        )
+        with self._patch(cur):
+            res = manual.check_doc_conflict("阈值,周期")
+        self.assertTrue(res["has_conflict"])
+        self.assertEqual(res["conflict_params"], ["阈值"])
+        self.assertEqual(set(res["by_param"]), {"阈值", "周期"})
+        self.assertFalse(res["by_param"]["周期"]["has_conflict"])
+
+    def test_chinese_comma_also_splits(self):
+        cur = self._cur(
+            ["阈值", "周期"],
+            {"阈值": self._rows([("厂内SOP", "0.8")]),
+             "周期": [{"source": "p1", "doc_type": "保养计划", "section": "s0",
+                       "params": {"周期": "30"}}]},
+        )
+        with self._patch(cur):
+            res = manual.check_doc_conflict("阈值，周期")
+        self.assertEqual(res["checked"], ["阈值", "周期"])
+
+    def test_empty_name_is_bad_args(self):
+        res = manual.check_doc_conflict("  ")
+        self.assertEqual(res["state"], "bad_args")
+        self.assertIn("hint", res)
+
+
+class CalibrationWindowTest(unittest.TestCase):
+    """query_calibration 的时间窗（2026-11-19）。
+
+    以前只有 limit，要「某天前后」只能靠 limit 猜。但更要紧的是**给时间窗的
+    那一刻**：传了却解析不了，不能静默退回「最近 N 条」——那等于调用方以为
+    按时间过滤了、实际拿的是全时段，正是范围放大的一种。
+    """
+
+    def test_unparsable_time_from_is_rejected(self):
+        res = diagnosis.query_calibration("CX-101", time_from="上个月")
+        self.assertEqual(res["state"], "bad_args")
+        self.assertIn("hint", res)
+
+    def test_reversed_window_is_rejected(self):
+        res = diagnosis.query_calibration("CX-101", time_from="2026-11-20",
+                                          time_to="2026-11-01")
+        self.assertEqual(res["state"], "bad_args")
+
+    def _patch(self, rows, one):
+        class _Cur:
+            def execute(self, sql, args=None):
+                self._sql = sql
+
+            def fetchall(self):
+                return rows
+
+            def fetchone(self):
+                return one
+
+        cur = _Cur()
+        conn = mock.MagicMock()
+        cur_cm = mock.MagicMock()
+        cur_cm.__enter__.return_value = cur
+        conn.cursor.return_value = cur_cm
+        cm = mock.MagicMock()
+        cm.__enter__.return_value = conn
+        return mock.patch.object(diagnosis, "connect", return_value=cm)
+
+    def test_window_is_returned_with_result(self):
+        import datetime as dt
+        ts = dt.datetime(2026, 11, 10, 9, 0)
+        rows = [{"ts": ts, "drift_px": 12, "drift_mm": 0.3,
+                 "result": "ok", "operator": "张工"}]
+        with self._patch(rows, {"m": ts, "n": 1}):
+            res = diagnosis.query_calibration(
+                "CX-101", time_from="2026-11-01", time_to="2026-11-15")
+        self.assertEqual(res["state"], "found")
+        self.assertEqual(res["window"],
+                         {"time_from": "2026-11-01", "time_to": "2026-11-15"})
+
+    def test_empty_window_is_distinguished_from_no_records(self):
+        with self._patch([], {"m": None, "n": 3}):
+            res = diagnosis.query_calibration(
+                "CX-101", time_from="2026-11-01", time_to="2026-11-15")
+        self.assertEqual(res["state"], "no_calibration_in_range")
+        self.assertIn("window", res)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

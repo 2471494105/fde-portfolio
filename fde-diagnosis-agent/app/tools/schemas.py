@@ -80,14 +80,23 @@ TOOL_SCHEMAS = [
                 "查询**单台设备**的历史标定记录：每次标定的时间、漂移量(px/mm)、结果、操作人。"
                 "问『上次什么时候标定的』『最近漂移多大』用它；"
                 "问『保养周期该是多少天』用 query_device_profile（那是这台设定的值）。"
-                "误判率在某个时间点突然上升时，应查看该时间点前后的标定记录，"
+                "误判率在某个时间点突然上升时，用 time_from / time_to 圈出那段时间再看标定记录，"
+                "不要靠 limit 猜——limit 只按时间倒序取最近 N 条，圈不出「那一天前后」。"
                 "确认是否存在标定漂移超阈值（阈值见手册，注意不同文档口径可能不一致）。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "device_id": {"type": "string", "description": "设备编号"},
-                    "limit": {"type": "integer", "description": "返回最近几条，默认 5"},
+                    "limit": {"type": "integer", "description": "返回最近几条，默认 5；有 time_from/time_to 时是窗口内的最近几条"},
+                    "time_from": {
+                        "type": "string",
+                        "description": "只看该时间之后（含）的标定，格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS。不传则不限下界。",
+                    },
+                    "time_to": {
+                        "type": "string",
+                        "description": "只看该时间之前（含）的标定。不传则不限上界。",
+                    },
                 },
                 "required": ["device_id"],
             },
@@ -143,13 +152,18 @@ TOOL_SCHEMAS = [
                 "检测同一个参数在厂商手册、厂内SOP、保养计划、质量目标之间是否存在取值冲突。"
                 "规则：只要发现不同文档对同一参数给出不同数值，就说明存在冲突，"
                 "此时不要自行挑选一个值继续推理，必须把冲突上报给用户并请其确认口径。"
+                "一次可查多个参数（param_name 用英文逗号连接），结果按参数放在 by_param 里；"
+                "不要为每个参数单独调用一次，那会把同一个判断拆成多次噪声。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "param_name": {
                         "type": "string",
-                        "description": "参数名，例如 光源亮度设定、标定周期(天)、判定置信度阈值",
+                        "description": (
+                            "参数名，例如 光源亮度设定、标定周期(天)、判定置信度阈值。"
+                            "多个参数用英文逗号连接一次查完（如「光源亮度设定,标定周期(天)」）。"
+                        ),
                     },
                 },
                 "required": ["param_name"],

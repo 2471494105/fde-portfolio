@@ -177,17 +177,60 @@ def query_defect_log(device_id: str, time_from: str = "", time_to: str = "",
     return out
 
 
-def query_calibration(device_id: str, limit: int = 5) -> dict:
+def query_calibration(device_id: str, limit: int = 5,
+                      time_from: str = "", time_to: str = "") -> dict:
     limit = max(1, min(int(limit), 20))
+
+    # 显式给了时间就必须生效。解析不了直接拒，不静默退回"最近 N 条"——
+    # 静默忽略参数，调用方会以为按时间过滤了，实际拿的是全时段（范围放大的一种）。
+    tf = tt = None
+    if str(time_from or "").strip():
+        tf = _parse_ts(time_from)
+        if tf is None:
+            return {"state": "bad_args", "time_from": time_from,
+                    "error": f"time_from 无法解析：{time_from}",
+                    "hint": "时间格式用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"}
+    if str(time_to or "").strip():
+        tt = _parse_ts(time_to)
+        if tt is None:
+            return {"state": "bad_args", "time_to": time_to,
+                    "error": f"time_to 无法解析：{time_to}",
+                    "hint": "时间格式用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS"}
+    if tf and tt and tf > tt:
+        return {"state": "bad_args", "error": "time_from 晚于 time_to",
+                "hint": "时间窗要正着给：time_from <= time_to"}
+
     with connect() as conn, conn.cursor() as cur:
-        cur.execute("""SELECT ts, drift_px, drift_mm, result, operator
-                       FROM calibrations WHERE device_id = %s
-                       ORDER BY ts DESC LIMIT %s""", (device_id, limit))
+        sql = """SELECT ts, drift_px, drift_mm, result, operator
+                 FROM calibrations WHERE device_id = %s"""
+        args = [device_id]
+        if tf:
+            sql += " AND ts >= %s"
+            args.append(tf)
+        if tt:
+            sql += " AND ts <= %s"
+            args.append(tt)
+        sql += " ORDER BY ts DESC LIMIT %s"
+        args.append(limit)
+        cur.execute(sql, args)
         records = cur.fetchall()
+
         if not records:
+            # 区分「这台设备压根没标定过」和「有记录、但给的时间窗内没有」——
+            # 两种情况下一步动作完全不同，混成一个 no_calibration 等于让模型瞎猜。
+            cur.execute("SELECT count(*) AS n FROM calibrations WHERE device_id = %s",
+                        (device_id,))
+            if int(cur.fetchone()["n"] or 0) > 0:
+                return {"device_id": device_id, "records": [],
+                        "state": "no_calibration_in_range",
+                        "window": {"time_from": time_from or None,
+                                   "time_to": time_to or None},
+                        "message": "该设备有标定记录，但指定时间窗内没有",
+                        "hint": "放宽 time_from / time_to，或换一段时间重查"}
             return {"device_id": device_id, "records": [], "state": "no_calibration",
                     "message": "该设备无标定记录",
                     "hint": HINT["no_calibration"]}
+
         cur.execute("SELECT max(ts) AS m FROM defect_logs WHERE device_id = %s", (device_id,))
         latest = cur.fetchone()["m"]
 
@@ -202,7 +245,7 @@ def query_calibration(device_id: str, limit: int = 5) -> dict:
     else:
         trend = "样本不足"
 
-    return {
+    out = {
         "device_id": device_id,
         "state": "found",
         "records": [
@@ -219,6 +262,10 @@ def query_calibration(device_id: str, limit: int = 5) -> dict:
         "days_since_last": (latest - records[0]["ts"]).days if latest else None,
         "drift_trend": trend,
     }
+    # 实际生效的时间窗随结果回来：模型看不见窗口，就会把「最近 5 条」当成
+    # 「这段时间的全部记录」——跟不传参数时一模一样。
+    out["window"] = {"time_from": time_from or None, "time_to": time_to or None}
+    return out
 
 
 def _life_fields(cumulative: int, rated: int):

@@ -49,3 +49,8 @@ fde-diagnosis-agent/eval/full_*_err.txt
 fde-diagnosis-agent/eval/probe_*_out.txt
 fde-diagnosis-agent/eval/probe_*_err.txt
 fde-diagnosis-agent/mock_qms/backups/
+
+# 参考解快照：跑一次全量就整目录重写，不进版本库（2026-11-20 定）
+# 只留 eval/ 下的设计稿（*.md）。新克隆没有这些文件，跑一次全量会自动重建；
+# 想重判旧快照用 `python eval/reference.py --verify`，但那要求本机有旧文件。
+fde-diagnosis-agent/eval/reference/

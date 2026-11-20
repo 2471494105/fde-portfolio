@@ -58,3 +58,7 @@ fde-diagnosis-agent/eval/reference/
 # 演示录屏：视频体积大且每次都要重录，本地产物不入库（2026-11-20 定）
 fde-diagnosis-agent/docs/demo_recordings/
 fde-diagnosis-agent/docs/demo_recordings/*.mp4.log
+
+# 仓库维护笔记与脚手架模板：本地保留，不进公开仓库（2026-11-20）
+_项目README模板.md
+推送说明.md

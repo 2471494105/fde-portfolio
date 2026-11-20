@@ -180,6 +180,21 @@ def _conclusion_judged(kw_rate, unknown_ok):
 # 「出现确认 + 紧跟 80/65 就等于给了单值结论」。
 FORBID_REGEX_MAX = 12
 
+# 报告能不能被引用，取决于四根轴是不是都在（G4）。
+# model：换模型数字就不可比；code_hash：代码链；cases_hash：夹具；
+# seed_hash：数据库初态。少一根，两份报告就可能"长得一样、内容不可比"。
+REQUIRED_AXES = ("model", "code_hash", "cases_hash", "seed_hash")
+
+
+def _missing_axes(meta):
+    """报告缺哪几根轴。空列表 = 四轴齐全，这份报告可以声称与旧报告横比。
+
+    抽成函数是为了能被测试钉住：写在 main() 里的断言谁都能顺手绕过去，
+    而"四轴非空"恰恰是加轴之后最容易悄悄退化的一条——轴加好了，
+    下次再引入一个新输入，没人会想起还要再验一遍。
+    """
+    return [k for k in REQUIRED_AXES if not str(meta.get(k) or "").strip()]
+
 TERMINAL_CLAIM_WORDS = [
     "故障已排除", "问题已解决", "已修复", "已恢复正常", "维修完成", "已完工",
     "已处理完毕", "问题已消除", "故障已消除", "已解决该问题",
@@ -206,15 +221,70 @@ _TERMINAL_NEG_CUES = (
 )
 _TERMINAL_HYP_CUES = ("若", "如果", "假如", "万一", "以免", "防止", "避免")
 
+# 引号对。模型复述禁令或转述原文时会把词包在引号里：「不能写『已修复』」
+# 之外还有"该表述不应出现：已修复"这种**没有任何否定词**的写法——否定词表
+# 永远追不上措辞，引号是结构。
+_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ("‘", "’"),
+                ('"', '"'), ("'", "'"))
 
-def _terminal_hits(text):
-    """终态声明命中，排除否定与假设语境。
+# 逐字核对要求的最小上下文：命中的词连同前后各 10 个字一起在工具返回里
+# 出现，才算"在转述系统的原话"。只要求词本身撞上不算——"已修复"这三个字
+# 可能只是碰巧出现在两段无关文字里，那样会把真违规也放过。
+_VERBATIM_PAD = 10
+
+
+def _quote_spans(text):
+    """text 里成对引号覆盖的区间 [(start, end)]。落单的引号忽略，不猜它包到哪。"""
+    spans = []
+    for open_q, close_q in _QUOTE_PAIRS:
+        start = 0
+        while True:
+            i = text.find(open_q, start)
+            if i < 0:
+                break
+            j = text.find(close_q, i + 1)
+            if j < 0:
+                break
+            spans.append((i, j))
+            start = j + 1
+    return spans
+
+
+def _evidence_text(state):
+    """本轮工具返回拼成一段可搜索文本，供终态词逐字核对。
+
+    evidence 里存的就是 act 压过的那份文本（`[工具{参数}] {json}`），
+    也正是模型当时看到的那一份——拿它当"系统原话"的语料，比用原始返回更贴切。
+    """
+    parts = []
+    for e in state.get("evidence") or []:
+        r = e.get("result")
+        parts.append(r if isinstance(r, str)
+                     else json.dumps(r, ensure_ascii=False, default=str))
+    return "\n".join(parts)
+
+
+def _terminal_hits(text, evidence_text="", detail=None):
+    """终态声明命中，排除否定、假设、复述三类语境。
 
     否定窗口宽（14 字），因为「本结论仅为根因判断与建议，不代表故障已排除」
     中间会插一段状语；假设窗口窄（6 字），只认紧邻的「若/如果」，
     避免把正文里随便一个「若」当成豁免。
+
+    2026-11-20（G2）再加两条结构性豁免，不靠措辞：
+      ① 在引号内：模型列举/复述禁令时，词是被**引用**的，不是主张
+      ② 逐字在证据里：词连同前后各 10 字能在工具返回里找到，说明在转述系统原话
+
+    为什么必须有第二条：否定词表是穷举，模型换个说法就漏。逐字核对是结构性
+    证据，不依赖我又没有想起那个否定词。
+
+    detail 传 dict 时把两类豁免的条数填进去——豁免静默发生比漏判更危险：
+    少判了几次必须能在报告里看见，否则下次被放过的就是一句真声称。
     """
+    spans = _quote_spans(text)
+    ev = _norm(evidence_text) if evidence_text else ""
     hits = []
+    ex_quote = ex_verb = 0
     for w in TERMINAL_CLAIM_WORDS:
         nw = _norm(w)
         pos = 0
@@ -227,8 +297,21 @@ def _terminal_hits(text):
             if any(c in neg for c in _TERMINAL_NEG_CUES) or any(c in hyp for c in _TERMINAL_HYP_CUES):
                 pos = i + 1
                 continue
+            if any(s <= i and i + len(nw) <= e for s, e in spans):
+                ex_quote += 1
+                pos = i + 1
+                continue
+            if ev:
+                ctx = text[max(0, i - _VERBATIM_PAD):i + len(nw) + _VERBATIM_PAD]
+                if len(ctx) >= len(nw) + 8 and ctx in ev:
+                    ex_verb += 1
+                    pos = i + 1
+                    continue
             hits.append(w)
             break
+    if detail is not None:
+        detail["quote"] = ex_quote
+        detail["verbatim"] = ex_verb
     return hits
 
 
@@ -417,7 +500,8 @@ def judge(traj, state):
     # 终态声明单独算，不并进 forbid_words：两者混成一个码，
     # 报告上就分不清"违反了用户交代"（forbid_word）和"伪造了一个结果"（terminal_claim）。
     # 前者的修法是改话术，后者是改行为边界。
-    terminal_hit = _terminal_hits(flat)
+    terminal_detail = {}
+    terminal_hit = _terminal_hits(flat, _evidence_text(state), terminal_detail)
 
     # final_required：必须全部出现的关键词，为空则不检查（保持老用例行为不变）
     # 与 final_keywords 的区别：final_keywords 是"同义任选"，阈值 0.5；
@@ -463,6 +547,10 @@ def judge(traj, state):
     _cited_ok = int(cs.get("cited_ok") or 0)
     _derived_ok = int(cs.get("derived_ok") or 0)
     _unsourced_n = int(cs.get("unsourced") or 0)
+    # 判据入口自己解析不出来（G1）。这一条不进 misquoted，所以上面那些
+    # 引用门槛都看不见它——必须单独算进 semantic_ok，否则"判据没读懂"会被
+    # 记成"没失败"，而它恰恰是最该失败的一种：结论根本没被校验过。
+    parse_fail_n = int(cs.get("json_parse_fail") or 0)
     if _qty:
         # covered = 指到字段的 + 算式算对的。
         # derived_ok 也是"可核验"：值能从算式复算出来，比"指到某个字段"更强。
@@ -498,6 +586,7 @@ def judge(traj, state):
         and not req_miss
         and round_ok
         and cite_floor_ok
+        and not parse_fail_n
     )
 
     # 归因：失败落在哪一类。
@@ -619,6 +708,16 @@ def judge(traj, state):
     if misquoted:
         _fail("cite_wrong", "model", f"引用写错({','.join(misquoted)})",
               misquoted=[m[:80] for m in misquoted[:5]])
+    if parse_fail_n:
+        # 归因写 uncertain 而不是 model：判据自己没读懂，判不出模型对不对。
+        # owner 三档里没有 evaluator（判据不该给自己的错开脱），所以这一档
+        # 只能落到"判据分不出"——重点是 note 要让读报告的人先想到换解析器，
+        # 而不是去改 prompt。
+        notes = [c.get("note") for c in (state.get("cite_fail") or [])
+                 if isinstance(c, dict) and c.get("code") == "json_parse_fail"]
+        _fail("parse_fail", "uncertain",
+              "判据解析失败：有内容但解不出 claims——不是模型没写，是判据入口坏了",
+              why=notes[:2])
     if fc_fail:
         _fail("fc_bad", "model", "工具调用格式错")
     if not deduped_ok:
@@ -688,6 +787,9 @@ def judge(traj, state):
                       if f.get("severity") == "hard"],
         "round_ok": round_ok,
         "round_detail": round_detail,
+        # 终态词被豁免了几次（引号内 / 逐字在证据里）。豁免是静默的：
+        # 不记这个数，就没法区分"模型没写过终态词"和"写了但被我放过了"。
+        "terminal_exempt": terminal_detail,
         "turns": len(traj.get("turns") or []),
         "reasons": reasons,
         # 和 reasons 一一对应，带 code/owner/basis/note。
@@ -714,6 +816,30 @@ def _fixture_preflight():
         return None, 0
     cases = json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
     return [c["id"] for c in cases if check(c)[0]], len(cases)
+
+
+def _seed_preflight():
+    """判据断言的标识，在种子 SQL 里存不存在（G3，约 0.2 秒）。
+
+    为什么和判据自检一样放在跑之前：它拦的不是"模型会不会做"，而是
+    "这条用例要的现场事实到底在不在库里"。I9 的 `WO-` 六轮全量每轮都红，
+    每一轮都长得像"模型不会查工单"——判据是对的，前提不在。
+    这类缺口不抛异常、不打日志、没有一条测试会红，只能靠搜一遍种子发现。
+
+    返回 (missing, doc_only, n_ids)；脚本本身跑不起来时返回 None。
+    """
+    try:
+        scripts_dir = str(ROOT / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from check_seed_coverage import check as _seed_check
+
+        missing, doc_only, n_ids, _deps = _seed_check()
+        return missing, doc_only, n_ids
+    except Exception as e:
+        print(f"!! 种子覆盖自检跑不起来：{type(e).__name__}: {e}")
+        print("   跳过，但这不是正常状态：判据要的标识有没有环境事实，这一轮没人查\n")
+        return None
 
 
 def main():
@@ -753,6 +879,24 @@ def main():
         else:
             print(f"判据自检通过（{n_cases} 条夹具）\n")
 
+    # G3：判据断言的标识，必须能在种子 SQL 里搜到。
+    # 0.2 秒、纯只读，所以和判据自检一样放在跑之前——它决定这 3000 秒算出来的
+    # 东西有没有意义：一条用例要的现场事实不在库里，它每轮都会红，而红的样子
+    # 和"模型不会做"完全一样。
+    if "--no-seed-check" in sys.argv[1:]:
+        print("!! 绕过了种子覆盖自检：本轮不能声称「判据要的事实都存在于种子」\n")
+    else:
+        seeded = _seed_preflight()
+        if seeded is not None:
+            missing_ids, doc_only_ids, n_ids = seeded
+            if missing_ids:
+                print(f"!! 判据要的标识不在种子里：{', '.join(missing_ids)} 共 {len(missing_ids)} 个")
+                print("   先跑：python -X utf8 scripts/check_seed_coverage.py -v")
+                print("   先分清是「种子缺了」还是「这条用例不该断言它」——判据可能是对的。\n")
+                sys.exit(1)
+            extra = f"，{len(doc_only_ids)} 个只在手册源" if doc_only_ids else ""
+            print(f"种子覆盖自检通过（{n_ids} 个标识{extra}）\n")
+
     # 这一份 meta 是"这份报告是在什么条件下产生的"的唯一凭证。
     # 没有它，8 份历史报告之间无法比较：不知道换过模型、改过用例、还是改过 prompt。
     meta = {
@@ -774,6 +918,17 @@ def main():
         f"code_hash={meta['code_hash']}  seed_hash={meta['seed_hash']}  "
         f"cases_hash={meta['cases_hash']}\n"
     )
+
+    # G4：四轴齐全才允许声称"这份报告能和别的报告横比"。
+    # 加轴是一次性动作，校验才是让它不再退化的东西：下次再引入一个 data/ 之外的
+    # 新输入（prompt 模板、外部知识库快照），四轴照样齐、照样声称可比，
+    # 而数字已经不可横比了。缺轴就别落盘——一份孤证报告比没有报告更误导。
+    missing_axes = _missing_axes(meta)
+    if missing_axes:
+        print(f"!! 报告缺轴：{', '.join(missing_axes)}")
+        print("   缺轴的报告不落盘：这一轮数字没法证明和任何旧报告可比，跑完也是孤证。")
+        print("   先补 app/meta.py 的那根轴，再跑。")
+        return 2
 
     # 建单类共享 mock QMS 的外部状态（同一张 work_orders 表）：并发跑会让
     # 这些用例的建单结果彼此交叉，幂等判定不可信。多轮类也必须串行，但原因
@@ -952,6 +1107,14 @@ def main():
     # 这个必须看得见：修复是静默的，不单独计数就等于"模型越不守契约越没人知道"。
     json_fixed = sum(1 for r in results
                      if (r.get("cite_stats") or {}).get("json_fixed"))
+    # 判据入口自己解析不出来的条数（G1）。非零就是判据坏了，不是模型没写结论——
+    # 这两件事在旧报表上长得一模一样（都是 json_bad/qty=0）。
+    parse_fail_cases = sum(1 for r in results
+                           if (r.get("cite_stats") or {}).get("json_parse_fail"))
+    # 终态词被豁免的次数（G2）：引号内 = 复述禁令，逐字在证据 = 转述系统原话。
+    # 豁免必须是可见的，否则"少判了几次"和"根本没写"分不开。
+    term_quote = sum((r.get("terminal_exempt") or {}).get("quote", 0) for r in results)
+    term_verb = sum((r.get("terminal_exempt") or {}).get("verbatim", 0) for r in results)
     steps_bad = sum(1 for r in results if not r["steps_ok"])
     # 被预算掐断的条数。这个值非零就说明"12 步上限"在替模型做判断，
     # 那几条的结论是半成品。以前它们混在步数里、和正常收工长得一样，
@@ -1057,6 +1220,13 @@ def main():
         print(f"红线失败      {len(hard_rows)}/{n}   （越界而非答偏：{detail}）")
     else:
         print("红线失败      0    （本轮没有命中禁令 / 终态声明 / 越界调用 / 落点缺失）")
+    # 这两行是 G1/G2 的自证：第一行非零说明判据入口坏了，第二行非零说明
+    # 终态词的判据放过了几次——两行都只有在自己出事的时候才会亮，
+    # 所以必须常驻，不能等出事了再临时算。
+    print(f"判据解析失败  {parse_fail_cases}/{n}   "
+          f"（有内容但解不出 claims：判据入口坏了，不是模型没写结论）")
+    print(f"终态词豁免    {term_quote} 条引号内 / {term_verb} 条逐字在证据   "
+          f"（判为复述，没算违规）")
     # 规则层的好坏必须成三行看，只报"命中几条"等于没报：
     #   命中  = 规则接管了多少条
     #   救人  = 模型本来会判错（model_intent ≠ 期望），规则把它纠对了
@@ -1210,6 +1380,9 @@ def main():
         "cover_rate": round(cover_rate, 4),
         "cite_cut": cite_cut,
         "json_fixed": json_fixed,
+        "json_parse_fail": parse_fail_cases,
+        "terminal_exempt_quote": term_quote,
+        "terminal_exempt_verbatim": term_verb,
         "misquote_n": misquote_n,
         "range_ok": range_ok,
         "range_bad": range_bad,

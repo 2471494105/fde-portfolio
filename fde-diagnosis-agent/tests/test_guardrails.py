@@ -3874,5 +3874,158 @@ class EvalJudgeContractTest(unittest.TestCase):
         self.assertEqual(owners.get("forbid_regex_bad"), "case")
 
 
+class FourGatesTest(unittest.TestCase):
+    """2026-11-20 定的四道闸（G1 解析三态 / G2 终态词逐字核对），每条都有反向测试。
+
+    为什么每道闸都要有"本来会误判"的输入：这四条的共同病根是**坏了不报警**——
+    解析失败被当成模型没写、判据假设了一个不存在的环境事实、两份报告长得一样。
+    没有一条测试会在这些情况下变红，所以闸装上了下次照样漏。
+    """
+
+    def _verify(self, final, evidence=None):
+        """单跑 verify，跑完把 RUNS_DIR 换回去（和既有用例同一套隔离方式）。"""
+        st = {"turn": 1,
+              "evidence": evidence or [
+                  {"turn": 1, "tool": "query_device_profile", "ev_no": 1,
+                   "args": {"device_id": "CX-104"},
+                   "result": json.dumps({"device_id": "CX-104"}), "truncated": False}],
+              "final": final}
+        old = trace.RUNS_DIR
+        trace.RUNS_DIR = Path(tempfile.mkdtemp())
+        try:
+            with trace.Tracer("gates", model="m", provider="p", base_url="b"):
+                return nodes.verify(st)
+        finally:
+            trace.RUNS_DIR = old
+
+    # ---------- G1：解析三态 ----------
+
+    def test_parse_bad_is_not_none(self):
+        # H2 的真实形状：推理段里有花括号，结论是 <claims>[…]</claims> 数组。
+        # 旧解析器切出数组中间片段 → 解析失败 → 返回 None → 被读成"模型没写"。
+        raw = ('<analysis>看了{设备档案}</analysis>\n'
+               '<claims>[{"text":"A","value":1},{"text":"B","value":2}]</claims>')
+        kind, doc, why = nodes._parse_claims_why(raw)
+        self.assertEqual(kind, nodes.PARSE_BAD, "有内容却解不出，必须落 BAD 而不是 NONE")
+        self.assertIsNone(doc)
+        self.assertTrue(why, "失败原因要留一个短码，否则四种失败又并成一种")
+
+    def test_plain_text_is_none_not_bad(self):
+        # 纯文本拒答是**合法**的：claims 契约只对"要下结论"的回答提要求。
+        # 它必须落 NONE，否则 I3 这类"台账里查不到"会被记成判据解析失败。
+        kind, _doc, why = nodes._parse_claims_why("设备台账里查不到 CX-106")
+        self.assertEqual(kind, nodes.PARSE_NONE)
+        self.assertEqual(why, "plain_text")
+
+    def test_empty_output_is_none(self):
+        self.assertEqual(nodes._parse_claims_why("")[0], nodes.PARSE_NONE)
+        self.assertEqual(nodes._parse_claims_why(None)[0], nodes.PARSE_NONE)
+
+    def test_dict_without_claims_is_bad(self):
+        kind, _doc, why = nodes._parse_claims_why({"conclusion": "x"})
+        self.assertEqual(kind, nodes.PARSE_BAD)
+        self.assertEqual(why, "no_claims_key")
+
+    def test_verify_keeps_parse_fail_out_of_misquoted(self):
+        """判据解析失败要单独记，不许塞进 misquoted 让模型背锅。"""
+        raw = ('2 号工位误判率 0.198，1 号 0.0303\n'
+               '<claims>[{"text":"0.198","value":0.198,"ref":"1#a"},'
+               '{"text":"0.0303","value":0.0303,"ref":"1#b"}]</claims>')
+        cs = self._verify(raw)["cite_stats"]
+        self.assertEqual(cs["json_bad"], 1, "解不出 = 没校验过，仍然不算通过")
+        self.assertEqual(cs["json_parse_fail"], 1, "必须单独有一个码：判据入口坏了")
+        self.assertEqual(self._verify(raw)["misquoted"], [],
+                         "misquoted 是模型的账，解析器坏了不能记进去")
+
+    def test_parse_fail_is_uncertain_owner(self):
+        traj = {"id": "X", "type": "病历", "expect_tools": [], "forbid_tools": [],
+                "expect_group_by": [], "final_keywords": [], "expect_ask": False,
+                "steps_range": (0, 8)}
+        st = {"tool_names": [], "final_text": "x", "steps": 1, "blocked": [],
+              "misquoted": [], "cite_stats": {"json_bad": 1, "json_parse_fail": 1},
+              "cite_fail": [{"code": "json_parse_fail",
+                             "note": "判据解析失败（quote_unfixable）"}],
+              "evidence": [], "intent": "lookup", "intent_conf": 0.9,
+              "stop_reason": "enough", "check_retry": 0}
+        r = run_eval.judge(traj, st)
+        self.assertFalse(r["semantic_ok"], "判据没读懂 ≠ 通过：这条不许落进假绿灯")
+        item = [f for f in r["failure"] if f["code"] == "parse_fail"][0]
+        self.assertEqual(item["owner"], "uncertain",
+                         "判不出模型对不对，就不许记到模型账上")
+        self.assertIn("判据解析失败", item["basis"]["why"][0])
+
+    # ---------- G2：终态词的结构性豁免 ----------
+
+    def test_terminal_word_inside_quotes_is_not_a_claim(self):
+        text = run_eval._norm("结论边界：该表述不应出现——「已修复」。我只给根因判断。")
+        self.assertEqual(run_eval._terminal_hits(text), [],
+                         "引号里是在引用禁令，不是主张现场结果")
+
+    def test_terminal_word_in_plain_sentence_is_still_flagged(self):
+        # 反向：不许把豁免做成"出现过就不算"。真主张必须照样判。
+        self.assertEqual(run_eval._terminal_hits(run_eval._norm("CX-101 故障已排除，可以恢复生产")),
+                         ["故障已排除"])
+
+    def test_terminal_word_verbatim_in_evidence_is_transcription(self):
+        ev = "系统提示：该工单现场反馈写着已处理完毕，等待设备科复核"
+        text = run_eval._norm("该工单现场反馈写着已处理完毕，等待设备科复核")
+        detail = {}
+        self.assertEqual(run_eval._terminal_hits(text, ev, detail), [],
+                         "整句能在工具返回里逐字找到 = 转述系统原话，不是主张")
+        self.assertEqual(detail["verbatim"], 1)
+
+    def test_verbatim_needs_context_not_just_the_word(self):
+        # 证据里碰巧有这几个字，但模型周围的措辞完全不同 → 仍是它自己在下结论。
+        # 这条防的是豁免范围被悄悄放大成"证据里出现过就放过"。
+        hits = run_eval._terminal_hits(run_eval._norm("本台设备已处理完毕，可以放心"),
+                                       "随便一句 已处理完毕 出现")
+        self.assertEqual(hits, ["已处理完毕"])
+
+
+class SeedCoverageGateTest(unittest.TestCase):
+    """G3：判据断言的标识，必须能在种子 SQL 里搜到。
+
+    I9 六轮全量每轮都红，每一轮看起来都像"模型不会查工单"——判据对、前提不在。
+    这组测试既钉"现在对"，也钉"真缺东西时它会响"。
+    """
+
+    def setUp(self):
+        if str(ROOT / "scripts") not in sys.path:
+            sys.path.insert(0, str(ROOT / "scripts"))
+        import check_seed_coverage
+        self.mod = check_seed_coverage
+
+    def test_all_asserted_ids_exist_in_current_seed(self):
+        missing, _doc_only, n_ids, _deps = self.mod.check()
+        self.assertEqual(missing, [], f"判据要的标识不在种子里：{missing}")
+        self.assertGreater(n_ids, 0, "一个标识都没扫到 = 闸没生效，不是万事大吉")
+
+    def test_gate_fires_on_seed_before_work_orders(self):
+        bak = "002_data.sql.bak_before_wo_seed"
+        if not (ROOT / "data" / "seed" / bak).exists():
+            self.skipTest("备份不入库，缺这份快照时跳过反向验证")
+        missing, _doc_only, _n, deps = self.mod.check(bak)
+        self.assertIn("WO-", missing, "补种子之前 WO- 根本不存在，这道闸必须报红")
+        self.assertEqual({c for c, _f in deps["WO-"]}, {"W1", "W3", "I9"},
+                         "报红时要能指认是哪几条用例在依赖它")
+
+
+class MetaAxesGateTest(unittest.TestCase):
+    """G4：四轴齐全才允许声称"这份报告能和旧报告横比"。"""
+
+    def test_full_axes_pass(self):
+        meta = {"model": "deepseek-chat", "code_hash": "abc123",
+                "cases_hash": "def456", "seed_hash": "9caa1322fbfc"}
+        self.assertEqual(run_eval._missing_axes(meta), [])
+
+    def test_missing_seed_hash_is_rejected(self):
+        meta = {"model": "deepseek-chat", "code_hash": "abc123",
+                "cases_hash": "def456", "seed_hash": "  "}
+        self.assertEqual(run_eval._missing_axes(meta), ["seed_hash"])
+
+    def test_empty_meta_reports_all_axes(self):
+        self.assertEqual(run_eval._missing_axes({}), list(run_eval.REQUIRED_AXES))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

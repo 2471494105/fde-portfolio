@@ -1878,26 +1878,42 @@ def final_to_text(final):
     return str(final or "")
 
 
-def _parse_claims(text):
-    """从结论里取出结构化断言。返回 dict 或 None（模型没按契约输出）。
+# 解析三态（2026-11-20 G1）。契约迁移期只区分"解出来了"和"没解出来"是不夠的：
+# 剥不掉围栏、JSON 解析失败、没有 claims 字段、引号修不出来，四种失败原来全塌成
+# None，于是 verify 走"模型没按契约输出"那条分支——**判据自己的解析失败，
+# 被记成了被测对象的沉默**。报告上它是 json_bad，读的人以为是模型没写结论。
+PARSE_OK = "ok"
+PARSE_BAD = "bad"
+PARSE_NONE = "none"
 
-    模型有时会把 JSON 包在 ```json ``` 里，先剥掉再解析。
-    剥不掉、解析失败、没有 claims 字段，一律返回 None，
-    由调用方退回旧的文本解析路径——契约迁移期不能因为一次格式抖动就丢结论。
 
-    **两种输入都接受**：已经是 dict 的（写入端解析过一次，直接存进 final），
-    和仍然是字符串的（模型原始输出、历史 checkpoint 里的旧格式）。
-    这样 final 从"字符串"改成"dict"可以逐点推进，不必一次改完——
-    每改一个写入点，读取端不用跟着动。
+def _parse_claims_why(text):
+    """把结论解析成 claims 文档，返回 (kind, doc, why)。
+
+    kind 三档，调用方要区别对待：
+      PARSE_OK   —— 解出了 dict（可能带 _repaired），doc 是它
+      PARSE_BAD  —— 有内容、且看起来在提交 JSON 契约，但解不出 claims。
+                    四种失败都归这里，why 说明是哪一种。**必须记成解析失败**
+      PARSE_NONE —— 压根没提交 JSON：空输出，或纯文本拒答（"台账里查不到"）。
+                    只有这一档允许走"没按契约输出"的 pass 分支
+
+    why 是短码，只进报告和日志，不给人当结论读。
     """
     if isinstance(text, dict):
         # 已经是解析好的。_repaired 标记只在字符串路径产生，
         # 这里返回的 dict 不该带它——带了会让 verify 把一次普通解析记成"修复"。
-        return text if isinstance(text.get("claims"), list) else None
+        if isinstance(text.get("claims"), list):
+            return PARSE_OK, text, ""
+        return PARSE_BAD, None, "no_claims_key"
+
     s = (text or "").strip()
+    if not s:
+        return PARSE_NONE, None, "empty"
     if s.startswith("```"):
         s = re.sub(r"^```[A-Za-z]*\s*", "", s)
         s = re.sub(r"```\s*$", "", s).strip()
+        if not s:
+            return PARSE_NONE, None, "empty"
 
     # 2026-11-20：模型会先写一段推理（`<analysis>`），再给结论对象。
     # 旧逻辑取「第一个 { 到最后一个 }」，在这种形状下切出来的是
@@ -1917,12 +1933,17 @@ def _parse_claims(text):
         except Exception:
             continue
         if isinstance(obj, dict) and isinstance(obj.get("claims"), list):
-            return obj
+            return PARSE_OK, obj, ""
 
     # 兜底仍是旧路径：处理裸引号这类格式病，修完打 _repaired 留痕
     i, j = s.find("{"), s.rfind("}")
     if i < 0 or j <= i:
-        return None
+        # 一个花括号都没有。纯文本拒答是**合法**的（claims 契约只对"要下结论"的
+        # 回答提要求），所以默认落 PARSE_NONE；只有文里出现 claims 这个词，
+        # 才说明它想写契约却没写出对象。
+        if "claims" in s:
+            return PARSE_BAD, None, "no_json_object"
+        return PARSE_NONE, None, "plain_text"
     body = s[i:j + 1]
     try:
         d = json.loads(body)
@@ -1932,16 +1953,34 @@ def _parse_claims(text):
         # 静默修复最危险：模型越不守规矩，你越看不见。
         fixed = _fix_bare_quotes(body)
         if fixed is None:
-            return None
+            return PARSE_BAD, None, "quote_unfixable"
         try:
             d = json.loads(fixed)
         except Exception:
-            return None
+            return PARSE_BAD, None, "still_unparsable"
         if isinstance(d, dict):
             d["_repaired"] = True
     if not isinstance(d, dict) or not isinstance(d.get("claims"), list):
-        return None
-    return d
+        return PARSE_BAD, None, "no_claims_key"
+    return PARSE_OK, d, ""
+
+
+def _parse_claims(text):
+    """从结论里取出结构化断言。返回 dict 或 None（模型没按契约输出）。
+
+    模型有时会把 JSON 包在 ```json ``` 里，先剥掉再解析。
+
+    **判据侧不要用它判"模型有没有写"**——那要分三态，用 `_parse_claims_why`。
+    这里保留两态，是为了写入点（finalize / lookup）不必关心失败原因：
+    解出来就给，解不出就 None，行为与改造前完全一致。
+
+    **两种输入都接受**：已经是 dict 的（写入端解析过一次，直接存进 final），
+    和仍然是字符串的（模型原始输出、历史 checkpoint 里的旧格式）。
+    这样 final 从"字符串"改成"dict"可以逐点推进，不必一次改完——
+    每改一个写入点，读取端不用跟着动。
+    """
+    kind, doc, _why = _parse_claims_why(text)
+    return doc if kind == PARSE_OK else None
 
 
 def _as_num(x):
@@ -2236,6 +2275,10 @@ def _new_stats():
             # json_fixed 结论 JSON 里值内裸引号被修好了，校验照常进行
             "json_bad": 0, "unsourced": 0, "ref_bad": 0, "cite_cut": 0,
             "json_fixed": 0,
+            # json_parse_fail  判据入口自己解析不出来（有内容、解不出 claims）。
+            # 和 json_bad 分开：json_bad 是"模型没按契约写"，
+            # 这条是"判据没读懂模型写的"。混成一个数，修错地方都不知道往哪修。
+            "json_parse_fail": 0,
             # derived_ok   ref 为空但给了算式，重算对得上 —— 算出来的数，可验
             # derived_bad  ref 为空、给了算式，但算错了 —— 这是真错，判失败
             "derived_ok": 0, "derived_bad": 0,
@@ -2853,7 +2896,9 @@ def verify(state):
     # 所以不用再去正则里猜"这个数属于哪个锚点"。
     # 这条对**所有**路径生效，不留豁免：Anthropic 的 citations 形状里没有
     # "某条路径不做引用保证"这种通道，真做不到就该明确声明，而不是关掉检查。
-    doc = _parse_claims(final)
+    # 三态：ok / bad / none。bad 是**判据入口自己坏了**（有内容但解不出 claims），
+    # 不许落成"模型没写结论"——那会让一次解析失败看起来像模型的能力问题。
+    parse_kind, doc, parse_why = _parse_claims_why(final)
     # 节点自己排好版的（lookup 的表格）不要用列表渲染覆盖：
     # claims 给校验层，final_text 给人看，两份各有分工。
     preset_text = str(state.get("final_text") or "").strip()
@@ -2895,7 +2940,17 @@ def verify(state):
     # 而没校验的结论被当成通过，才是真正危险的地方。
     # 唯一例外是步数用尽、压根没形成结论那条，它本来就没声明要溯源。
     stats["json_bad"] = 1
-    if not no_final and _has_numeric_assert(final):
+    if parse_kind == PARSE_BAD:
+        # 判据入口自己坏了：有内容、看起来在提交契约，但解不出 claims。
+        # 这一条**不能**再往 misquoted 里塞——塞进去 judge 会记成 cite_wrong、
+        # owner 落到 model，等于让模型替解析器背锅。单独一个码，单独一行统计。
+        stats["json_parse_fail"] = 1
+        cite_fail.append({
+            "code": "json_parse_fail",
+            "note": f"判据解析失败（{parse_why}）：有内容但解不出 claims，"
+                    f"这不是模型没写结论",
+        })
+    elif not no_final and _has_numeric_assert(final):
         msg = "结论未按 claims 契约输出，引用无法核验"
         misquoted.append(msg)
         cite_fail.append({"code": "json_bad", "note": msg})

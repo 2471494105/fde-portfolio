@@ -4027,5 +4027,27 @@ class MetaAxesGateTest(unittest.TestCase):
         self.assertEqual(run_eval._missing_axes({}), list(run_eval.REQUIRED_AXES))
 
 
+class CiteTextTest(unittest.TestCase):
+    """结论里的溯源标签中文化：只翻认得的工具名，正文其余一字不改。
+
+    这条约束是给演示看的——现场读不懂 query_defect_log{group_by=station}；
+    但翻错比不翻更糟：标签是能和 runs/*.jsonl 对账的证据。
+    """
+
+    def test_args_with_multi_value_enum(self):
+        from app.web import server as web
+
+        got = web.cite_text("误判 23.9%[query_defect_log{group_by=station,defect_type,batch}]")
+        self.assertEqual(got, "误判 23.9%[查误判记录{分组维度=按工位、按缺陷类型、按批次}]")
+
+    def test_no_arg_tag_and_unknown_tool_untouched(self):
+        from app.web import server as web
+
+        self.assertEqual(web.cite_text("寿命 8620[query_light_usage]"), "寿命 8620[查光源使用]")
+        # 认不出的方括号内容必须原样留着，否则会把结论正文改坏
+        self.assertEqual(web.cite_text("工单 [WO-20261105-001] 处理中"),
+                         "工单 [WO-20261105-001] 处理中")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

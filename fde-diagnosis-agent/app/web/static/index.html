@@ -308,7 +308,9 @@ function renderDone(d){
     ? `<div class="warnbox">校验拦截：结论中的 ${d.blocked.map(x => `<strong>${x}</strong>`).join('、')} 无法在工具返回中找到，已标记为不可溯源。</div>`
     : '';
 
-  $('conclusion').innerHTML = md(d.final_text || d.final || '（无结论）');
+  // 结论里的引用标签由后端翻好（final_cn）：[查误判记录{分组维度=按工位、按缺陷类型}]。
+  // 翻译字典只留后端一份，前端不再维护第二份，也就是不会再和轨迹里的名字不一致。
+  $('conclusion').innerHTML = md(d.final_cn || d.final_text || d.final || '（无结论）');
   renderTrace(d.evidence);
   loadRuns();
 }
@@ -468,11 +470,11 @@ function renderEvents(events){
       // 轨迹里只有截断的 result_head，翻不出字段表：说清"回来了几个字段"，
       // 原始串收进折叠，别把 {"device_id": "CX-103"...} 直接铺到这一行
       const raw = String(e.result_head || '');
-      let note = '无返回';
+      let note = '没有返回内容';
       try {
         const o = JSON.parse(raw);
-        note = Array.isArray(o) ? `${o.length} 条记录` : `${Object.keys(o).length} 个字段`;
-      } catch (_) { note = raw ? '内容较长（展开看原始）' : '无返回'; }
+        note = Array.isArray(o) ? `返回 ${o.length} 条记录` : `返回 ${Object.keys(o).length} 个字段`;
+      } catch (_) { note = raw ? '数据较多，点开看原文' : '没有返回内容'; }
       html += `<div class="tl-row"><div class="tl-t">${t}</div>
         <div class="tl-k ${e.ok?'tool':'err'}" title="${esc(e.name || '')}">${esc(e.name_cn || e.name)}</div>
         <div class="tl-v">${e.ms}ms　返回 ${note}

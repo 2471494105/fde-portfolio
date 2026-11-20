@@ -253,6 +253,46 @@ def _val(key: str, v) -> str:
     return str(v)
 
 
+# 结论正文里的溯源标签：[tool{args}] 或 [tool]。这是模型写出来的原文，
+# 里面是英文工具名和 group_by=station 这种枚举，现场一个字都读不出意思。
+_CITE_RE = re.compile(r"\[([a-z][a-z0-9_]*)(?:\{([^}]*)\})?\]")
+
+
+def _cite_args(tool: str, inner: str) -> str:
+    """把 `group_by=station,defect_type,batch` 还原成"分组维度=按工位、按缺陷类型、按批次"。
+
+    逗号在两处都用：既分隔参数，也分隔多值枚举。所以先按逗号切，
+    含 "=" 的段当新参数，不含的并回上一个参数的值——不能简单 split("=")。
+    """
+    pairs: list[list] = []
+    for seg in inner.split(","):
+        seg = seg.strip()
+        if "=" in seg:
+            k, v = seg.split("=", 1)
+            pairs.append([k.strip(), [v.strip()]])
+        elif pairs:
+            pairs[-1][1].append(seg)
+    out = []
+    for k, vs in pairs:
+        out.append(f"{_label(tool, k)}={'、'.join(_val(k, v) for v in vs)}")
+    return "，".join(out)
+
+
+def cite_text(text):
+    """只翻认得的工具名，认不出的一字不改——正文是证据，宁可不翻也不能翻错。"""
+    if not text:
+        return text
+
+    def sub(m):
+        name, inner = m.group(1), m.group(2)
+        cn = tool_cn(name)
+        if cn == name:
+            return m.group(0)
+        return f"[{cn}]" if not inner else f"[{cn}{{{_cite_args(name, inner)}}}]"
+
+    return _CITE_RE.sub(sub, text)
+
+
 def _row_text(tool: str, row) -> str:
     """列表里的一条压成一行：按优先级挑字段，跳过长正文，最多四对。"""
     if not isinstance(row, dict):
@@ -464,11 +504,18 @@ def _done_event(state, *, trace_id, thread_id, elapsed_ms):
     """
     base = result_event(state)
     return {
-        "meta_intent": base.get("intent"),
         "type": "done",
         **base,
         # 意图的中文写法单独给一栏，不覆盖原值：审计仍然要看到 intent 枚举本身
         "intent_cn": intent_cn(base.get("intent")),
+        # 结论正文里的引用标签形如 [query_defect_log{group_by=...}]，前端拿这份映射
+        # 只把工具名换成中文，参数原样保留——改了就没法和 runs/*.jsonl 对账
+        "tool_cn_map": TOOL_CN,
+        # 翻好的结论正文（只动 [工具{参数}] 这种标签，正文其余一字不改）。
+        # 取的是 final_text，不是 final——final 是 result_event 给的 JSON 串，
+        # 拿去渲染会把整段 {"conclusion":…} 铺到页面上（实测踩过）。
+        # 原 final_text / final 都原样返回，审计看的还是模型写的那份
+        "final_cn": cite_text(base.get("final_text") or ""),
         "evidence": _brief(state.get("evidence", []), state.get("steps", 0)),
         "trace_id": trace_id,
         "thread_id": thread_id,

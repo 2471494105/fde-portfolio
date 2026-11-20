@@ -66,6 +66,13 @@
   .badge{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:3px;
          background:#eef1f5;color:#8a96a3;font-size:11px;font-weight:400;vertical-align:middle}
   .tl-row.stale{opacity:.55}
+  /* 返回值的字段表：左边中文标签，右边值。现场看的是这一块，不是 JSON */
+  .kv{display:grid;grid-template-columns:104px 1fr;gap:2px 10px;margin:2px 0 4px}
+  .kv-k{color:#8a96a3;font-size:12.5px}
+  .kv-v{color:#1f2933;font-size:13px;word-break:break-word}
+  .kv-list{margin-top:5px}
+  .kv-list b{color:#5a6572;font-weight:600;font-size:12.5px}
+  .kv-li{color:#414c5a;font-size:12.5px;margin:1px 0;line-height:1.6}
   .run-row{display:grid;grid-template-columns:170px 66px 1fr;gap:10px;padding:7px 0;
            border-bottom:1px solid #f0f3f6;font-size:13px;cursor:pointer}
   .run-row:hover{background:#f7f9fc}
@@ -289,7 +296,8 @@ function renderDone(d){
       (d.blocked.length ? `<span>未溯源 <b class="bad">${d.blocked.length}</b></span>` : '')
     : `<span>无需溯源的数量</span>`;
   $('meta').innerHTML =
-    `<span>第 <b>${d.turn}</b> 轮 · ${d.intent || '-'}</span>` +
+    // 意图用中文（后端给了 intent_cn），原枚举留在 title 里，审计时还查得到
+    `<span title="intent=${esc(d.intent || '')}">第 <b>${d.turn}</b> 轮 · ${esc(d.intent_cn || d.intent || '-')}</span>` +
     `<span>本轮新查 <b>${d.steps}</b> 次</span>` +
     (hisN > 0 ? `<span>沿用上轮证据 <b>${hisN}</b> 条</span>` : '') +
     `<span>涉及工具 <b>${new Set(d.tools).size}</b> 个</span>` +
@@ -381,7 +389,15 @@ function shortVal(v, n){
   return String(v);
 }
 
-function fmtArgs(args){
+function fmtArgs(e){
+  // 后端已经翻好的参数（设备编号 / 分组维度 …），直接用
+  if (e.args_view && e.args_view.length){
+    return e.args_view.map(a =>
+      `<span class="arg-k">${esc(a.label)}</span> <span class="val">${esc(a.value)}</span>`
+    ).join('　');
+  }
+  // 兜底：老帧没有 args_view，保持原样（英文键），不要静默丢参数
+  const args = e.args;
   if (!args || typeof args !== 'object') return '<span class="hint">无参数</span>';
   const ks = Object.keys(args);
   if (!ks.length) return '<span class="hint">无参数</span>';
@@ -390,26 +406,28 @@ function fmtArgs(args){
   ).join('　');
 }
 
-function fmtHead(head){
-  // head 可能因为 600 字截断而不再是合法 JSON，parse 必须兜底
-  let obj;
-  try { obj = JSON.parse(head); } catch (e) { return null; }
-  if (Array.isArray(obj)) return obj.length + ' 条记录';
-  if (obj && typeof obj === 'object') {
-    const arrs = Object.entries(obj).filter(([, v]) => Array.isArray(v));
-    if (arrs.length) {
-      // 取最长的那个数组，它通常是主体数据
-      arrs.sort((a, b) => b[1].length - a[1].length);
-      const [k, v] = arrs[0];
-      return `${k}：${v.length} 条`;
-    }
-    const ks = Object.keys(obj);
-    if (!ks.length) return '空对象';
-    return ks.slice(0, 6)
-      .map(k => `<span class="arg-k">${esc(k)}</span>: ${esc(shortVal(obj[k], 22))}`)
-      .join('　');
+/* 一条返回怎么画：字段表（中文标签） + 列表样例 + 折叠的原始 JSON。
+   原始串必须留——排查"模型到底看到了什么"时它就是唯一凭据，但它是给工程看的，
+   不是给现场看的，所以默认收起、并改名说明用途。 */
+function renderReturn(e){
+  if (!e.ok) return `<span style="color:var(--err)">${esc(e.error || '调用失败')}</span>`;
+  const v = e.view || null;
+  let html = '';
+  if (v && v.fields && v.fields.length){
+    html += '<div class="kv">' + v.fields.map(f =>
+      `<div class="kv-k">${esc(f.label)}</div><div class="kv-v">${esc(f.value)}</div>`
+    ).join('') + '</div>';
   }
-  return shortVal(obj, 80);
+  if (v && v.list && v.list.count){
+    html += `<div class="kv-list"><b>${esc(v.list.label)}</b>（共 ${v.list.count} 条）`
+      + (v.list.items || []).map(s => `<div class="kv-li">· ${esc(s)}</div>`).join('')
+      + '</div>';
+  }
+  if (!html){
+    // 没有字段表（老帧或非对象返回）：退回后端那句摘要，别显示成空白
+    html = esc(e.summary || '（无摘要）');
+  }
+  return html;
 }
 
 function renderTrace(evidence){
@@ -420,22 +438,18 @@ function renderTrace(evidence){
   let html = '';
   evidence.forEach((e, idx) => {
     const cls = e.ok ? 'tool' : 'err';
-    const summary = e.ok ? (e.summary || fmtHead(e.head)) : null;
-    const ret = e.ok
-      ? esc(summary || '（无摘要）')
-      : `<span style="color:var(--err)">${esc(e.error || '调用失败')}</span>`;
     // current===false 表示这条是上一轮留下的，不是本次查的
     const old = e.current === false;
     const badge = old ? ' <span class="badge">上轮</span>' : '';
     html += `<div class="tl-row${old ? ' stale' : ''}">
       <div class="tl-t">#${idx + 1}</div>
-      <div class="tl-k ${cls}">${esc(e.tool)}${badge}</div>
-      <div class="tl-v">${fmtArgs(e.args)}</div>
+      <div class="tl-k ${cls}" title="${esc(e.tool)}">${esc(e.tool_cn || e.tool)}${badge}</div>
+      <div class="tl-v">${fmtArgs(e)}</div>
     </div>
     <div class="tl-row${old ? ' stale' : ''}">
       <div></div><div class="arg-k">返回</div>
-      <div class="tl-v">${ret}
-        <details class="raw"><summary>原始返回</summary><pre>${esc(e.head)}</pre></details>
+      <div class="tl-v">${renderReturn(e)}
+        <details class="raw"><summary>原始 JSON（工程核查用）</summary><pre>${esc(e.head)}</pre></details>
       </div>
     </div>`;
   });
@@ -449,11 +463,21 @@ function renderEvents(events){
     if (e.event === 'plan'){
       html += `<div class="tl-row"><div class="tl-t">${t}</div><div class="tl-k plan">推理</div>
         <div class="tl-v">token ${e.prompt_tokens}+${e.completion_tokens}，${(e.ms/1000).toFixed(1)}s →
-        ${esc((e.calls||[]).join('、') || '准备收尾')}</div></div>`;
+        ${esc((e.calls_cn || e.calls || []).join('、') || '准备收尾')}</div></div>`;
     } else if (e.event === 'tool'){
+      // 轨迹里只有截断的 result_head，翻不出字段表：说清"回来了几个字段"，
+      // 原始串收进折叠，别把 {"device_id": "CX-103"...} 直接铺到这一行
+      const raw = String(e.result_head || '');
+      let note = '无返回';
+      try {
+        const o = JSON.parse(raw);
+        note = Array.isArray(o) ? `${o.length} 条记录` : `${Object.keys(o).length} 个字段`;
+      } catch (_) { note = raw ? '内容较长（展开看原始）' : '无返回'; }
       html += `<div class="tl-row"><div class="tl-t">${t}</div>
-        <div class="tl-k ${e.ok?'tool':'err'}">${e.name}</div>
-        <div class="tl-v">${e.ms}ms　${esc(String(e.result_head||'').slice(0,140))}</div></div>`;
+        <div class="tl-k ${e.ok?'tool':'err'}" title="${esc(e.name || '')}">${esc(e.name_cn || e.name)}</div>
+        <div class="tl-v">${e.ms}ms　返回 ${note}
+          <details class="raw"><summary>原始 JSON（工程核查用）</summary><pre>${esc(raw)}</pre></details>
+        </div></div>`;
     } else if (e.event === 'verify'){
       const bad = e.blocked && e.blocked.length;
       const txt = bad ? '未溯源 ' + esc(e.blocked.join('、'))

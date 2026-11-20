@@ -1,6 +1,6 @@
 {
   "id": "I6",
-  "saved_at": "2026-11-20 00:38:50",
+  "saved_at": "2026-11-20 11:47:41",
   "traj_fp": "e5609a8d6e1e",
   "traj": {
     "id": "I6",
@@ -126,6 +126,7 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
+      "json_parse_fail": 0,
       "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 0,
@@ -269,8 +270,8 @@
     "model_intent": "lookup"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

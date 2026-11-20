@@ -1,6 +1,6 @@
 {
   "id": "H3",
-  "saved_at": "2026-11-20 00:35:54",
+  "saved_at": "2026-11-20 11:44:40",
   "traj_fp": "5ab54f7a9da8",
   "traj": {
     "id": "H3",
@@ -40,7 +40,7 @@
       "check_doc_conflict"
     ],
     "final": {
-      "conclusion": "误判在两个工位、多个缺陷类型、多个批次上同时阶跃抬升，拐点精确落在 11-07 那次结果为「告警」的标定之后，方向是标定漂移（共用标定基准失效），不是单工位镜头/光源问题，也不是单一批次物料问题；标定允许漂移与标定周期两项参数在厂商手册与厂内SOP之间存在取值冲突，需人工确认口径后再定处置力度",
+      "conclusion": "CX-104 的误判是 11-07 上午那次标定告警后开始的标定漂移，不是单工位硬件故障，也不是物料批次问题——两个工位误判率齐平、批次与缺陷类型均无集中点，而漂移量在拐点当天跳升并报「告警」",
       "claims": [
         {
           "text": "11-07 误判率 15.38%",
@@ -49,144 +49,158 @@
           "ref": "query_defect_log{group_by=day,time_from=2025-10-20}#groups[7].rate"
         },
         {
-          "text": "11-08 误判率跳到 63.16%",
+          "text": "11-08 起跳到 63.16%",
           "value": 63.16,
           "unit": "%",
           "ref": "query_defect_log{group_by=day,time_from=2025-10-20}#groups[0].rate"
         },
         {
+          "text": "11-09 至 11-14 各天误判率持续高位",
+          "ref": "query_defect_log{group_by=day,time_from=2025-10-20}#groups",
+          "items": [
+            {
+              "key": "2026-11-09",
+              "field": "rate",
+              "value": 0.4667
+            },
+            {
+              "key": "2026-11-10",
+              "field": "rate",
+              "value": 0.2857
+            },
+            {
+              "key": "2026-11-11",
+              "field": "rate",
+              "value": 0.6154
+            },
+            {
+              "key": "2026-11-12",
+              "field": "rate",
+              "value": 0.5333
+            },
+            {
+              "key": "2026-11-13",
+              "field": "rate",
+              "value": 0.5833
+            },
+            {
+              "key": "2026-11-14",
+              "field": "rate",
+              "value": 0.5263
+            }
+          ]
+        },
+        {
           "text": "1号工位误判率 31.73%",
           "value": 31.73,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.station[0].rate"
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.station[0].rate"
         },
         {
           "text": "2号工位误判率 28.12%",
           "value": 28.12,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.station[1].rate"
-        },
-        {
-          "text": "划痕类误判率 34.69%",
-          "value": 34.69,
-          "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.defect_type[0].rate"
-        },
-        {
-          "text": "污渍类误判率 25.42%",
-          "value": 25.42,
-          "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.defect_type[1].rate"
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.station[1].rate"
         },
         {
           "text": "批次 B20261102 误判率 42.86%",
           "value": 42.86,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.batch[0].rate"
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.batch[0].rate"
         },
         {
           "text": "批次 B20261103 误判率 40%",
           "value": 40,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}#by_group.batch[1].rate"
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.batch[1].rate"
         },
         {
-          "text": "11-07 08:30 标定漂移 2.25px、0.42mm，结果「告警」",
-          "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#records",
-          "items": [
-            {
-              "key": "2026-11-07",
-              "field": "drift_px",
-              "value": 2.25
-            },
-            {
-              "key": "2026-11-07",
-              "field": "drift_mm",
-              "value": 0.42
-            }
-          ]
+          "text": "缺陷类型「划痕」误判率 34.69%",
+          "value": 34.69,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.defect_type[0].rate"
         },
         {
-          "text": "上一次 10-26 标定漂移仅 0.7px、0.11mm，结果「通过」",
-          "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#records",
-          "items": [
-            {
-              "key": "2026-10-26",
-              "field": "drift_px",
-              "value": 0.7
-            },
-            {
-              "key": "2026-10-26",
-              "field": "drift_mm",
-              "value": 0.11
-            }
-          ]
+          "text": "缺陷类型「污渍」误判率 25.42%",
+          "value": 25.42,
+          "unit": "%",
+          "ref": "query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}#by_group.defect_type[1].rate"
         },
         {
-          "text": "距上次标定 7 天",
+          "text": "11-07 08:30 标定漂移 0.42mm，结果「告警」",
+          "value": 0.42,
+          "unit": "mm",
+          "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#records[0].drift_mm"
+        },
+        {
+          "text": "11-07 08:30 标定漂移 2.25px",
+          "value": 2.25,
+          "unit": "px",
+          "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#records[0].drift_px"
+        },
+        {
+          "text": "上一次 10-26 标定漂移仅 0.11mm，结果「通过」",
+          "value": 0.11,
+          "unit": "mm",
+          "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#records[1].drift_mm"
+        },
+        {
+          "text": "距上次标定 7 天，漂移趋势「明显上升」",
           "value": 7,
           "unit": "天",
           "ref": "query_calibration{device_id=CX-104,time_from=2026-10-01}#days_since_last"
         },
         {
-          "text": "标定允许漂移：厂商手册 0.3mm，厂内SOP 0.5mm，存在冲突",
-          "ref": "check_doc_conflict{param_name=标定允许漂移(mm)}#by_param.标定允许漂移(mm).conflicts",
-          "items": [
-            {
-              "key": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
-              "field": "value",
-              "value": 0.3
-            },
-            {
-              "key": "视觉检测作业指导书 WI-QC-015",
-              "field": "value",
-              "value": 0.5
-            }
-          ]
+          "text": "标定允许漂移存在文档冲突：厂商手册 0.3mm、厂内SOP 0.5mm",
+          "value": 0.3,
+          "unit": "mm",
+          "ref": "check_doc_conflict{param_name=标定允许漂移(mm)}#by_param.标定允许漂移(mm).conflicts[0].value"
         },
         {
-          "text": "标定周期：厂商手册 90 天，厂内SOP 30 天，存在冲突",
-          "ref": "check_doc_conflict{param_name=标定周期(天)}#by_param.标定周期(天).conflicts",
-          "items": [
-            {
-              "key": "CV-X系列视觉检测系统操作手册（厂商版·摘录）",
-              "field": "value",
-              "value": 90
-            },
-            {
-              "key": "视觉检测作业指导书 WI-QC-015",
-              "field": "value",
-              "value": 30
-            }
-          ]
+          "text": "厂内SOP 的允许漂移口径为 0.5mm",
+          "value": 0.5,
+          "unit": "mm",
+          "ref": "check_doc_conflict{param_name=标定允许漂移(mm)}#by_param.标定允许漂移(mm).conflicts[1].value"
         },
         {
-          "text": "设备档案设定的保养周期 90 天",
+          "text": "标定周期存在文档冲突：厂商手册 90 天、厂内SOP 30 天",
+          "value": 90,
+          "unit": "天",
+          "ref": "check_doc_conflict{param_name=标定周期(天)}#by_param.标定周期(天).conflicts[0].value"
+        },
+        {
+          "text": "厂内SOP 的标定周期口径为 30 天",
+          "value": 30,
+          "unit": "天",
+          "ref": "check_doc_conflict{param_name=标定周期(天)}#by_param.标定周期(天).conflicts[1].value"
+        },
+        {
+          "text": "设备档案当前设定的保养周期为 90 天",
           "value": 90,
           "unit": "天",
           "ref": "query_device_profile#maintenance_cycle_days"
         }
       ],
       "advice": [
-        "先请质量/工艺确认标定允许漂移口径：厂商手册 0.3mm 与厂内SOP 0.5mm 不一致。本次 11-07 漂移 0.42mm 在 0.3mm 口径下已超限、在 0.5mm 口径下未超，处置力度取决于这个口径，不要自行挑一个",
-        "同时确认标定周期口径：厂商手册 90 天、厂内SOP 30 天，设备档案当前按 90 天设定；若按厂内SOP 30 天，则 10-26 到 11-07 之间已属逾期未标定",
-        "用标准标定板重新标定并保存，标定板须在有效检定期内；标定后复测 1号、2号工位各一批，确认误判率是否回落到 11-07 之前的水平",
-        "调取 11-07 08:30 那次标定的原始记录与操作人信息，核实标定后是否保存成功、标定板是否偏移（对应告警码 E-301 的常见原因）",
-        "因两工位同时抬升，暂不必拆检单工位镜头与光源；若重新标定后误判仍高，再按工位分别查镜头污染与光源衰减",
-        "以上为根因判断与建议处置，处置结果需现场回报确认"
+        "先按 E-301 处置流程重新标定并保存，标定板须在有效检定期内，复测后再看误判率是否回落",
+        "把 11-07 08:30 张伟那次告警标定的原始记录调出来复核：是标定后未保存、标定板偏移，还是标定本身就没做准",
+        "标定允许漂移口径需人工确认：厂商手册 0.3mm 与厂内SOP 0.5mm 冲突，本次实测 0.42mm 在 0.3 口径下超差、在 0.5 口径下未超，请指定以哪份为准后再判定该次标定是否合格",
+        "标定周期同样存在冲突（厂商手册 90 天 vs 厂内SOP 30 天），设备档案当前按 90 天设定，请一并确认口径",
+        "两个工位误判率接近、批次与缺陷类型均无集中点，暂不建议按单工位镜头或光源方向排查；若重新标定后误判率仍不回落，再查光源累计点亮时长与模型侧参数",
+        "以上为根因判断与处置建议，处置结果需现场回报确认"
       ]
     },
-    "final_text": "误判在两个工位、多个缺陷类型、多个批次上同时阶跃抬升，拐点精确落在 11-07 那次结果为「告警」的标定之后，方向是标定漂移（共用标定基准失效），不是单工位镜头/光源问题，也不是单一批次物料问题；标定允许漂移与标定周期两项参数在厂商手册与厂内SOP之间存在取值冲突，需人工确认口径后再定处置力度\n- 11-07 误判率 15.38%[query_defect_log{group_by=day,time_from=2025-10-20}]\n- 11-08 误判率跳到 63.16%[query_defect_log{group_by=day,time_from=2025-10-20}]\n- 1号工位误判率 31.73%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 2号工位误判率 28.12%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 划痕类误判率 34.69%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 污渍类误判率 25.42%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 批次 B20261102 误判率 42.86%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 批次 B20261103 误判率 40%[query_defect_log{group_by=station,defect_type,batch,time_from=2026-11-01}]\n- 11-07 08:30 标定漂移 2.25px、0.42mm，结果「告警」[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 上一次 10-26 标定漂移仅 0.7px、0.11mm，结果「通过」[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 距上次标定 7 天[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 标定允许漂移：厂商手册 0.3mm，厂内SOP 0.5mm，存在冲突[check_doc_conflict{param_name=标定允许漂移(mm)}]\n- 标定周期：厂商手册 90 天，厂内SOP 30 天，存在冲突[check_doc_conflict{param_name=标定周期(天)}]\n- 设备档案设定的保养周期 90 天[query_device_profile]\n* 先请质量/工艺确认标定允许漂移口径：厂商手册 0.3mm 与厂内SOP 0.5mm 不一致。本次 11-07 漂移 0.42mm 在 0.3mm 口径下已超限、在 0.5mm 口径下未超，处置力度取决于这个口径，不要自行挑一个\n* 同时确认标定周期口径：厂商手册 90 天、厂内SOP 30 天，设备档案当前按 90 天设定；若按厂内SOP 30 天，则 10-26 到 11-07 之间已属逾期未标定\n* 用标准标定板重新标定并保存，标定板须在有效检定期内；标定后复测 1号、2号工位各一批，确认误判率是否回落到 11-07 之前的水平\n* 调取 11-07 08:30 那次标定的原始记录与操作人信息，核实标定后是否保存成功、标定板是否偏移（对应告警码 E-301 的常见原因）\n* 因两工位同时抬升，暂不必拆检单工位镜头与光源；若重新标定后误判仍高，再按工位分别查镜头污染与光源衰减\n* 以上为根因判断与建议处置，处置结果需现场回报确认",
+    "final_text": "CX-104 的误判是 11-07 上午那次标定告警后开始的标定漂移，不是单工位硬件故障，也不是物料批次问题——两个工位误判率齐平、批次与缺陷类型均无集中点，而漂移量在拐点当天跳升并报「告警」\n- 11-07 误判率 15.38%[query_defect_log{group_by=day,time_from=2025-10-20}]\n- 11-08 起跳到 63.16%[query_defect_log{group_by=day,time_from=2025-10-20}]\n- 11-09 至 11-14 各天误判率持续高位[query_defect_log{group_by=day,time_from=2025-10-20}]\n- 1号工位误判率 31.73%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 2号工位误判率 28.12%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 批次 B20261102 误判率 42.86%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 批次 B20261103 误判率 40%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 缺陷类型「划痕」误判率 34.69%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 缺陷类型「污渍」误判率 25.42%[query_defect_log{group_by=station,batch,defect_type,time_from=2026-11-01}]\n- 11-07 08:30 标定漂移 0.42mm，结果「告警」[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 11-07 08:30 标定漂移 2.25px[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 上一次 10-26 标定漂移仅 0.11mm，结果「通过」[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 距上次标定 7 天，漂移趋势「明显上升」[query_calibration{device_id=CX-104,time_from=2026-10-01}]\n- 标定允许漂移存在文档冲突：厂商手册 0.3mm、厂内SOP 0.5mm[check_doc_conflict{param_name=标定允许漂移(mm)}]\n- 厂内SOP 的允许漂移口径为 0.5mm[check_doc_conflict{param_name=标定允许漂移(mm)}]\n- 标定周期存在文档冲突：厂商手册 90 天、厂内SOP 30 天[check_doc_conflict{param_name=标定周期(天)}]\n- 厂内SOP 的标定周期口径为 30 天[check_doc_conflict{param_name=标定周期(天)}]\n- 设备档案当前设定的保养周期为 90 天[query_device_profile]\n* 先按 E-301 处置流程重新标定并保存，标定板须在有效检定期内，复测后再看误判率是否回落\n* 把 11-07 08:30 张伟那次告警标定的原始记录调出来复核：是标定后未保存、标定板偏移，还是标定本身就没做准\n* 标定允许漂移口径需人工确认：厂商手册 0.3mm 与厂内SOP 0.5mm 冲突，本次实测 0.42mm 在 0.3 口径下超差、在 0.5 口径下未超，请指定以哪份为准后再判定该次标定是否合格\n* 标定周期同样存在冲突（厂商手册 90 天 vs 厂内SOP 30 天），设备档案当前按 90 天设定，请一并确认口径\n* 两个工位误判率接近、批次与缺陷类型均无集中点，暂不建议按单工位镜头或光源方向排查；若重新标定后误判率仍不回落，再查光源累计点亮时长与模型侧参数\n* 以上为根因判断与处置建议，处置结果需现场回报确认",
     "steps": 7,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 14,
+      "qty": 18,
       "pct": 8,
-      "cited_ok": 14,
-      "cited_path": 14,
+      "cited_ok": 18,
+      "cited_path": 18,
       "cite_oob": 0,
-      "path_ok": 14,
+      "path_ok": 18,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -194,12 +208,13 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
+      "json_parse_fail": 0,
       "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 0,
       "range_bad": 0,
       "ref_ambiguous": 0,
-      "multi_ok": 4,
+      "multi_ok": 1,
       "multi_bad": 0,
       "qual_ok": 0,
       "qual_bad": 0,
@@ -209,7 +224,7 @@
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 14,
+      "cited": 18,
       "ev": 7
     },
     "stop_reason": "enough",
@@ -244,11 +259,11 @@
         "tool": "query_defect_log",
         "args": {
           "device_id": "CX-104",
-          "group_by": "station,defect_type,batch",
+          "group_by": "station,batch,defect_type",
           "time_from": "2026-11-01"
         },
-        "sig": "device_id=CX-104,group_by=station,defect_type,batch,time_from=2026-11-01",
-        "result": "[query_defect_log{device_id=CX-104,group_by=station,defect_type,batch,time_from=2026-11-01}] {\"device_id\": \"CX-104\", \"state\": \"found\", \"time_from\": \"2026-11-01 00:00:00\", \"time_to\": \"2026-11-14 23:14:56\", \"group_by\": \"station,defect_type,batch\", \"total\": 200, \"false_positive_count\": 60, \"false_positive_rate\": 0.3, \"groups\": [{\"key\": \"1号工位\", \"count\": 104, \"false_positive\": 33, \"rate\": 0.3173}, {\"key\": \"2号工位\", \"count\": 96, \"false_positive\": 27, \"rate\": 0.2812}], \"samples\": [{\"ts\": \"2026-11-12 20:39:51\", \"station\": \"2号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.936, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-14 18:13:25\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.931, \"batch\": \"B20261103\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"station\": [{\"key\": \"1号工位\", \"count\": 104, \"false_positive\": 33, \"rate\": 0.3173}, {\"key\": \"2号工位\", \"count\": 96, \"false_positive\": 27, \"rate\": 0.2812}], \"defect_type\": [{\"key\": \"划痕\", \"count\": 49, \"false_positive\": 17, \"rate\": 0.3469}, {\"key\": \"污渍\", \"count\": 59, \"false_positive\": 15, \"rate\": 0.2542}, \"...共 4 项，仅送前 2 项\"], \"batch\": [{\"key\": \"B20261102\", \"count\": 21, \"false_positive\": 9, \"rate\": 0.4286}, {\"key\": \"B20261103\", \"count\": 20, \"false_positive\": 8, \"rate\": 0.4}, \"...共 10 项，仅送前 2 项\"]}}",
+        "sig": "device_id=CX-104,group_by=station,batch,defect_type,time_from=2026-11-01",
+        "result": "[query_defect_log{device_id=CX-104,group_by=station,batch,defect_type,time_from=2026-11-01}] {\"device_id\": \"CX-104\", \"state\": \"found\", \"time_from\": \"2026-11-01 00:00:00\", \"time_to\": \"2026-11-14 23:14:56\", \"group_by\": \"station,batch,defect_type\", \"total\": 200, \"false_positive_count\": 60, \"false_positive_rate\": 0.3, \"groups\": [{\"key\": \"1号工位\", \"count\": 104, \"false_positive\": 33, \"rate\": 0.3173}, {\"key\": \"2号工位\", \"count\": 96, \"false_positive\": 27, \"rate\": 0.2812}], \"samples\": [{\"ts\": \"2026-11-12 20:39:51\", \"station\": \"2号工位\", \"defect_type\": \"尺寸超差\", \"confidence\": 0.936, \"batch\": \"B20261102\"}, {\"ts\": \"2026-11-14 18:13:25\", \"station\": \"1号工位\", \"defect_type\": \"污渍\", \"confidence\": 0.931, \"batch\": \"B20261103\"}, \"...共 5 项，仅送前 2 项\"], \"by_group\": {\"station\": [{\"key\": \"1号工位\", \"count\": 104, \"false_positive\": 33, \"rate\": 0.3173}, {\"key\": \"2号工位\", \"count\": 96, \"false_positive\": 27, \"rate\": 0.2812}], \"batch\": [{\"key\": \"B20261102\", \"count\": 21, \"false_positive\": 9, \"rate\": 0.4286}, {\"key\": \"B20261103\", \"count\": 20, \"false_positive\": 8, \"rate\": 0.4}, \"...共 10 项，仅送前 2 项\"], \"defect_type\": [{\"key\": \"划痕\", \"count\": 49, \"false_positive\": 17, \"rate\": 0.3469}, {\"key\": \"污渍\", \"count\": 59, \"false_positive\": 15, \"rate\": 0.2542}, \"...共 4 项，仅送前 2 项\"]}}",
         "truncated": false,
         "ev_no": 3,
         "turn": 1
@@ -268,10 +283,10 @@
       {
         "tool": "search_manual",
         "args": {
-          "query": "标定漂移量判定阈值 超过多少需要重新标定"
+          "query": "标定漂移判定阈值 像素 毫米 超差处置"
         },
-        "sig": "query=标定漂移量判定阈值 超过多少需要重新标定",
-        "result": "[search_manual{query=标定漂移量判定阈值 超过多少需要重新标定}] {\"query\": \"标定漂移量判定阈值 超过多少需要重新标定\", \"chunks\": [{\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.8173}, {\"text\": \"3.2 标定周期\\n标定周期为 30 天一次。每次换型、换料、调整工装后须重新标定并留存记录。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"score\": 0.8167}, {\"text\": \"E-301 标定数据无效或过期\\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-301 标定数据无效或过期\", \"score\": 0.7669}]}",
+        "sig": "query=标定漂移判定阈值 像素 毫米 超差处置",
+        "result": "[search_manual{query=标定漂移判定阈值 像素 毫米 超差处置}] {\"query\": \"标定漂移判定阈值 像素 毫米 超差处置\", \"chunks\": [{\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.8304}, {\"text\": \"3.2 标定周期\\n标定周期为 30 天一次。每次换型、换料、调整工装后须重新标定并留存记录。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"score\": 0.7789}, {\"text\": \"E-301 标定数据无效或过期\\n告警码 E-301，等级 warning。含义：标定数据无效或过期。常见原因：标定后未保存、标定板偏移。处置：重新标定并保存，标定板须在有效检定期内；更换镜头、相机、光源或调整安装位置后必须重新标定。尺寸类检测对漂移最敏感。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-301 标定数据无效或过期\", \"score\": 0.7658}]}",
         "truncated": false,
         "ev_no": 5,
         "turn": 1
@@ -305,8 +320,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

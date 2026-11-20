@@ -1,6 +1,6 @@
 {
   "id": "M2",
-  "saved_at": "2026-11-20 00:40:28",
+  "saved_at": "2026-11-20 11:49:10",
   "traj_fp": "0c89166ceefb",
   "traj": {
     "id": "M2",
@@ -41,85 +41,71 @@
       "check_doc_conflict"
     ],
     "final": {
-      "conclusion": "误判集中在 1 号工位，而该工位光源已超额定寿命、亮度被两次下调，根因判断为光源衰减（硬件侧），标定与批次/缺陷类型分布均不支持算法侧为主因",
+      "conclusion": "光源已超额定寿命、亮度被两次下调，导致 1 号工位误判集中偏高；标定正常，不是批次或缺陷类型引起的算法问题",
       "claims": [
         {
-          "text": "整体误判率 23%（200 条中 46 条误判）",
+          "text": "窗口内整体误判率 23%",
           "value": 23,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#false_positive_rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#false_positive_rate"
         },
         {
           "text": "1 号工位误判率 57.63%",
           "value": 57.63,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[0].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#by_group.station[0].rate"
         },
         {
           "text": "3 号工位误判率 11.39%",
           "value": 11.39,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[1].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#by_group.station[1].rate"
         },
         {
-          "text": "1 号工位样本 59 条",
-          "value": 59,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[0].count"
-        },
-        {
-          "text": "1 号工位误判 34 条",
-          "value": 34,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.station[0].false_positive"
-        },
-        {
-          "text": "缺陷类型维度最高为污渍 30.65%，未形成单一类型集中",
+          "text": "污渍类误判率 30.65%",
           "value": 30.65,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.defect_type[0].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#by_group.defect_type[0].rate"
         },
         {
-          "text": "尺寸超差 22.45%",
+          "text": "尺寸超差类误判率 22.45%",
           "value": 22.45,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.defect_type[1].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#by_group.defect_type[1].rate"
         },
         {
-          "text": "批次维度最高为 B20261104 的 36.84%，10 个批次分散",
+          "text": "最高批次 B20261104 误判率 36.84%，10 个批次分散",
           "value": 36.84,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch,day}#by_group.batch[0].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}#by_group.batch[0].rate"
         },
         {
-          "text": "按天看最高 11-07 为 44.44%，最低 11-08 为 14.29%，无阶跃突变",
-          "value": 44.44,
-          "unit": "%",
-          "ref": "query_defect_log{group_by=day}#groups[4].rate"
+          "text": "按天看 11-07 为 44.44%，11-08 为 14.29%，无阶跃拐点",
+          "ref": "query_defect_log{group_by=day,time_from=2026-10-20}#groups",
+          "items": [
+            {
+              "key": "2026-11-07",
+              "field": "rate",
+              "value": 44.44
+            },
+            {
+              "key": "2026-11-08",
+              "field": "rate",
+              "value": 14.29
+            }
+          ]
         },
         {
-          "text": "11-08 为 14.29%",
-          "value": 14.29,
-          "unit": "%",
-          "ref": "query_defect_log{group_by=day}#groups[5].rate"
-        },
-        {
-          "text": "最近一次标定 2026-10-30，漂移 0.467 px，结果通过",
+          "text": "最近一次标定 2026-10-30，漂移 0.467 px",
           "value": 0.467,
           "unit": "px",
-          "ref": "query_calibration#records[0].drift_px"
+          "ref": "query_calibration{device_id=CX-101,time_from=2026-10-20}#records[0].drift_px"
         },
         {
-          "text": "标定漂移 0.079 mm",
+          "text": "标定漂移 0.079 mm，结果通过",
           "value": 0.079,
           "unit": "mm",
-          "ref": "query_calibration#records[0].drift_mm"
-        },
-        {
-          "text": "距上次标定 15 天",
-          "value": 15,
-          "unit": "天",
-          "ref": "query_calibration#days_since_last"
+          "ref": "query_calibration{device_id=CX-101,time_from=2026-10-20}#records[0].drift_mm"
         },
         {
           "text": "光源累计点亮 8620 小时",
@@ -146,7 +132,7 @@
           "ref": "query_light_usage#brightness_set"
         },
         {
-          "text": "亮度设定逐次下调：2025-03-12 为 85、2026-09-15 为 80、2026-10-20 为 65",
+          "text": "亮度设定逐次下调：85 → 80 → 65",
           "ref": "query_light_usage#brightness_history",
           "items": [
             {
@@ -167,20 +153,20 @@
           ]
         },
         {
-          "text": "厂商估计超寿命后亮度衰减显著，误判率通常上升 10%-25%",
+          "text": "光源衰减通常使误判率上升 10%-25%",
           "value": 10,
           "value_max": 25,
           "unit": "%",
           "ref": "query_light_usage#degradation_estimate"
         },
         {
-          "text": "该设备档案设定的保养周期为 90 天",
+          "text": "本机保养周期设定 90 天",
           "value": 90,
           "unit": "天",
           "ref": "query_device_profile#maintenance_cycle_days"
         },
         {
-          "text": "光源亮度设定存在文档冲突：厂商手册与 2026-09 调试记录为 80，厂内 SOP 与 2026-10 调试记录为 65",
+          "text": "光源亮度设定存在文档冲突：厂商手册与调试记录为 80，厂内SOP与调试记录为 65",
           "ref": "check_doc_conflict#by_param.光源亮度设定.conflicts",
           "items": [
             {
@@ -196,7 +182,7 @@
           ]
         },
         {
-          "text": "标定周期存在文档冲突：厂商手册为 90 天，厂内 SOP 为 30 天",
+          "text": "标定周期存在文档冲突：厂商手册 90 天，厂内SOP 30 天",
           "ref": "check_doc_conflict#by_param.标定周期(天).conflicts",
           "items": [
             {
@@ -213,24 +199,25 @@
         }
       ],
       "advice": [
-        "优先按光源衰减处置：安排更换 1 号工位光源（CA-DC21E），更换后按规程重新标定并复测误判率，处置结果需现场回报确认",
-        "不要仅靠上调亮度设定压住问题——告警码表 E-201 明确要求先测实际亮度与设定值偏差、核查驱动电流，再按累计点亮时长评估更换",
-        "标定侧可暂缓：最近一次标定漂移 0.467 px / 0.079 mm 且结果通过，暂不支持标定漂移为主因",
-        "两处文档口径冲突需人工确认后再执行：光源亮度设定（厂商手册 80 / 厂内 SOP 65）、标定周期（厂商手册 90 天 / 厂内 SOP 30 天），请指定以哪份为准",
-        "若更换光源后 1 号工位误判率仍显著高于 3 号工位，再转查该工位镜头污染与判定置信度阈值"
+        "按告警码 E-202 处置：光源已进入衰减加速段，安排预防性更换光源，更换后记录新光源编号与初始亮度",
+        "不要仅靠上调亮度设定压住误判，手册明确该做法不可取；更换后再重新标定并复测",
+        "重点核查 1 号工位：光源使用记录是设备级的，无法区分工位，需现场确认 1 号工位光源与镜头实际状态（含镜头污染）",
+        "标定侧暂不作为主因：最近一次标定通过、漂移 0.467 px，但漂移趋势样本不足，更换光源后应补一次标定",
+        "两处文档口径冲突需人工确认后再执行：光源亮度设定（厂商手册 80 / 厂内SOP 65）、标定周期（厂商手册 90 天 / 厂内SOP 30 天），请指定以哪份为准",
+        "以上为根因判断与处置建议，处置结果需现场回报确认"
       ]
     },
-    "final_text": "误判集中在 1 号工位，而该工位光源已超额定寿命、亮度被两次下调，根因判断为光源衰减（硬件侧），标定与批次/缺陷类型分布均不支持算法侧为主因\n- 整体误判率 23%（200 条中 46 条误判）[query_defect_log{group_by=station,defect_type,batch,day}]\n- 1 号工位误判率 57.63%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 3 号工位误判率 11.39%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 1 号工位样本 59 条[query_defect_log{group_by=station,defect_type,batch,day}]\n- 1 号工位误判 34 条[query_defect_log{group_by=station,defect_type,batch,day}]\n- 缺陷类型维度最高为污渍 30.65%，未形成单一类型集中[query_defect_log{group_by=station,defect_type,batch,day}]\n- 尺寸超差 22.45%[query_defect_log{group_by=station,defect_type,batch,day}]\n- 批次维度最高为 B20261104 的 36.84%，10 个批次分散[query_defect_log{group_by=station,defect_type,batch,day}]\n- 按天看最高 11-07 为 44.44%，最低 11-08 为 14.29%，无阶跃突变[query_defect_log{group_by=day}]\n- 11-08 为 14.29%[query_defect_log{group_by=day}]\n- 最近一次标定 2026-10-30，漂移 0.467 px，结果通过[query_calibration]\n- 标定漂移 0.079 mm[query_calibration]\n- 距上次标定 15 天[query_calibration]\n- 光源累计点亮 8620 小时[query_light_usage]\n- 额定寿命 8000 小时[query_light_usage]\n- 已超额定寿命 620 小时，剩余 0 小时[query_light_usage]\n- 当前亮度设定 65[query_light_usage]\n- 亮度设定逐次下调：2025-03-12 为 85、2026-09-15 为 80、2026-10-20 为 65[query_light_usage]\n- 厂商估计超寿命后亮度衰减显著，误判率通常上升 10%-25%[query_light_usage]\n- 该设备档案设定的保养周期为 90 天[query_device_profile]\n- 光源亮度设定存在文档冲突：厂商手册与 2026-09 调试记录为 80，厂内 SOP 与 2026-10 调试记录为 65[check_doc_conflict]\n- 标定周期存在文档冲突：厂商手册为 90 天，厂内 SOP 为 30 天[check_doc_conflict]\n* 优先按光源衰减处置：安排更换 1 号工位光源（CA-DC21E），更换后按规程重新标定并复测误判率，处置结果需现场回报确认\n* 不要仅靠上调亮度设定压住问题——告警码表 E-201 明确要求先测实际亮度与设定值偏差、核查驱动电流，再按累计点亮时长评估更换\n* 标定侧可暂缓：最近一次标定漂移 0.467 px / 0.079 mm 且结果通过，暂不支持标定漂移为主因\n* 两处文档口径冲突需人工确认后再执行：光源亮度设定（厂商手册 80 / 厂内 SOP 65）、标定周期（厂商手册 90 天 / 厂内 SOP 30 天），请指定以哪份为准\n* 若更换光源后 1 号工位误判率仍显著高于 3 号工位，再转查该工位镜头污染与判定置信度阈值",
+    "final_text": "光源已超额定寿命、亮度被两次下调，导致 1 号工位误判集中偏高；标定正常，不是批次或缺陷类型引起的算法问题\n- 窗口内整体误判率 23%[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 1 号工位误判率 57.63%[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 3 号工位误判率 11.39%[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 污渍类误判率 30.65%[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 尺寸超差类误判率 22.45%[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 最高批次 B20261104 误判率 36.84%，10 个批次分散[query_defect_log{group_by=station,defect_type,batch,day,time_from=2026-10-20}]\n- 按天看 11-07 为 44.44%，11-08 为 14.29%，无阶跃拐点[query_defect_log{group_by=day,time_from=2026-10-20}]\n- 最近一次标定 2026-10-30，漂移 0.467 px[query_calibration{device_id=CX-101,time_from=2026-10-20}]\n- 标定漂移 0.079 mm，结果通过[query_calibration{device_id=CX-101,time_from=2026-10-20}]\n- 光源累计点亮 8620 小时[query_light_usage]\n- 额定寿命 8000 小时[query_light_usage]\n- 已超额定寿命 620 小时，剩余 0 小时[query_light_usage]\n- 当前亮度设定 65[query_light_usage]\n- 亮度设定逐次下调：85 → 80 → 65[query_light_usage]\n- 光源衰减通常使误判率上升 10%-25%[query_light_usage]\n- 本机保养周期设定 90 天[query_device_profile]\n- 光源亮度设定存在文档冲突：厂商手册与调试记录为 80，厂内SOP与调试记录为 65[check_doc_conflict]\n- 标定周期存在文档冲突：厂商手册 90 天，厂内SOP 30 天[check_doc_conflict]\n* 按告警码 E-202 处置：光源已进入衰减加速段，安排预防性更换光源，更换后记录新光源编号与初始亮度\n* 不要仅靠上调亮度设定压住误判，手册明确该做法不可取；更换后再重新标定并复测\n* 重点核查 1 号工位：光源使用记录是设备级的，无法区分工位，需现场确认 1 号工位光源与镜头实际状态（含镜头污染）\n* 标定侧暂不作为主因：最近一次标定通过、漂移 0.467 px，但漂移趋势样本不足，更换光源后应补一次标定\n* 两处文档口径冲突需人工确认后再执行：光源亮度设定（厂商手册 80 / 厂内SOP 65）、标定周期（厂商手册 90 天 / 厂内SOP 30 天），请指定以哪份为准\n* 以上为根因判断与处置建议，处置结果需现场回报确认",
     "steps": 7,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 22,
-      "pct": 9,
-      "cited_ok": 22,
-      "cited_path": 22,
+      "qty": 18,
+      "pct": 7,
+      "cited_ok": 18,
+      "cited_path": 18,
       "cite_oob": 0,
-      "path_ok": 22,
+      "path_ok": 18,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -238,12 +225,13 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
+      "json_parse_fail": 0,
       "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 1,
       "range_bad": 0,
       "ref_ambiguous": 0,
-      "multi_ok": 3,
+      "multi_ok": 4,
       "multi_bad": 0,
       "qual_ok": 0,
       "qual_bad": 0,
@@ -253,11 +241,11 @@
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 22,
+      "cited": 18,
       "ev": 10
     },
     "stop_reason": "enough",
-    "check_retry": 1,
+    "check_retry": 0,
     "unknown": [],
     "evidence": [
       {
@@ -370,11 +358,11 @@
             {
               "order_id": "WO-20261120-002",
               "device_id": "CX-101",
-              "root_cause": "光源累计点亮 8620 小时已超额定寿命 8000 小时（超出 620 小时），亮度衰减导致 1 号工位误判率升至 58.82%",
+              "root_cause": "光源累计点亮 8620 小时已超额定寿命 8000 小时（超出 620 小时），亮度衰减导致 1 号工位误判率升至 58.82%，需更换光源",
               "severity": "high",
               "status": "待处理",
               "assignee_group": "设备科",
-              "created_at": "2026-11-20 00:12:55"
+              "created_at": "2026-11-20 11:48:08"
             },
             {
               "order_id": "WO-20261105-001",
@@ -455,11 +443,11 @@
       {
         "tool": "search_manual",
         "args": {
-          "query": "光源亮度设定标准值与光源更换判据",
-          "top_k": 4
+          "query": "光源亮度设定标准值 光源超额定寿命处置 标定漂移阈值",
+          "top_k": 5
         },
-        "sig": "query=光源亮度设定标准值与光源更换判据,top_k=4",
-        "result": "[search_manual{query=光源亮度设定标准值与光源更换判据,top_k=4}] {\"query\": \"光源亮度设定标准值与光源更换判据\", \"chunks\": [{\"text\": \"2.1 光源亮度设定\\n为降低能耗并延长光源寿命，现场将光源亮度设定为 65。夜班环境光较弱，该设定下图像对比度仍可满足判定要求。若出现批量误判，可临时上调至 75。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"score\": 0.8604}, {\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.8262}, {\"text\": \"3.2 光源亮度设定\\n光源亮度出厂标准设定为 80（可调范围 0-100）。亮度低于 70 时，暗色工件的边缘对比度下降约 15%，建议同步调整曝光或增益。亮度过高会导致高反光表面过曝，出现伪缺陷。调整亮度后应重新采集 50 件标准样件验证判定稳定性。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"score\": 0.825}, {\"text\": \"E-201 光源亮度低于设定值\\n告警码 E-201，等级 warning。含义：光源亮度低于设定值。常见原因：光源老化、驱动电流不足。处置：先测量实际亮度与设定值偏差，再检查光源驱动电流；若偏差由衰减引起，需评估光源累计点亮时长，按保养计划安排更换，不要仅靠上调亮度设定压住告警。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-201 光源亮度低于设定值\", \"score\": 0.8135}]}",
+        "sig": "query=光源亮度设定标准值 光源超额定寿命处置 标定漂移阈值,top_k=5",
+        "result": "[search_manual{query=光源亮度设定标准值 光源超额定寿命处置 标定漂移阈值,top_k=5}] {\"query\": \"光源亮度设定标准值 光源超额定寿命处置 标定漂移阈值\", \"chunks\": [{\"text\": \"2.1 光源亮度设定\\n为降低能耗并延长光源寿命，现场将光源亮度设定为 65。夜班环境光较弱，该设定下图像对比度仍可满足判定要求。若出现批量误判，可临时上调至 75。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"score\": 0.8522}, {\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.822}, {\"text\": \"3.2 光源亮度设定\\n光源亮度出厂标准设定为 80（可调范围 0-100）。亮度低于 70 时，暗色工件的边缘对比度下降约 15%，建议同步调整曝光或增益。亮度过高会导致高反光表面过曝，出现伪缺陷。调整亮度后应重新采集 50 件标准样件验证判定稳定性。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"score\": 0.8143}, {\"text\": \"E-201 光源亮度低于设定值\\n告警码 E-201，等级 warning。含义：光源亮度低于设定值。常见原因：光源老化、驱动电流不足。处置：先测量实际亮度与设定值偏差，再检查光源驱动电流；若偏差由衰减引起，需评估光源累计点亮时长，按保养计划安排更换，不要仅靠上调亮度设定压住告警。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-201 光源亮度低于设定值\", \"score\": 0.8089}, {\"text\": \"E-202 光源累计点亮时长超过额定寿命\\n告警码 E-202，等级 warning。含义：光源累计点亮时长超过额定寿命。常见原因：光源衰减，需更换。处置：按保养计划的光源更换周期安排预防性更换；更换后记录新光源编号与初始亮度。该告警说明衰减已进入加速段，误判率通常随之上升。\", \"source_doc\": \"告警码对照表 ALM-2026\", \"doc_type\": \"告警码表\", \"section\": \"E-202 光源累计点亮时长超过额定寿命\", \"score\": 0.7723}]}",
         "truncated": false,
         "ev_no": 9,
         "turn": 2
@@ -482,8 +470,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

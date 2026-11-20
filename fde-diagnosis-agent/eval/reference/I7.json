@@ -1,6 +1,6 @@
 {
   "id": "I7",
-  "saved_at": "2026-11-20 00:38:52",
+  "saved_at": "2026-11-20 11:47:43",
   "traj_fp": "1a7b7b9e6a76",
   "traj": {
     "id": "I7",
@@ -45,8 +45,8 @@
     "model_intent": "clarify"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

@@ -1,6 +1,6 @@
 {
   "id": "I8",
-  "saved_at": "2026-11-20 00:39:18",
+  "saved_at": "2026-11-20 11:47:59",
   "traj_fp": "191774a6706e",
   "traj": {
     "id": "I8",
@@ -36,33 +36,31 @@
       "query_defect_log",
       "query_defect_log",
       "query_calibration",
-      "query_light_usage",
-      "search_manual",
-      "check_doc_conflict"
+      "query_light_usage"
     ],
     "final": {
-      "conclusion": "数据不支持「镜头脏了」：误判没有集中在单一工位，而是集中在特定物料批次与「污渍」缺陷类型上，方向偏算法/批次侧；标定平稳、光源未超寿命，硬件侧两项主因均可排除",
+      "conclusion": "不是镜头脏。误判没有集中在单一工位，而是集中在物料批次 B20261105 和「污渍」缺陷类型上，模型与阈值是所有工位共用的，方向偏算法/批次漂移；光源与标定两侧均已排除。",
       "claims": [
         {
-          "text": "近 7 天误判 20 条、总 94 条，误判率 21.28%",
+          "text": "近 7 天整体误判率 21.28%",
           "value": 21.28,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,batch}#false_positive_rate"
         },
         {
-          "text": "2号工位误判率 31.03%（9/29）",
+          "text": "2号工位误判率 31.03%",
           "value": 31.03,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch}#by_group.station[0].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch}#groups[0].rate"
         },
         {
-          "text": "3号工位误判率 18.42%（7/38）",
+          "text": "3号工位误判率 18.42%",
           "value": 18.42,
           "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,batch}#by_group.station[1].rate"
+          "ref": "query_defect_log{group_by=station,defect_type,batch}#groups[1].rate"
         },
         {
-          "text": "批次 B20261105 误判率 48.65%（18/37）",
+          "text": "批次 B20261105 误判率 48.65%",
           "value": 48.65,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,batch}#by_group.batch[0].rate"
@@ -74,40 +72,46 @@
           "ref": "query_defect_log{group_by=station,defect_type,batch}#by_group.batch[1].rate"
         },
         {
-          "text": "缺陷类型「污渍」误判率 40.91%（9/22），为四类中最高",
+          "text": "缺陷类型「污渍」误判率 40.91%",
           "value": 40.91,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,batch}#by_group.defect_type[0].rate"
         },
         {
-          "text": "拉长到 10-15 起共 200 条，整体误判率 23%",
+          "text": "近一个月整体误判率 23%（46/200）",
           "value": 23,
           "unit": "%",
           "ref": "query_defect_log{group_by=day}#false_positive_rate"
         },
         {
-          "text": "按天看最高为 11-02 的 47.06%，属波动而非某时点阶跃",
+          "text": "按天最高为 11-02 的 47.06%",
           "value": 47.06,
           "unit": "%",
           "ref": "query_defect_log{group_by=day}#groups[0].rate"
         },
         {
-          "text": "11-07 当天误判率仅 15.79%",
+          "text": "按天最低为 11-07 的 15.79%",
           "value": 15.79,
           "unit": "%",
           "ref": "query_defect_log{group_by=day}#groups[5].rate"
         },
         {
-          "text": "最近一次标定 2026-11-01，漂移 0.338px / 0.057mm，结果「通过」",
+          "text": "最近一次标定在 2026-11-01，距今 13 天",
+          "value": 13,
+          "unit": "天",
+          "ref": "query_calibration#days_since_last"
+        },
+        {
+          "text": "该次标定漂移 0.338px",
           "value": 0.338,
           "unit": "px",
           "ref": "query_calibration#records[0].drift_px"
         },
         {
-          "text": "距上次标定 13 天，漂移趋势「平稳」",
-          "value": 13,
-          "unit": "天",
-          "ref": "query_calibration#days_since_last"
+          "text": "该次标定漂移 0.057mm",
+          "value": 0.057,
+          "unit": "mm",
+          "ref": "query_calibration#records[0].drift_mm"
         },
         {
           "text": "光源累计点亮 5120 小时",
@@ -116,86 +120,49 @@
           "ref": "query_light_usage#cumulative_hours"
         },
         {
-          "text": "光源额定寿命 8000 小时，未超寿命",
+          "text": "光源额定寿命 8000 小时",
           "value": 8000,
           "unit": "小时",
           "ref": "query_light_usage#rated_life_hours"
         },
         {
-          "text": "光源距额定寿命还剩 2880 小时",
+          "text": "光源距额定寿命还剩 2880 小时，未超寿命",
           "value": 2880,
           "unit": "小时",
           "ref": "query_light_usage#remaining_hours"
         },
         {
-          "text": "当前亮度设定 80，自 2025-05-20 装机起从未调整过",
+          "text": "光源亮度设定 80，自安装以来未调整过",
           "value": 80,
           "unit": null,
           "ref": "query_light_usage#brightness_set"
         },
         {
-          "text": "厂内SOP 要求镜头与防护窗每 14 天清洁一次，粉尘环境缩短至 7 天",
-          "value": 14,
-          "unit": "天",
-          "ref": "search_manual#chunks[2].text"
-        },
-        {
-          "text": "判定置信度阈值存在文档冲突：厂商手册与质量目标为 0.85",
-          "value": 0.85,
-          "unit": null,
-          "ref": "check_doc_conflict#by_param.判定置信度阈值.conflicts[0].value"
-        },
-        {
-          "text": "判定置信度阈值存在文档冲突：厂内SOP 为 0.75",
-          "value": 0.75,
-          "unit": null,
-          "ref": "check_doc_conflict#by_param.判定置信度阈值.conflicts[1].value"
-        },
-        {
-          "text": "标定周期存在文档冲突：厂商手册为 90 天",
+          "text": "该设备保养周期设定为 90 天",
           "value": 90,
           "unit": "天",
-          "ref": "check_doc_conflict#by_param.标定周期(天).conflicts[0].value"
-        },
-        {
-          "text": "标定周期存在文档冲突：厂内SOP 为 30 天",
-          "value": 30,
-          "unit": "天",
-          "ref": "check_doc_conflict#by_param.标定周期(天).conflicts[1].value"
-        },
-        {
-          "text": "光源亮度设定存在文档冲突：厂商手册为 80",
-          "value": 80,
-          "unit": null,
-          "ref": "check_doc_conflict#by_param.光源亮度设定.conflicts[0].value"
-        },
-        {
-          "text": "光源亮度设定存在文档冲突：厂内SOP 为 65",
-          "value": 65,
-          "unit": null,
-          "ref": "check_doc_conflict#by_param.光源亮度设定.conflicts[1].value"
+          "ref": "query_device_profile#maintenance_cycle_days"
         }
       ],
       "advice": [
-        "先按批次 B20261105 复判：把该批次的过杀样本调出来人工复核，确认是物料本身外观波动还是模型对该批次纹理过敏——这是当前最集中的异常点，优先于镜头清洁",
-        "镜头清洁仍可按 SOP 做一次（每 14 天一次，粉尘环境 7 天），但它是例行保养动作，不是本次误判的主因；清洁后若误判率不降，说明方向确实在算法侧",
-        "标定侧无需动作：最近一次 11-01 标定通过、漂移 0.338px、趋势平稳，13 天前刚做过，不构成漂移故障",
-        "光源侧无需动作：累计 5120 小时未超 8000 小时额定寿命，亮度设定 80 且从未下调，排除光源衰减",
-        "三处参数口径存在文档冲突，需你确认以哪份为准后再动参数：判定置信度阈值 0.85（厂商手册/质量目标）vs 0.75（厂内SOP）；标定周期 90 天（厂商手册）vs 30 天（厂内SOP）；光源亮度设定 80（厂商手册）vs 65（厂内SOP）。在口径确认前不要按任一值改阈值",
-        "以上为根因判断与处置建议，处置结果需现场回报确认；本轮未建工单，如需派工请明确告知"
+        "先按批次 B20261105 复判：把该批次的过杀样本调出来人工复核，确认是物料本身外观波动还是模型对该批次特征过敏。",
+        "重点看「污渍」类判定：该类误判率最高，建议核对污渍类的判定阈值与特征模板是否仍匹配当前来料。",
+        "镜头污染方向可以排除：误判跨 2号、3号两个工位同时偏高，不符合单工位镜头脏的特征；若仍不放心，可现场目视检查两个工位镜头作为二次确认。",
+        "光源与标定两侧已排除：光源未超寿命、亮度未下调，标定 13 天前通过且趋势平稳，无需重新标定。",
+        "以上为根因判断与处置建议，处置结果需现场回报确认。"
       ]
     },
-    "final_text": "数据不支持「镜头脏了」：误判没有集中在单一工位，而是集中在特定物料批次与「污渍」缺陷类型上，方向偏算法/批次侧；标定平稳、光源未超寿命，硬件侧两项主因均可排除\n- 近 7 天误判 20 条、总 94 条，误判率 21.28%[query_defect_log{group_by=station,defect_type,batch}]\n- 2号工位误判率 31.03%（9/29）[query_defect_log{group_by=station,defect_type,batch}]\n- 3号工位误判率 18.42%（7/38）[query_defect_log{group_by=station,defect_type,batch}]\n- 批次 B20261105 误判率 48.65%（18/37）[query_defect_log{group_by=station,defect_type,batch}]\n- 批次 B20261106 误判率仅 14.29%[query_defect_log{group_by=station,defect_type,batch}]\n- 缺陷类型「污渍」误判率 40.91%（9/22），为四类中最高[query_defect_log{group_by=station,defect_type,batch}]\n- 拉长到 10-15 起共 200 条，整体误判率 23%[query_defect_log{group_by=day}]\n- 按天看最高为 11-02 的 47.06%，属波动而非某时点阶跃[query_defect_log{group_by=day}]\n- 11-07 当天误判率仅 15.79%[query_defect_log{group_by=day}]\n- 最近一次标定 2026-11-01，漂移 0.338px / 0.057mm，结果「通过」[query_calibration]\n- 距上次标定 13 天，漂移趋势「平稳」[query_calibration]\n- 光源累计点亮 5120 小时[query_light_usage]\n- 光源额定寿命 8000 小时，未超寿命[query_light_usage]\n- 光源距额定寿命还剩 2880 小时[query_light_usage]\n- 当前亮度设定 80，自 2025-05-20 装机起从未调整过[query_light_usage]\n- 厂内SOP 要求镜头与防护窗每 14 天清洁一次，粉尘环境缩短至 7 天[search_manual]\n- 判定置信度阈值存在文档冲突：厂商手册与质量目标为 0.85[check_doc_conflict]\n- 判定置信度阈值存在文档冲突：厂内SOP 为 0.75[check_doc_conflict]\n- 标定周期存在文档冲突：厂商手册为 90 天[check_doc_conflict]\n- 标定周期存在文档冲突：厂内SOP 为 30 天[check_doc_conflict]\n- 光源亮度设定存在文档冲突：厂商手册为 80[check_doc_conflict]\n- 光源亮度设定存在文档冲突：厂内SOP 为 65[check_doc_conflict]\n* 先按批次 B20261105 复判：把该批次的过杀样本调出来人工复核，确认是物料本身外观波动还是模型对该批次纹理过敏——这是当前最集中的异常点，优先于镜头清洁\n* 镜头清洁仍可按 SOP 做一次（每 14 天一次，粉尘环境 7 天），但它是例行保养动作，不是本次误判的主因；清洁后若误判率不降，说明方向确实在算法侧\n* 标定侧无需动作：最近一次 11-01 标定通过、漂移 0.338px、趋势平稳，13 天前刚做过，不构成漂移故障\n* 光源侧无需动作：累计 5120 小时未超 8000 小时额定寿命，亮度设定 80 且从未下调，排除光源衰减\n* 三处参数口径存在文档冲突，需你确认以哪份为准后再动参数：判定置信度阈值 0.85（厂商手册/质量目标）vs 0.75（厂内SOP）；标定周期 90 天（厂商手册）vs 30 天（厂内SOP）；光源亮度设定 80（厂商手册）vs 65（厂内SOP）。在口径确认前不要按任一值改阈值\n* 以上为根因判断与处置建议，处置结果需现场回报确认；本轮未建工单，如需派工请明确告知",
-    "steps": 7,
+    "final_text": "不是镜头脏。误判没有集中在单一工位，而是集中在物料批次 B20261105 和「污渍」缺陷类型上，模型与阈值是所有工位共用的，方向偏算法/批次漂移；光源与标定两侧均已排除。\n- 近 7 天整体误判率 21.28%[query_defect_log{group_by=station,defect_type,batch}]\n- 2号工位误判率 31.03%[query_defect_log{group_by=station,defect_type,batch}]\n- 3号工位误判率 18.42%[query_defect_log{group_by=station,defect_type,batch}]\n- 批次 B20261105 误判率 48.65%[query_defect_log{group_by=station,defect_type,batch}]\n- 批次 B20261106 误判率仅 14.29%[query_defect_log{group_by=station,defect_type,batch}]\n- 缺陷类型「污渍」误判率 40.91%[query_defect_log{group_by=station,defect_type,batch}]\n- 近一个月整体误判率 23%（46/200）[query_defect_log{group_by=day}]\n- 按天最高为 11-02 的 47.06%[query_defect_log{group_by=day}]\n- 按天最低为 11-07 的 15.79%[query_defect_log{group_by=day}]\n- 最近一次标定在 2026-11-01，距今 13 天[query_calibration]\n- 该次标定漂移 0.338px[query_calibration]\n- 该次标定漂移 0.057mm[query_calibration]\n- 光源累计点亮 5120 小时[query_light_usage]\n- 光源额定寿命 8000 小时[query_light_usage]\n- 光源距额定寿命还剩 2880 小时，未超寿命[query_light_usage]\n- 光源亮度设定 80，自安装以来未调整过[query_light_usage]\n- 该设备保养周期设定为 90 天[query_device_profile]\n* 先按批次 B20261105 复判：把该批次的过杀样本调出来人工复核，确认是物料本身外观波动还是模型对该批次特征过敏。\n* 重点看「污渍」类判定：该类误判率最高，建议核对污渍类的判定阈值与特征模板是否仍匹配当前来料。\n* 镜头污染方向可以排除：误判跨 2号、3号两个工位同时偏高，不符合单工位镜头脏的特征；若仍不放心，可现场目视检查两个工位镜头作为二次确认。\n* 光源与标定两侧已排除：光源未超寿命、亮度未下调，标定 13 天前通过且趋势平稳，无需重新标定。\n* 以上为根因判断与处置建议，处置结果需现场回报确认。",
+    "steps": 5,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 22,
+      "qty": 17,
       "pct": 9,
-      "cited_ok": 22,
-      "cited_path": 22,
+      "cited_ok": 17,
+      "cited_path": 17,
       "cite_oob": 0,
-      "path_ok": 22,
+      "path_ok": 17,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -203,6 +170,7 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
+      "json_parse_fail": 0,
       "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 0,
@@ -218,11 +186,11 @@
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 22,
-      "ev": 7
+      "cited": 17,
+      "ev": 5
     },
     "stop_reason": "enough",
-    "check_retry": 1,
+    "check_retry": 0,
     "unknown": [],
     "evidence": [
       {
@@ -283,29 +251,6 @@
         "truncated": false,
         "ev_no": 5,
         "turn": 1
-      },
-      {
-        "tool": "search_manual",
-        "args": {
-          "query": "镜头污染 判定标准 清洁周期 误判集中特征",
-          "top_k": 4
-        },
-        "sig": "query=镜头污染 判定标准 清洁周期 误判集中特征,top_k=4",
-        "result": "[search_manual{query=镜头污染 判定标准 清洁周期 误判集中特征,top_k=4}] {\"query\": \"镜头污染 判定标准 清洁周期 误判集中特征\", \"chunks\": [{\"text\": \"3.1 保养项目清单\\n月度保养：镜头清洁、光源亮度复核、传送带张紧检查。季度保养：标定复核、相机固定螺栓紧固、工控机除尘。\", \"source_doc\": \"设备保养计划 PM-2026\", \"doc_type\": \"保养计划\", \"section\": \"3.1 保养项目清单\", \"score\": 0.7621}, {\"text\": \"4.1 标定周期\\n设备标定周期为 90 天。更换镜头、相机、光源或调整安装位置后必须重新标定。标定使用标准标定板，标定板需在有效检定期内。\", \"source_doc\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"score\": 0.7577}, {\"text\": \"2.4 镜头清洁\\n镜头与防护窗每 14 天清洁一次，使用无水乙醇与无尘布，沿单一方向擦拭。粉尘环境产线应缩短至 7 天。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.4 镜头清洁\", \"score\": 0.7563}, {\"text\": \"3.2 标定周期\\n标定周期为 30 天一次。每次换型、换料、调整工装后须重新标定并留存记录。\", \"source_doc\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"score\": 0.7227}]}",
-        "truncated": false,
-        "ev_no": 6,
-        "turn": 1
-      },
-      {
-        "tool": "check_doc_conflict",
-        "args": {
-          "param_name": "判定置信度阈值,标定周期(天),光源亮度设定"
-        },
-        "sig": "param_name=判定置信度阈值,标定周期(天),光源亮度设定",
-        "result": "[check_doc_conflict{param_name=判定置信度阈值,标定周期(天),光源亮度设定}] {\"param_name\": \"判定置信度阈值,标定周期(天),光源亮度设定\", \"has_conflict\": true, \"checked\": [\"判定置信度阈值\", \"标定周期(天)\", \"...共 3 项，仅送前 2 项\"], \"conflict_params\": [\"判定置信度阈值\", \"标定周期(天)\", \"...共 3 项，仅送前 2 项\"], \"by_param\": {\"判定置信度阈值\": {\"param_name\": \"判定置信度阈值\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"6.1 判定置信度\", \"value\": 0.85}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"5.1 判定置信度\", \"value\": 0.75}, \"...共 3 项，仅送前 2 项\"], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——0.85（厂商手册、质量目标）；0.75（厂内SOP）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}, \"标定周期(天)\": {\"param_name\": \"标定周期(天)\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"4.1 标定周期\", \"value\": 90}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"3.2 标定周期\", \"value\": 30}], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——90（厂商手册）；30（厂内SOP）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}, \"光源亮度设定\": {\"param_name\": \"光源亮度设定\", \"has_conflict\": true, \"value_count\": 2, \"conflicts\": [{\"source\": \"CV-X系列视觉检测系统操作手册（厂商版·摘录）\", \"doc_type\": \"厂商手册\", \"section\": \"3.2 光源亮度设定\", \"value\": 80}, {\"source\": \"视觉检测作业指导书 WI-QC-015\", \"doc_type\": \"厂内SOP\", \"section\": \"2.1 光源亮度设定\", \"value\": 65}, \"...共 4 项，仅送前 2 项\"], \"likely_authoritative\": \"厂商手册\", \"note\": \"存在冲突：2 种取值——80（厂商手册、调试记录）；65（厂内SOP、调试记录）。取证时不要自行挑选一个继续用，须说明冲突并请人工确认以哪份为准。\"}}, \"note\": \"共查 3 个参数，其中 3 个存在冲突：判定置信度阈值、标定周期(天)、光源亮度设定。取证时不要自行挑选，须说明冲突并请人工确认以哪份为准。\"}",
-        "truncated": false,
-        "ev_no": 7,
-        "turn": 1
       }
     ],
     "intent": "diagnose",
@@ -314,8 +259,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

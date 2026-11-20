@@ -1,6 +1,6 @@
 {
   "id": "T2",
-  "saved_at": "2026-11-20 00:38:44",
+  "saved_at": "2026-11-20 11:47:36",
   "traj_fp": "2551c4517ca9",
   "traj": {
     "id": "T2",
@@ -28,35 +28,23 @@
     "tool_names": [
       "query_device_profile",
       "query_defect_log",
-      "query_calibration",
-      "query_light_usage"
+      "query_light_usage",
+      "query_calibration"
     ],
     "final": {
-      "conclusion": "误判集中在 1 号工位，而该设备光源已超额定寿命、亮度被两次下调，方向指向 1 号工位光源衰减；标定记录正常，可排除标定漂移。另外你提到的工位数量与档案不符，档案显示是三个工位。",
+      "conclusion": "CX-101 实际是三个工位（1-3号工位），不是两个；误判集中在 1 号工位，缺陷类型分散、标定平稳，指向该工位光源已超额定寿命、亮度被多次下调导致的成像衰减，属硬件侧问题",
       "claims": [
         {
-          "text": "档案工位字段为「1-3号工位」，即三个工位，不是两个",
+          "text": "设备档案显示工位为「1-3号工位」，即三个工位",
           "value": 3,
           "unit": "个",
           "ref": "query_device_profile#station"
         },
         {
-          "text": "1 号工位误判率 58.82%",
+          "text": "1 号工位 34 条记录中 20 条误判，误判率 58.82%",
           "value": 58.82,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.station[0].rate"
-        },
-        {
-          "text": "1 号工位 7 天内 34 条记录中 20 条误判",
-          "value": 34,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.station[0].count"
-        },
-        {
-          "text": "1 号工位误判 20 条",
-          "value": 20,
-          "unit": "条",
-          "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.station[0].false_positive"
         },
         {
           "text": "3 号工位误判率仅 10.64%",
@@ -65,34 +53,16 @@
           "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.station[1].rate"
         },
         {
-          "text": "整机 7 天误判率 23.89%",
+          "text": "整机误判率 23.89%（27/113）",
           "value": 23.89,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,day}#false_positive_rate"
         },
         {
-          "text": "缺陷类型维度上尺寸超差 31.03%",
+          "text": "缺陷类型分布分散：尺寸超差 31.03%、污渍 22.86%，未集中在单一类型",
           "value": 31.03,
           "unit": "%",
           "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.defect_type[0].rate"
-        },
-        {
-          "text": "污渍 22.86%，无单一缺陷类型压倒性集中",
-          "value": 22.86,
-          "unit": "%",
-          "ref": "query_defect_log{group_by=station,defect_type,day}#by_group.defect_type[1].rate"
-        },
-        {
-          "text": "最近一次标定 2026-10-30，漂移 0.467px，结果通过",
-          "value": 0.467,
-          "unit": "px",
-          "ref": "query_calibration#records[0].drift_px"
-        },
-        {
-          "text": "距上次标定 15 天，漂移趋势平稳",
-          "value": 15,
-          "unit": "天",
-          "ref": "query_calibration#days_since_last"
         },
         {
           "text": "光源累计点亮 8620 小时",
@@ -101,25 +71,19 @@
           "ref": "query_light_usage#cumulative_hours"
         },
         {
-          "text": "额定寿命 8000 小时",
+          "text": "光源额定寿命 8000 小时",
           "value": 8000,
           "unit": "小时",
           "ref": "query_light_usage#rated_life_hours"
         },
         {
-          "text": "已超额定寿命 620 小时",
+          "text": "已超额定寿命 620 小时，剩余寿命 0",
           "value": 620,
           "unit": "小时",
           "ref": "query_light_usage#over_life_hours"
         },
         {
-          "text": "距额定寿命剩余 0 小时",
-          "value": 0,
-          "unit": "小时",
-          "ref": "query_light_usage#remaining_hours"
-        },
-        {
-          "text": "亮度设定被两次下调",
+          "text": "亮度设定被逐次下调",
           "ref": "query_light_usage#brightness_history",
           "items": [
             {
@@ -140,11 +104,23 @@
           ]
         },
         {
-          "text": "工具评估：已超额定寿命、亮度衰减显著，误判率通常上升 10%-25%",
+          "text": "光源超寿命后误判率通常上升 10%-25%",
           "value": 10,
           "value_max": 25,
           "unit": "%",
           "ref": "query_light_usage#degradation_estimate"
+        },
+        {
+          "text": "最近一次标定 2026-10-30，漂移 0.467px，结果通过",
+          "value": 0.467,
+          "unit": "px",
+          "ref": "query_calibration#records[0].drift_px"
+        },
+        {
+          "text": "距上次标定 15 天，漂移趋势平稳",
+          "value": 15,
+          "unit": "天",
+          "ref": "query_calibration#days_since_last"
         },
         {
           "text": "该设备保养周期设定为 90 天",
@@ -154,25 +130,24 @@
         }
       ],
       "advice": [
-        "先纠正前提：CX-101 档案工位是「1-3号工位」，共三个工位，按工位聚合也返回三项，不是两个。",
-        "误判集中在 1 号工位（58.82%）而 3 号工位仅 10.64%，镜头/光源/标定是该工位独立部件，优先按硬件方向排查 1 号工位。",
-        "标定侧可先排除：最近一次 2026-10-30 漂移 0.467px 通过，历史 6 次全部通过，趋势平稳，无需先动标定。",
-        "重点查 1 号工位光源：整机光源已超额定寿命 620 小时、剩余 0，亮度从 85 降到 80 再到 65，建议现场确认 1 号工位光源实际亮度与衰减情况，按需更换光源后复测。",
-        "取证局限需说明：query_light_usage 是按整台设备返回的，不分工位，无法直接证明只有 1 号工位光源衰减，需现场逐工位比对亮度。",
-        "若更换光源后 1 号工位误判率仍高，再查该工位镜头污染与模型侧参数；处置结果需现场回报确认。"
+        "先纠正前提：CX-101 是 1-3 号三个工位，1 号工位误判率 58.82% 远高于 3 号工位的 10.64%，问题确实集中在 1 号工位。",
+        "优先更换 1 号工位光源：累计 8620 小时已超额定 8000 小时 620 小时，亮度已从 85 两次下调到 65，属典型衰减补偿。",
+        "更换后重新标定 1 号工位并复测误判率，处置结果需现场回报确认。",
+        "标定侧暂不作为主因：最近一次 2026-10-30 通过、漂移 0.467px、趋势平稳，但标定记录是整机口径，无法区分工位，建议更换光源后单独核对 1 号工位标定。",
+        "同时检查 1 号工位镜头是否有污染，与光源衰减叠加会放大过杀。"
       ]
     },
-    "final_text": "误判集中在 1 号工位，而该设备光源已超额定寿命、亮度被两次下调，方向指向 1 号工位光源衰减；标定记录正常，可排除标定漂移。另外你提到的工位数量与档案不符，档案显示是三个工位。\n- 档案工位字段为「1-3号工位」，即三个工位，不是两个[query_device_profile]\n- 1 号工位误判率 58.82%[query_defect_log{group_by=station,defect_type,day}]\n- 1 号工位 7 天内 34 条记录中 20 条误判[query_defect_log{group_by=station,defect_type,day}]\n- 1 号工位误判 20 条[query_defect_log{group_by=station,defect_type,day}]\n- 3 号工位误判率仅 10.64%[query_defect_log{group_by=station,defect_type,day}]\n- 整机 7 天误判率 23.89%[query_defect_log{group_by=station,defect_type,day}]\n- 缺陷类型维度上尺寸超差 31.03%[query_defect_log{group_by=station,defect_type,day}]\n- 污渍 22.86%，无单一缺陷类型压倒性集中[query_defect_log{group_by=station,defect_type,day}]\n- 最近一次标定 2026-10-30，漂移 0.467px，结果通过[query_calibration]\n- 距上次标定 15 天，漂移趋势平稳[query_calibration]\n- 光源累计点亮 8620 小时[query_light_usage]\n- 额定寿命 8000 小时[query_light_usage]\n- 已超额定寿命 620 小时[query_light_usage]\n- 距额定寿命剩余 0 小时[query_light_usage]\n- 亮度设定被两次下调[query_light_usage]\n- 工具评估：已超额定寿命、亮度衰减显著，误判率通常上升 10%-25%[query_light_usage]\n- 该设备保养周期设定为 90 天[query_device_profile]\n* 先纠正前提：CX-101 档案工位是「1-3号工位」，共三个工位，按工位聚合也返回三项，不是两个。\n* 误判集中在 1 号工位（58.82%）而 3 号工位仅 10.64%，镜头/光源/标定是该工位独立部件，优先按硬件方向排查 1 号工位。\n* 标定侧可先排除：最近一次 2026-10-30 漂移 0.467px 通过，历史 6 次全部通过，趋势平稳，无需先动标定。\n* 重点查 1 号工位光源：整机光源已超额定寿命 620 小时、剩余 0，亮度从 85 降到 80 再到 65，建议现场确认 1 号工位光源实际亮度与衰减情况，按需更换光源后复测。\n* 取证局限需说明：query_light_usage 是按整台设备返回的，不分工位，无法直接证明只有 1 号工位光源衰减，需现场逐工位比对亮度。\n* 若更换光源后 1 号工位误判率仍高，再查该工位镜头污染与模型侧参数；处置结果需现场回报确认。",
+    "final_text": "CX-101 实际是三个工位（1-3号工位），不是两个；误判集中在 1 号工位，缺陷类型分散、标定平稳，指向该工位光源已超额定寿命、亮度被多次下调导致的成像衰减，属硬件侧问题\n- 设备档案显示工位为「1-3号工位」，即三个工位[query_device_profile]\n- 1 号工位 34 条记录中 20 条误判，误判率 58.82%[query_defect_log{group_by=station,defect_type,day}]\n- 3 号工位误判率仅 10.64%[query_defect_log{group_by=station,defect_type,day}]\n- 整机误判率 23.89%（27/113）[query_defect_log{group_by=station,defect_type,day}]\n- 缺陷类型分布分散：尺寸超差 31.03%、污渍 22.86%，未集中在单一类型[query_defect_log{group_by=station,defect_type,day}]\n- 光源累计点亮 8620 小时[query_light_usage]\n- 光源额定寿命 8000 小时[query_light_usage]\n- 已超额定寿命 620 小时，剩余寿命 0[query_light_usage]\n- 亮度设定被逐次下调[query_light_usage]\n- 光源超寿命后误判率通常上升 10%-25%[query_light_usage]\n- 最近一次标定 2026-10-30，漂移 0.467px，结果通过[query_calibration]\n- 距上次标定 15 天，漂移趋势平稳[query_calibration]\n- 该设备保养周期设定为 90 天[query_device_profile]\n* 先纠正前提：CX-101 是 1-3 号三个工位，1 号工位误判率 58.82% 远高于 3 号工位的 10.64%，问题确实集中在 1 号工位。\n* 优先更换 1 号工位光源：累计 8620 小时已超额定 8000 小时 620 小时，亮度已从 85 两次下调到 65，属典型衰减补偿。\n* 更换后重新标定 1 号工位并复测误判率，处置结果需现场回报确认。\n* 标定侧暂不作为主因：最近一次 2026-10-30 通过、漂移 0.467px、趋势平稳，但标定记录是整机口径，无法区分工位，建议更换光源后单独核对 1 号工位标定。\n* 同时检查 1 号工位镜头是否有污染，与光源衰减叠加会放大过杀。",
     "steps": 4,
     "blocked": [],
     "misquoted": [],
     "cite_stats": {
-      "qty": 17,
-      "pct": 6,
-      "cited_ok": 17,
-      "cited_path": 17,
+      "qty": 13,
+      "pct": 5,
+      "cited_ok": 13,
+      "cited_path": 13,
       "cite_oob": 0,
-      "path_ok": 17,
+      "path_ok": 13,
       "path_bad": 0,
       "path_miss": 0,
       "json_bad": 0,
@@ -180,6 +155,7 @@
       "ref_bad": 0,
       "cite_cut": 0,
       "json_fixed": 0,
+      "json_parse_fail": 0,
       "derived_ok": 0,
       "derived_bad": 0,
       "range_ok": 1,
@@ -195,7 +171,7 @@
       "bare_conclusion": 0,
       "svc_fail": 0,
       "ev_mismatch": 0,
-      "cited": 17,
+      "cited": 13,
       "ev": 4
     },
     "stop_reason": "enough",
@@ -226,24 +202,24 @@
         "turn": 1
       },
       {
-        "tool": "query_calibration",
-        "args": {
-          "device_id": "CX-101",
-          "limit": 8
-        },
-        "sig": "device_id=CX-101,limit=8",
-        "result": "[query_calibration{device_id=CX-101,limit=8}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"records\": [{\"ts\": \"2026-10-30 10:00:00\", \"drift_px\": 0.467, \"drift_mm\": 0.079, \"result\": \"通过\", \"operator\": \"李强\"}, {\"ts\": \"2026-10-13 15:00:00\", \"drift_px\": 0.401, \"drift_mm\": 0.074, \"result\": \"通过\", \"operator\": \"李强\"}, {\"ts\": \"2026-09-28 15:00:00\", \"drift_px\": 0.413, \"drift_mm\": 0.059, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-07 12:00:00\", \"drift_px\": 0.485, \"drift_mm\": 0.096, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 10:00:00\", \"drift_px\": 0.541, \"drift_mm\": 0.107, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-01 09:00:00\", \"drift_px\": 0.679, \"drift_mm\": 0.126, \"result\": \"通过\", \"operator\": \"张伟\"}], \"last_calibration_at\": \"2026-10-30 10:00:00\", \"days_since_last\": 15, \"drift_trend\": \"平稳\", \"window\": {\"time_from\": null, \"time_to\": null}}",
-        "truncated": false,
-        "ev_no": 3,
-        "turn": 1
-      },
-      {
         "tool": "query_light_usage",
         "args": {
           "device_id": "CX-101"
         },
         "sig": "device_id=CX-101",
         "result": "[query_light_usage{device_id=CX-101}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"light_model\": \"CA-DC21E\", \"cumulative_hours\": 8620, \"rated_life_hours\": 8000, \"over_life_hours\": 620, \"remaining_hours\": 0, \"brightness_set\": 65, \"last_replaced_at\": \"2024-09-20 00:00:00\", \"brightness_history\": [{\"ts\": \"2025-03-12 09:00:00\", \"value\": 85}, {\"ts\": \"2026-09-15 14:20:00\", \"value\": 80}, {\"ts\": \"2026-10-20 10:05:00\", \"value\": 65}], \"degradation_estimate\": \"已超额定寿命，亮度衰减显著，误判率通常上升 10%-25%，建议更换光源\"}",
+        "truncated": false,
+        "ev_no": 3,
+        "turn": 1
+      },
+      {
+        "tool": "query_calibration",
+        "args": {
+          "device_id": "CX-101",
+          "limit": 5
+        },
+        "sig": "device_id=CX-101,limit=5",
+        "result": "[query_calibration{device_id=CX-101,limit=5}] {\"device_id\": \"CX-101\", \"state\": \"found\", \"records\": [{\"ts\": \"2026-10-30 10:00:00\", \"drift_px\": 0.467, \"drift_mm\": 0.079, \"result\": \"通过\", \"operator\": \"李强\"}, {\"ts\": \"2026-10-13 15:00:00\", \"drift_px\": 0.401, \"drift_mm\": 0.074, \"result\": \"通过\", \"operator\": \"李强\"}, {\"ts\": \"2026-09-28 15:00:00\", \"drift_px\": 0.413, \"drift_mm\": 0.059, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-09-07 12:00:00\", \"drift_px\": 0.485, \"drift_mm\": 0.096, \"result\": \"通过\", \"operator\": \"张伟\"}, {\"ts\": \"2026-08-19 10:00:00\", \"drift_px\": 0.541, \"drift_mm\": 0.107, \"result\": \"通过\", \"operator\": \"张伟\"}], \"last_calibration_at\": \"2026-10-30 10:00:00\", \"days_since_last\": 15, \"drift_trend\": \"平稳\", \"window\": {\"time_from\": null, \"time_to\": null}}",
         "truncated": false,
         "ev_no": 4,
         "turn": 1
@@ -255,8 +231,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

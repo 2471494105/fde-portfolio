@@ -1,6 +1,6 @@
 {
   "id": "I4",
-  "saved_at": "2026-11-20 00:38:18",
+  "saved_at": "2026-11-20 11:47:21",
   "traj_fp": "8e2483bd75ae",
   "traj": {
     "id": "I4",
@@ -44,8 +44,8 @@
     "model_intent": "diagnose"
   },
   "meta": {
-    "commit": "ff2b8e0",
-    "code_hash": "56ce58d18707",
+    "commit": "1f5671e",
+    "code_hash": "cd9a0a36bce3",
     "cases_hash": "4c9bd0d53ec4"
   }
 }

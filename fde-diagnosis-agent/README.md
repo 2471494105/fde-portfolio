@@ -14,7 +14,7 @@
 | 短板 | 这个项目怎么补 |
 |---|---|
 | 串 5 个固定工具 → 会被问"你这算 Agent 还是 workflow" | L2 方向判断交给模型，代码零数值分支 |
-| 没做 Agent 轨迹级评测 | 25 条 golden path + 四指标 + 归因，出报告 |
+| 没做 Agent 轨迹级评测 | 26 条用例（含 3 条多轮）+ 四指标 + 失败归因，出报告 |
 | 没做模型选型 / function calling 失败率 | W0 双模型对照实测，有数字 |
 
 ## 实测数据
@@ -32,13 +32,33 @@
 **两个模型都必须带护栏**——DeepSeek 同样在用户没给设备号时编了一个，比例 3/15 与 7b 完全一样，
 说明"缺关键参数时模型倾向自己补"是普遍行为，不是小模型专属。
 
-**评测**（当时 24 条，含 4 条意图用例，deepseek-chat，temperature=0，连跑 8 轮。现有 25 条，新增 I9；下表是 24 条时期的 8 轮结果，保留原值不做覆盖）
+**评测 — 当前基线**（`eval/report_20261120_1149_1f5671e.json`，26 条全量串行，
+官方 `deepseek-chat`，temperature=0，mock QMS 在线，基准种子）
 
-> ⚠️ **下面这段是 24 条、旧判据口径时期的记录，不是当前基线。**
-> 2026-11-19 之后用例数变成 **26**（W1+W2 合并成一条两轮用例），判据口径也改了几处
-> （`kw_rate=None` 不再按 100% 算、标灰通过单列、`steps_range` 上界不许抄预算常量、
-> `expect_deduped` 改三态）。**当前代码（`code_hash=1b0f5bccb9d7`）还没有全量报告**，
-> 也就是说现在没有任何可引用的通过率。引用任何数字之前先看 `eval/报告状态.md`。
+```
+语义正确率   26/26 = 100%        明确出处率  308/313 = 98.4%
+可核验率     309/313 = 98.7%     引文核对    16 成 / 0 败
+有未溯源数字 3/26（其中 2 条标灰通过）      失败归因  无
+判据解析失败 0/26                终态词豁免  0 引号内 / 0 逐字在证据
+总耗时       333 s（12.8 s/条）
+```
+
+`meta`：`code_hash=cd9a0a36bce3` / `cases_hash=4c9bd0d53ec4` / `seed_hash=9caa1322fbfc` / `commit=1f5671e`。
+四轴齐全，这是当前唯一可引用的通过率。
+
+三句必须一起说，否则这个 100% 会被读成"稳定满分"：
+
+1. **这是一次 `pass@1`，不是稳定性。** 同一套夹具前六轮在 23–24/26 之间摆动；
+   拿到 26/26 之前修掉了三条假红（`terminal_claim`、`cite_wrong`、I9 无单可答）。
+2. **`report_20261120_1141_1f5671e.json`（25/26）不能引用**：那次 mock QMS 全程没起，
+   W3 那条红是环境——模型自己在结论里写了"工单系统（mock QMS）连接被拒绝"。
+3. **两道新闸这轮没开火**：`判据解析失败 0/26`、`终态词豁免 0/0`。所以不能写成"闸修好了 H2"——
+   H2 这轮靠的是否定词表，闸的证据目前只有单测的正反两侧。
+
+判断一份历史报告能不能引用，只看两根轴：`cases_hash` 与 `code_hash` 是否与当前相同；
+60 多份报告逐份的角色说明在 `eval/报告状态.md`。
+
+### 历史记录（24 条时期，不可当当前基线）
 
 ```
 语义正确率   22/24 = 91.7%（8 轮里出现 4 次，区间 83.3%–91.7%，均值 90.0%）
@@ -54,6 +74,8 @@
 **意图判错 0/192** 是这轮改造最直接的收益：五类意图（诊断/查数据/查知识/执行动作/追问）一次没判错，而改造前系统里根本没有这个判断——只要句子里有设备号就当诊断。
 
 改造过程、三个自造 regression、判据为什么收窄，写在 `docs/20261116_01_意图层改造.md`。
+
+> 以下多轮与回归数字同为 2026-11-15/16 的改造期记录，用的是当时 24 条夹具，不可与当前 26 条基线横比。
 
 **多轮会话（Checkpointer 存 PostgreSQL）**
 
@@ -80,13 +102,13 @@ START → intake（正则抽候选设备号，不判意图）
 
 三层岔口：
 
-- **L1 意图识别**（规则前置 + 模型兜底 + 按代价分档）：三条高精度规则先兜住罕见组合——`guess`（不用查/凭经验）、`act_verb`（建/派/登记 + 工单，要求动宾关系）、`change+dev`（变化词 + 设备号），27 条夹具上命中 8 条、**8/8 与期望一致**；命中之后不再听模型的 intent（模型照旧要调，因为它要抽 phenomenon / param_names）。其余 19 条交给模型，程序只校验自洽：判成 diagnose/lookup/action 却没给设备号 → 降级追问；没描述现象不算矛盾（可以先取数据），不降级。**不确定时不再一律追问**，而是按 `BRANCH_COST` 分档：`action`（有外部副作用）/ `diagnose`（跑十几步）先问一句，`lookup` / `knowledge`（一步给答案、答偏了眼看得见）照做，并把"我按什么理解的"写在结论最前面。
+- **L1 意图识别**（规则前置 + 模型兜底 + 按代价分档）：三条高精度规则先兜住罕见组合——`guess`（不用查/凭经验）、`act_verb`（建/派/登记 + 工单，要求动宾关系）、`change+dev`（变化词 + 设备号），当前 26 条夹具上命中 7 条、**7/7 与期望一致**（救人 0 / 误伤 0，见基线报告 `rule_hit / rule_saved / rule_harm`）；命中之后不再听模型的 intent（模型照旧要调，因为它要抽 phenomenon / param_names）。其余 19 条交给模型，程序只校验自洽：判成 diagnose/lookup/action 却没给设备号 → 降级追问；没描述现象不算矛盾（可以先取数据），不降级。**不确定时不再一律追问**，而是按 `BRANCH_COST` 分档：`action`（有外部副作用）/ `diagnose`（跑十几步）先问一句，`lookup` / `knowledge`（一步给答案、答偏了眼看得见）照做，并把"我按什么理解的"写在结论最前面。
 - **L2 方向判断**（模型判断）：查什么、往硬件还是算法查，全在模型推理里，代码不含数值 if-else
 - **L3 证据冲突**（工具驱动）：参数在不同文档里取值不一致时必须上报，不许自己挑一个用。知识分支问的是参数取值时也会自动查一次冲突
 
 程序只做三件模型做不好的事：补信息、执行工具、校验结论。
 
-为什么 L1 不全用规则表：**弱规则会误伤**。`why+dev`（为什么 + 设备）在 27 条夹具上精度 86%、`look_only`（查记录）50%、`param_only`（阈值/亮度）33%——它们依赖的是"记录""阈值""原因"这类常见词，真实用户表达一丰富就会把本来正确的判断改错，而且**这种错在报表上看起来像"模型退化了"**，归因完全跑偏。所以规则只做**前置兜底**（罕见组合、出手必对），不做**全覆盖替代**：覆盖率交给模型，口径交给规则。这既不是 if-else workflow（19/27 仍由模型判），也不是"完全信任模型"。
+为什么 L1 不全用规则表：**弱规则会误伤**。`why+dev`（为什么 + 设备）在当时的 27 条夹具上精度 86%、`look_only`（查记录）50%、`param_only`（阈值/亮度）33%——它们依赖的是"记录""阈值""原因"这类常见词，真实用户表达一丰富就会把本来正确的判断改错，而且**这种错在报表上看起来像"模型退化了"**，归因完全跑偏。所以规则只做**前置兜底**（罕见组合、出手必对），不做**全覆盖替代**：覆盖率交给模型，口径交给规则。这既不是 if-else workflow（19/26 仍由模型判），也不是"完全信任模型"。
 
 反过来，"不确定就问"这条也不成立：判据应该是**问的收益 vs 问的成本**（clarify-or-commit，arXiv 2601.06407），还要分清 spec 缺失（用户没说清，该问）和 model uncertainty（用户说清了、模型没把握，**该改提示词而不是问**，ACL 2026 findings）。按这条改完，"模型判错了"不会再被一句追问糊过去变成假绿。
 
@@ -145,9 +167,12 @@ START → intake（正则抽候选设备号，不判意图）
 
 前置：PostgreSQL（本例 18.6 + pgvector 0.8.7）+ Ollama（`nomic-embed-text`，只在灌手册和检索向量时用）+ 一个 OpenAI 兼容端点（官方 DeepSeek 或中转站均可）。
 
-**当前 demo 配置走中转站**（`https://minekuai.cn/v1`，模型 `deepseek-v4.1-flash-1017`），原因只有一个：成本。
+**当前配置走官方端点**：`.env` 里 `FDE_PROVIDER=deepseek`、`FDE_MODEL=deepseek-chat`，没有设 `FDE_BASE_URL`。
+上面的基线 `1149` 就是在这一配置下跑的。
+
+曾经走过中转站（`https://minekuai.cn/v1` / `deepseek-v4.1-flash-1017`），原因只有一个：成本。
 代价是峰时排队能到 120 秒以上，同一条问题谷时 24.9 秒、峰时 160.3 秒，差 6.4 倍。
-注意上面 W0 选型和 24 条评测的数字是在**官方 `deepseek-chat` 端点**下测的，换端后不保证复现，也不该拿新端点的结果去覆盖那批历史数据。
+**换端之后 W0 选型与 24 条历史评测的数字都不再可比**——那不是同一个模型，也不该拿新端点的结果覆盖旧数据。
 
 ```powershell
 # 1. 建库导数据
@@ -157,9 +182,9 @@ $env:PGPASSWORD='postgres'
 & venv\Scripts\python.exe data\manual_seed.py          # 手册片段 + 向量，需要 Ollama 在跑
 
 # 2. 端点与模型写进项目根 .env（不要提交）
-#    FDE_PROVIDER=openai
-#    FDE_BASE_URL=https://minekuai.cn/v1        # 换成官方端点亦可
-#    FDE_MODEL=deepseek-v4.1-flash-1017
+#    FDE_PROVIDER=deepseek
+#    FDE_MODEL=deepseek-chat                    # 基线 1149 用的就是它
+#    FDE_BASE_URL=（不写就走官方端点；要用中转站才填 https://...）
 #    FDE_API_KEY=<你的 key>
 
 # 3. 起服务
@@ -183,11 +208,11 @@ $env:PGPASSWORD='postgres'
 
 ## 怎么验证
 
-改完按改动面选最小验证，别动不动就跑全量 25 条（约 142 秒一条、2 万 token）。
+改完按改动面选最小验证，别动不动就跑全量 26 条（当前约 333 秒、平均 12.8 秒一条）。
 
 | 命令 | 耗时 | 什么时候跑 | 判据 |
 |---|---|---|---|
-| `venv\Scripts\python.exe tests\test_guardrails.py` | 5 秒 | 动了 `app/graph/nodes.py`、`app/tools/*.py` | 14 条全绿；不连库、不发 HTTP |
+| `venv\Scripts\python.exe -m unittest tests.test_guardrails` | 0.2 秒 | 动了 `app/graph/*.py`、`app/tools/*.py`、`eval/run_eval.py` | **289 条全绿**；不连库、不发 HTTP |
 | `venv\Scripts\python.exe scripts\smoke_tools.py` | 10 秒 | 动了工具层 | 8 个工具都返回数据；建单那步幂等命中同号 |
 | `venv\Scripts\python.exe scripts\smoke_qms.py` | 10 秒 | 动了建单链路 | 6 项分两组全过；**会在真库建一张单** |
 | `venv\Scripts\python.exe eval\run_eval.py --only=I1` | 5 秒 | 动了 prompt、节点、schema | 新报告 `meta.code_hash` 与上一份不同 = 行为可能变了 |
@@ -195,10 +220,13 @@ $env:PGPASSWORD='postgres'
 三个容易搞错的地方：
 
 1. **`smoke_qms.py` 会真建单**，不是只读脚本。当天首次新建，再跑就命中幂等返回同号。
-2. **只改 `docs/`、`README`、注释时，上面四条都不用跑**，但 `meta.code_hash` 会变——
-   注释也在整文件指纹里。这是刻意的：宁可误报，也不要因为正则抽取失效而漏掉 `schemas.py` 的 enum。
-3. 报告文件名带 commit（`report_YYYYMMDD_HHMM_<commit7>.json`），`report_eval.json` 只是最新副本。
-   两份报告要可比，必须 `model` / `commit` / `code_hash` / `cases_hash` 四个全同。
+2. **只改 `docs/`、`README`、`app/web/` 这类非行为文件时，上面四条都不用跑，`meta.code_hash` 也不会变**——
+   `BEHAVIOR_FILES` 只有 10 个文件（`graph/{nodes,build,state,llm}`、`tools/{schemas,workorder,diagnosis,manual,hints}`、`eval/run_eval.py`）。
+   2026-11-20 改 `app/web/server.py` + `static/index.html` 时实测 `code_hash` 仍是 `cd9a0a36bce3`，基线不作废。
+3. **但改的是行为文件里的注释，`code_hash` 照样会变**。指纹按整文件算，不看改的是不是逻辑。
+   这是刻意的：宁可误报，也不要因为抽取规则失效而漏掉 `schemas.py` 的 enum。
+4. 报告文件名带 commit（`report_YYYYMMDD_HHMM_<commit7>.json`），`report_eval.json` 只是最新副本。
+   两份报告要可比，必须 `model` / `commit` / `code_hash` / `cases_hash` 四根轴全同；四轴校验没过的报告现在直接不落盘。
 
 ## 目录
 
@@ -209,13 +237,13 @@ app/
   web/       server.py + static/index.html（多轮会话靠 localStorage 的 session_id）
   trace.py   轨迹落盘
 data/        schema.sql、seed_generate.py、manual_seed.py、verify_seed.sql
-eval/        trajectories.py（25 条）、run_eval.py、report_eval.json
+eval/        trajectories.py（26 条，含 3 条多轮）、run_eval.py、report_eval.json
 mock_qms/    FastAPI 模拟 QMS（刻意复现"HTTP 200 但业务码在响应体"）
 scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_multi_turn / smoke_web_session
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
-             00_文档索引.md 是全部 22 篇的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 36 篇的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -226,14 +254,16 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 
 1. **数据是造的**，`random.Random(42)` 确定性生成；相机/控制器型号是真的（Cognex In-Sight 2800 系列、
    Keyence CV-X450 + CA-H200CX、CA-DC21E），告警码与额定寿命是仿真实格式自编，没有抄任何厂商手册原文
-2. **25 条样本量小**，且**当前只跑通 7 条可信基线**（H1–H5、A1、A2，0 失败，平均 142 s/条），
-   其余 18 条（A3–A5、I1–I9、W1–W3、T1–T3）待谷时补跑；补齐前不能对外说"25/25 通过"
-3. **H5 那条失败未修复**：用户说"是不是阈值太严"，模型接受这个前提只在算法侧取证，
-   没查标定（`drift_mm=0.42` 就在那里）、没按天看（11-07 是 15.4%，11-08 跳到 63.2%）。
-   这反映的是"用户断言污染诊断"的真实能力缺口，故意保留为失败。8 轮里它 8 次全失败，不是偶发
+2. **26 条样本量小，且当前数字是单次 `pass@1`**：有整份全量基线（26/26、333 s、四轴齐全），
+   但同一套夹具历史上在 23–24/26 之间摆动过，所以不能对外说"稳定 100%"。
+   稳定性要靠同一份夹具连跑 k 次，现在没做
+3. **H5 曾经稳定失败，已于 2026-11-19 修掉**：用户说"是不是阈值太严"，模型当时接受这个前提、
+   只在算法侧取证，没查标定（`drift_mm=0.42` 就在返回里）、也没按天看（11-07 是 15.4%，11-08 跳到 63.2%）。
+   修法是在 `query_defect_log` 的工具描述里加两条约束（时间线是必查维度、用户带来的猜测不构成证据），
+   **不是放宽判据**。改前 8 轮 8 次全失败，改后原话变成"方向不是判定阈值过严，而是标定漂移未被处置"
 4. **终局判定靠关键词**，模型换个说法或出现在否定语境里会误判（CX-105 那条已实测到：结论写"不是镜头问题"也算命中"镜头"）
-5. **每条只考一件事**，没有组合场景；跨轮能力有了真实会话（`thread_id`），但**评测还是 25 条单轮**——
-   多轮没有自动评测，只有 `scripts/smoke_multi_turn.py` 三个手写 case 覆盖了"补设备 / 换设备 / 摘要累积"
+5. **每条只考一件事**，没有组合场景。多轮已进自动评测 3 条（`W1` 两轮、`M1` 三轮、`M2` 两轮），
+   覆盖"补设备 / 换设备 / 问到术语再回来"；但五轮以上、含证据裁剪的长链路仍没有自动用例，只有手写 smoke
 6. 每日样本仅 10–20 条，按日聚合波动大，看趋势要用 3 天以上窗口；5 台设备都有问题，没有健康对照机
 7. ~~**告警码没有进向量库**~~ 已修：新增「告警码对照表 ALM-2026」9 块，`device_manual_chunks` 24 → 33 块。
    现在问"E-101 这个告警什么意思"，`search_manual` 首条命中即"E-101 相机未连接或通讯中断 / 告警码 E-101，等级 critical /

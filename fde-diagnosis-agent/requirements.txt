@@ -18,3 +18,8 @@ langgraph>=0.2
 # 会话持久化：state 存 PostgreSQL，用同一个 fde_rag 库（断点恢复 / 多轮追问）
 langgraph-checkpoint-postgres>=3.0
 psycopg-pool>=3.2
+
+# 飞书入口（DOC-37 W0）：官方长连接 SDK
+# 注意：它要求 websockets>=11,<16，装完会把本项目的 websockets 17.4 降到 15.0.1
+# （已实测 CX-101 端到端不受影响；uvicorn 的 ws 与 langgraph-sdk 的 ws transport 本项目都不走）
+lark-oapi>=1.8.0

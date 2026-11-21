@@ -2984,7 +2984,7 @@ class ResultEventContractTest(unittest.TestCase):
         # done 帧原来手抄 12 个字段，和 result_event 重合 9 个：
         # state 改一个名字要记得改两处，漏了不报错，只静默少一个字段。
         # 这条测的是"派生"——逐字段比对公共部分，抄一遍过不了。
-        from app.web import server as web_server
+        from app.entry import stream as web_server
         st = {"turn": 3, "intent": "diagnose", "steps": 4, "tool_names": ["a"],
               "blocked": ["x"], "misquoted": [], "device_ids": ["CX-104"],
               "slots": {"device_id": "CX-104"}, "final": "{}", "final_text": "x",
@@ -4035,13 +4035,13 @@ class CiteTextTest(unittest.TestCase):
     """
 
     def test_args_with_multi_value_enum(self):
-        from app.web import server as web
+        from app.entry import labels as web
 
         got = web.cite_text("误判 23.9%[query_defect_log{group_by=station,defect_type,batch}]")
         self.assertEqual(got, "误判 23.9%[查误判记录{分组维度=按工位、按缺陷类型、按批次}]")
 
     def test_no_arg_tag_and_unknown_tool_untouched(self):
-        from app.web import server as web
+        from app.entry import labels as web
 
         self.assertEqual(web.cite_text("寿命 8620[query_light_usage]"), "寿命 8620[查光源使用]")
         # 认不出的方括号内容必须原样留着，否则会把结论正文改坏

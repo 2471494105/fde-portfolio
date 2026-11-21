@@ -1,4 +1,4 @@
-# 三幕演示驱动：UIA 填值 + 提交 + 等 run_end + 滚到结论取景
+﻿# 三幕演示驱动：UIA 填值 + 提交 + 等 run_end + 滚到结论取景
 # 用法（先起录，再跑本脚本）：
 #   1) pwsh -File scripts\record_demo.ps1 -Seconds 85 -Fps 20 -StartDelay 3
 #   2) pwsh -File scripts\demo_drive.ps1

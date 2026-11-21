@@ -1,4 +1,4 @@
-# 一键起环境：检查依赖 → 起 mock QMS(8010) → 起 Web(8020) → 健康检查
+﻿# 一键起环境：检查依赖 → 起 mock QMS(8010) → 起 Web(8020) → 健康检查
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts\start.ps1

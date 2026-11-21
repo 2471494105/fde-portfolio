@@ -24,7 +24,7 @@ from app.entry.feishu import inbound, render
 from app.entry.feishu.client import FeishuClient, SendFailed
 from app.entry.feishu.config import MissingCreds, load
 from app.entry.feishu.dedupe import Dedupe
-from app.entry.feishu.ready import ReadyOnConnected
+from app.entry.feishu.ready import MaskSecrets, ReadyOnConnected
 
 EXIT_OK = 0
 EXIT_WS = 1
@@ -60,9 +60,12 @@ def main() -> int:
     client = FeishuClient(creds.app_id, creds.app_secret)
     handler = _build_handler(creds, client, dedupe)
 
-    # 让 SDK 的连接日志可见，否则 ready 那一行永远不会触发
+    # 让 SDK 的连接日志可见，否则 ready 那一行永远不会触发。
+    # 同时挂 MaskSecrets：SDK 会把 access_key / ticket 原样打在 conn_url 里，
+    # 那份日志一旦上投屏或进录屏，等于把这次连接交出去。
     lark_logger = logging.getLogger("Lark")
     lark_logger.setLevel(logging.INFO)
+    lark_logger.addFilter(MaskSecrets())
     lark_logger.addHandler(ReadyOnConnected())
 
     ws = lark.ws.Client(creds.app_id, creds.app_secret,

@@ -251,6 +251,29 @@ class ReadySignalTest(unittest.TestCase):
         p.assert_not_called()
         self.assertFalse(h.done)
 
+    def test_mask_secrets_hides_credentials_but_keeps_ids(self):
+        from app.entry.feishu.ready import MaskSecrets
+        rec = self._rec("connected to wss://msg-frontier.feishu.cn/ws/v2?fpid=493"
+                        "&access_key=abc123&service_id=33554678&ticket=def-456")
+        MaskSecrets().filter(rec)
+        msg = rec.getMessage()
+        self.assertIn("access_key=***", msg)
+        self.assertIn("ticket=***", msg)
+        self.assertNotIn("abc123", msg)
+        self.assertNotIn("def-456", msg)
+        # 非凭证参数要留着：service_id 是排障时唯一能对上的线索
+        self.assertIn("service_id=33554678", msg)
+
+    def test_mask_secrets_keeps_ready_signal(self):
+        # 打码与"算不算连上"发生在同一条 record 上，不能互相打死
+        from app.entry.feishu.ready import MaskSecrets
+        h = self._handler()
+        rec = self._rec("connected to wss://x/ws/v2?access_key=k&ticket=t")
+        MaskSecrets().filter(rec)
+        with mock.patch("builtins.print") as p:
+            h.emit(rec)
+        p.assert_called_once()
+
 
 class DedupeTest(unittest.TestCase):
     """入口判重：同键第二次必须返回 True。"""

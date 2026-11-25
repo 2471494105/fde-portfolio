@@ -1,0 +1,6 @@
+﻿device_id,line,station,camera_model,lens_model,light_model,install_date,maintenance_cycle_days
+CX-101,3号线,1-3号工位,In-Sight 2801,16mm,CA-DC21E,2025-03-12,90
+CX-102,3号线,1-3号工位,In-Sight 2802,16mm,CA-DC21E,2025-05-20,90
+CX-103,3号线,1-3号工位,CV-X420 + CA-H200CX,16mm,CA-DC21E,2024-11-08,90
+CX-104,4号线,1-2号工位,CV-X450 + CA-H200CX,16mm,CA-DC21E,2024-08-15,90
+CX-105,4号线,1-2号工位,In-Sight 2800,16mm,CA-DC21E,2025-09-01,90

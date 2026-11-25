@@ -202,7 +202,11 @@ def probe_nomap(conn) -> str:
 
 
 # ---------------------------------------------------------------- main
-def main() -> int:
+def main(argv=None) -> int:
+    json_out = ""
+    for arg in (argv if argv is not None else sys.argv[1:]):
+        if arg.startswith("--json="):
+            json_out = arg.split("=", 1)[1]
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
         data = read_source(conn)
         # 注入一条「设备号写错」的日志：pg 真表装不进去，外部源装得进去
@@ -255,6 +259,24 @@ def main() -> int:
     print(f"不配映射直接灌客户文件：{nomap_msg}")
     print(f"B 类在四种形态上一致：{'是' if len(b_sets) == 1 else '否'}")
     print("A 类只在换源后红，说明 pg 的结构约束不是断言的替代品，是叠加在它上面的额外保护。")
+
+    # 结构化落盘（G6）：四形态结果进报告 meta，别只活在终端输出里
+    if json_out:
+        payload = {
+            "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "db": DSN.rsplit("/", 1)[-1],
+            "forms": [
+                {"name": n, "devices": nd, "logs": nl, "b_fail": b, "a_fail": a}
+                for n, nd, nl, b, a in summary
+            ],
+            "b_consistent": len(b_sets) == 1,
+            "nomap": nomap_msg,
+            "status": "ok" if len(b_sets) == 1 else "fail",
+        }
+        Path(json_out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        print(f"JSON 已写入 {json_out}")
 
     if len(b_sets) != 1:
         print("\n[FAIL] B 类结果不一致：某条形态在搬运过程中丢了信息")

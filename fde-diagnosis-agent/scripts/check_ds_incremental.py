@@ -145,7 +145,11 @@ def load(conn, rows, fail_after_insert=False):
     return len(fresh), new_mark, len(bad)
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    json_out = ""
+    for arg in (argv if argv is not None else sys.argv[1:]):
+        if arg.startswith("--json="):
+            json_out = arg.split("=", 1)[1]
     extra_a = [
         {"id": 9010, "ts": "2026-11-05 08:00:00", "device_id": "CX-101", "station": "2号工位", "defect_type": "划伤", "confidence": 0.87, "batch": "B20261105", "verdict": "NG", "is_actually_ok": False},
         {"id": 9011, "ts": "2026-11-05 09:00:00", "device_id": "CX-103", "station": "2号工位", "defect_type": "异物", "confidence": 0.66, "batch": "B20261105", "verdict": "NG", "is_actually_ok": False},
@@ -218,6 +222,29 @@ def main() -> int:
     print("第 [6] 步是这次修的：水位改成 (时间戳, 主键) 复合后，同一秒进来的多条不再被整体漏掉。")
     print("第 [8] 步是残留边界：复合水位要求主键单调递增，客户补录一条更小的主键仍会漏。")
     print("真正能覆盖它的做法是留重叠窗口（水位往回退一段）再按主键去重，成本是每次多读一小段。")
+
+    # 结构化落盘（G6）。known_gap 一起写：报告里不能只有「增量跑通了」，
+    # 还得带上「它在什么情况下会漏」——否则这份证据比没有更容易被误读。
+    if json_out:
+        payload = {
+            "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "db": DSN.rsplit("/", 1)[-1],
+            "steps": [
+                {"name": name, "added": n, "quarantine": f, "total": total,
+                 "mark": fmt_mark(mark)}
+                for name, n, f, total, mark in log
+            ],
+            "final_rows": r["total"],
+            "unique_ids": r["uniq"],
+            "duplicated": r["total"] != r["uniq"],
+            "quarantine_rows": q,
+            "known_gap": "同时间戳 + 更小主键后到会漏（第 [8] 步）；需重叠窗口才对冲",
+            "status": "ok" if r["total"] == r["uniq"] else "fail",
+        }
+        Path(json_out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        print(f"JSON 已写入 {json_out}")
     return 0
 
 

@@ -18,8 +18,10 @@ stg_devices 上。跨源测试靠的就是这一点——换的是表，不是�
   python scripts/check_data_contract.py --prefix=stg_ --expect=dirty
 """
 
+import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import psycopg
@@ -263,13 +265,14 @@ def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool 
     return fails, a_fails, results
 
 
-def main() -> int:
+def main(argv=None) -> int:
     dsn = DEFAULT_DSN
     expect = ""
     prefix = ""
     allow_q = False
     only = None
-    for arg in sys.argv[1:]:
+    json_out = ""
+    for arg in (argv if argv is not None else sys.argv[1:]):
         if arg.startswith("--dsn="):
             dsn = arg.split("=", 1)[1]
         elif arg.startswith("--expect="):
@@ -278,6 +281,8 @@ def main() -> int:
             prefix = arg.split("=", 1)[1]
         elif arg.startswith("--only="):
             only = {x.strip().upper() for x in arg.split("=", 1)[1].split(",") if x.strip()}
+        elif arg.startswith("--json="):
+            json_out = arg.split("=", 1)[1]
         elif arg == "--allow-quarantine":
             allow_q = True
 
@@ -294,6 +299,7 @@ def main() -> int:
     print(f"断言 {len(results)} 条：PASS {len(results) - len(fails)} / FAIL {len(fails)}")
     print("※ A 类在 pg 源上由数据库约束保证；换源（staging / CSV / 外部库）后才是主要防线。")
 
+    q = None
     q_fail = False
     if only:
         # 只验某一条断言时不查隔离区：否则「隔离区有 1 条造出来的脏行」
@@ -314,6 +320,31 @@ def main() -> int:
                 print("  （--allow-quarantine 已放行：测试场景故意造的脏行）")
             else:
                 q_fail = True
+
+    # 结构化落盘（G6）：让评测报告能把「这轮数据是干净的」写成可引用的证据，
+    # 而不是只活在终端输出里、翻不回来。只写库名不写完整 DSN，避免密码进报告。
+    if json_out:
+        q_detail = None
+        if q is not None:
+            q_detail = {
+                "rows": sum(r["n"] for r in q),
+                "reasons": {r["reason"]: r["n"] for r in q},
+            }
+        payload = {
+            "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "db": dsn.rsplit("/", 1)[-1],
+            "expect": expect,
+            "prefix": prefix,
+            "total": len(results),
+            "pass": len(results) - len(fails),
+            "fail": fails,
+            "quarantine": q_detail,
+            "status": "ok" if (not fails and not q_fail) else "fail",
+        }
+        Path(json_out).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
+        print(f"JSON 已写入 {json_out}")
 
     # 没指定 --expect 时，任何一条红都该让退出码非零。
     # 原来的判断只覆盖了 --expect=clean/dirty 两种，于是「不带参数直接跑」

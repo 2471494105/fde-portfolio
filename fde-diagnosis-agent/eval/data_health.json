@@ -1,0 +1,163 @@
+{
+ "checked_at": "2026-11-25 17:48:33",
+ "contract": {
+  "checked_at": "2026-11-25 17:48:33",
+  "db": "fde_rag",
+  "expect": "clean",
+  "prefix": "",
+  "total": 16,
+  "pass": 16,
+  "fail": [],
+  "quarantine": null,
+  "status": "ok"
+ },
+ "matrix": {
+  "checked_at": "2026-11-25 17:48:32",
+  "db": "fde_sandbox",
+  "forms": [
+   {
+    "name": "pg",
+    "devices": 5,
+    "logs": 9,
+    "b_fail": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5",
+     "B6"
+    ],
+    "a_fail": []
+   },
+   {
+    "name": "csv",
+    "devices": 5,
+    "logs": 10,
+    "b_fail": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5",
+     "B6"
+    ],
+    "a_fail": [
+     "A1"
+    ]
+   },
+   {
+    "name": "http",
+    "devices": 5,
+    "logs": 10,
+    "b_fail": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5",
+     "B6"
+    ],
+    "a_fail": [
+     "A1"
+    ]
+   },
+   {
+    "name": "client",
+    "devices": 5,
+    "logs": 10,
+    "b_fail": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5",
+     "B6"
+    ],
+    "a_fail": [
+     "A1"
+    ]
+   }
+  ],
+  "b_consistent": true,
+  "nomap": "UndefinedColumn: 关系 \"stg_devices\" 的 \"equip_no\" 字段不存在",
+  "status": "ok"
+ },
+ "incremental": {
+  "checked_at": "2026-11-25 17:48:32",
+  "db": "fde_sandbox",
+  "steps": [
+   {
+    "name": "[1] 首次装载（水位为空，全量）",
+    "added": 9,
+    "quarantine": 1,
+    "total": 9,
+    "mark": "2026-11-04 08:00:00 #9001"
+   },
+   {
+    "name": "[2] 原样重跑（应 0 行）",
+    "added": 0,
+    "quarantine": 1,
+    "total": 9,
+    "mark": "2026-11-04 08:00:00 #9001"
+   },
+   {
+    "name": "[3] 追加 2 条新日志",
+    "added": 2,
+    "quarantine": 1,
+    "total": 11,
+    "mark": "2026-11-05 09:00:00 #9011"
+   },
+   {
+    "name": "[4] 装载中途崩溃（崩溃，已回滚）",
+    "added": 0,
+    "quarantine": 0,
+    "total": 11,
+    "mark": "2026-11-05 09:00:00 #9011"
+   },
+   {
+    "name": "[5] 崩溃后重跑（应只补 1 条）",
+    "added": 1,
+    "quarantine": 1,
+    "total": 12,
+    "mark": "2026-11-06 08:00:00 #9020"
+   },
+   {
+    "name": "[6] 同时间戳 + 更大主键（应补 2 条）",
+    "added": 2,
+    "quarantine": 1,
+    "total": 14,
+    "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[7] 原样重跑（整批重传，应 0 条且不重复）",
+    "added": 0,
+    "quarantine": 1,
+    "total": 14,
+    "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[8] 同时间戳 + 更小主键（残留边界，预期漏 1）",
+    "added": 0,
+    "quarantine": 1,
+    "total": 14,
+    "mark": "2026-11-06 08:00:00 #9022"
+   }
+  ],
+  "final_rows": 14,
+  "unique_ids": 14,
+  "duplicated": false,
+  "quarantine_rows": 1,
+  "known_gap": "同时间戳 + 更小主键后到会漏（第 [8] 步）；需重叠窗口才对冲",
+  "status": "ok"
+ },
+ "quarantine": {
+  "db": "fde_sandbox",
+  "rows": 1,
+  "reasons": {
+   "ts_in_future": 1
+  },
+  "note": "这条来自增量检查的固定夹具（id=4、ts=2027-01-01），是隔离功能生效的证据，不是生产脏数据；生产库的隔离区请单独跑 check_data_contract.py --dsn=<生产库>"
+ },
+ "issues": [],
+ "status": "ok"
+}

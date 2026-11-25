@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -194,6 +195,59 @@ def _missing_axes(meta):
     下次再引入一个新输入，没人会想起还要再验一遍。
     """
     return [k for k in REQUIRED_AXES if not str(meta.get(k) or "").strip()]
+
+
+def _data_health():
+    """读最近一次数据健康检查的结果（G6）。
+
+    只读、不跑检查。那三个脚本要连库、会 TRUNCATE 沙箱表，「跑模型」和「查数据」
+    混在同一次调用里，失败时就分不清是谁坏的；而且它们耗时不可控，不该塞进
+    已经 53 分钟的主流程。
+
+    没有文件就明说 not_run，不冒充 ok——数据在这轮到底干不干净，是这份报告
+    最容易被含糊过去的一根轴。
+
+    时效必须一起记：检查是几小时前跑的、之后数据又变了，那个 ok 就不代表现在。
+    """
+    p = ROOT / "eval" / "data_health.json"
+    empty = {"contract": None, "matrix_b_consistent": None,
+             "incremental_duplicated": None, "quarantine_rows": None,
+             "known_gap": "", "checked_at": "", "stale_minutes": None,
+             "stale": False, "issues": []}
+    if not p.exists():
+        return dict(empty, status="not_run", note="先跑 python scripts/data_health.py")
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return dict(empty, status="error", note=f"读不出来：{type(e).__name__}: {e}")
+
+    checked = str(d.get("checked_at") or "")
+    stale_min = None
+    try:
+        age = (datetime.now()
+               - datetime.strptime(checked, "%Y-%m-%d %H:%M:%S")).total_seconds()
+        stale_min = round(age / 60, 1)
+    except Exception:
+        pass
+
+    c = d.get("contract") or {}
+    m = d.get("matrix") or {}
+    i = d.get("incremental") or {}
+    return dict(
+        empty,
+        status=d.get("status") or "unknown",
+        checked_at=checked,
+        stale_minutes=stale_min,
+        # 24 小时只是提醒线，不是判据：数据没变的话三天前的检查照样成立，
+        # 变没变只有人知道，程序只能把「过了多久」摆出来。
+        stale=bool(stale_min is not None and stale_min > 24 * 60),
+        contract=f"{c.get('pass')}/{c.get('total')}",
+        matrix_b_consistent=m.get("b_consistent"),
+        incremental_duplicated=i.get("duplicated"),
+        quarantine_rows=(d.get("quarantine") or {}).get("rows"),
+        known_gap=i.get("known_gap") or "",
+        issues=d.get("issues") or [],
+    )
 
 TERMINAL_CLAIM_WORDS = [
     "故障已排除", "问题已解决", "已修复", "已恢复正常", "维修完成", "已完工",
@@ -912,12 +966,28 @@ def main():
         "evaluated": len(targets),
         "workers": workers,
         "use_checkpoint": workers == 1,
+        # G6：这轮读的是哪份数据。seed_hash 只能说明「种子文件没变」，
+        # 说明不了「断言 / 矩阵 / 增量都过了」——数据本身的状态也要进 meta，
+        # 否则报告只能说「代码是哪版」，不能说「数据是哪版的」。
+        "data_health": _data_health(),
     }
     print(
         f"基线 commit={meta['commit'] or '(无)'}  model={MODEL}  "
         f"code_hash={meta['code_hash']}  seed_hash={meta['seed_hash']}  "
         f"cases_hash={meta['cases_hash']}\n"
     )
+    # 数据健康单独一行，且缺证据时用 ! 起头：它不属于四轴（没有它报告仍可生成），
+    # 但没有它，「这轮数据是干净的」这句话就没有依据——不能靠沉默当默认通过。
+    dh = meta["data_health"]
+    if dh["status"] == "not_run":
+        print("!! 数据健康：本轮没有证据（先跑 python scripts/data_health.py）"
+              "——报告能生成，但不能声称「这轮数据是干净的」\n")
+    else:
+        age = "未知" if dh["stale_minutes"] is None else f"{dh['stale_minutes']} 分钟前"
+        flag = " !!" if dh["status"] != "ok" or dh["stale"] else ""
+        print(f"数据健康 {dh['status']}  契约 {dh['contract']}  "
+              f"矩阵一致 {dh['matrix_b_consistent']}  "
+              f"增量重复 {dh['incremental_duplicated']}  （{age}的检查）{flag}\n")
 
     # G4：四轴齐全才允许声称"这份报告能和别的报告横比"。
     # 加轴是一次性动作，校验才是让它不再退化的东西：下次再引入一个 data/ 之外的
@@ -1392,12 +1462,18 @@ def main():
     text = json.dumps(report, ensure_ascii=False, indent=1)
 
     # 带 commit 的归档件：这一份只对应这一个代码版本，以后能和别的报告比
-    out_full = ROOT / "eval" / f"report_{stamp}_{commit}.json"
+    # --only 出来的文件名带 _only 后缀：它是验证跑，不是基线，别混进基线目录里冒充全量。
+    suffix = "_only" if only else ""
+    out_full = ROOT / "eval" / f"report_{stamp}_{commit}{suffix}.json"
     out_full.write_text(text, encoding="utf-8")
-    # 同名副本保持老引用可用（README 与几篇 docs 都指向 report_eval.json）
-    (ROOT / "eval" / "report_eval.json").write_text(text, encoding="utf-8")
-
-    print(f"\n明细已写入 {out_full.name}（report_eval.json 同步为最新副本）")
+    if only:
+        print(f"\n明细已写入 {out_full.name}（--only 验证跑，不覆盖 report_eval.json）")
+    else:
+        # 同名副本的语义是「最新一次**全量**」。--only 覆盖它会让 1 条用例的结果
+        # 变成 1/1 = 100%，而读的人只会看到「最新成绩」——这是最省力也最误导的假绿灯。
+        # 保持老引用可用（README 与几篇 docs 都指向 report_eval.json）。
+        (ROOT / "eval" / "report_eval.json").write_text(text, encoding="utf-8")
+        print(f"\n明细已写入 {out_full.name}（report_eval.json 同步为最新副本）")
     print("这一份要登记进 eval/报告状态.md，否则下次仍判断不了它能不能和别的报告比")
 
 

@@ -1,22 +1,24 @@
 """数据断言：查「不该存在的行」。
 
 判据沿用 dbt 的形态：每条断言编成一条 select，只返回坏行；0 行才算通过。
-这样判失败不需要额外规则——「有没有行」本身就是答案。
 
 两类断言含义不同，别混着看：
 
   A 结构类：在 pg 源上由 DB 的 PK / FK / CHECK / 唯一索引保证，跑出来永远 0 行。
-            它的价值在换源之后——CSV、外部库、客户自有系统都没有这些约束，
-            那时只有断言还在拦。所以 A 类在这里绿，不等于「没事可做」。
+            它的价值在换源之后——CSV、外部库、客户自有系统都没有这些约束。
+            staging 表刻意不带这些约束，就是为了让 A 类在那里真的会红。
 
   B 业务类：DB 本来就不管（空串、未来时间、跨表一致性、量级合理性）。
-            跑出红行才是真发现，也是断言唯一有意义的部分。
+
+表名用 {占位符} 而不是写死：这样同一套断言能跑在 devices 上，也能跑在
+stg_devices 上。跨源测试靠的就是这一点——换的是表，不是判据。
 
 用法：
-  python scripts/check_data_contract.py --dsn=... --expect=dirty
-  python scripts/check_data_contract.py --dsn=... --expect=clean
+  python scripts/check_data_contract.py --expect=dirty
+  python scripts/check_data_contract.py --prefix=stg_ --expect=dirty
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -31,7 +33,7 @@ ASSERTIONS = [
     {
         "id": "B1", "kind": "B", "owner": "设备档案",
         "desc": "设备号不能是空字符串（NOT NULL 只拦 NULL，PK 也允许空串）",
-        "sql": "SELECT device_id, line, station FROM devices WHERE btrim(device_id) = ''",
+        "sql": "SELECT device_id, line, station FROM {devices} WHERE btrim(device_id) = ''",
     },
     {
         "id": "B2", "kind": "B", "owner": "设备档案",
@@ -39,17 +41,17 @@ ASSERTIONS = [
         "sql": """SELECT lower(btrim(device_id)) AS norm_key,
                          count(*) AS n,
                          string_agg(device_id, ', ' ORDER BY device_id) AS ids
-                  FROM devices GROUP BY 1 HAVING count(*) > 1""",
+                  FROM {devices} GROUP BY 1 HAVING count(*) > 1""",
     },
     {
         "id": "B3", "kind": "B", "owner": "误判日志",
         "desc": "置信度必须在 0-1",
-        "sql": "SELECT id, device_id, confidence FROM defect_logs WHERE confidence < 0 OR confidence > 1",
+        "sql": "SELECT id, device_id, confidence FROM {defect_logs} WHERE confidence < 0 OR confidence > 1",
     },
     {
         "id": "B4", "kind": "B", "owner": "误判日志",
         "desc": "日志时间不能在未来（客户系统时钟错、手工补录写错年份）",
-        "sql": "SELECT id, device_id, ts FROM defect_logs WHERE ts > now()",
+        "sql": "SELECT id, device_id, ts FROM {defect_logs} WHERE ts > now()",
     },
     {
         "id": "B5", "kind": "B", "owner": "误判日志",
@@ -61,12 +63,12 @@ ASSERTIONS = [
                       SELECT device_id,
                              (regexp_match(station, '^(\d+)-(\d+)号工位$'))[1]::int AS lo,
                              (regexp_match(station, '^(\d+)-(\d+)号工位$'))[2]::int AS hi
-                      FROM devices
+                      FROM {devices}
                       WHERE station ~ '^\d+-\d+号工位$'
                   )
                   SELECT d.id, d.device_id, d.station AS log_station,
                          r.lo || '-' || r.hi || '号工位' AS archive_range
-                  FROM defect_logs d
+                  FROM {defect_logs} d
                   JOIN ranges r ON r.device_id = d.device_id
                   WHERE CASE
                           WHEN (regexp_match(d.station, '^(\d+)号工位$'))[1] IS NULL THEN TRUE
@@ -77,64 +79,89 @@ ASSERTIONS = [
     {
         "id": "B6", "kind": "B", "owner": "误判日志",
         "desc": "批次号至少 4 个字符（防空串、防手滑写成 A）",
-        "sql": "SELECT id, device_id, batch FROM defect_logs WHERE length(btrim(batch)) < 4",
+        "sql": "SELECT id, device_id, batch FROM {defect_logs} WHERE length(btrim(batch)) < 4",
     },
     {
         "id": "B7", "kind": "B", "owner": "标定记录",
         "desc": "像素漂移与毫米漂移必须同号（一正一负说明换算公式或坐标方向错）",
-        "sql": """SELECT id, device_id, drift_px, drift_mm FROM calibrations
+        "sql": """SELECT id, device_id, drift_px, drift_mm FROM {calibrations}
                   WHERE drift_px <> 0 AND drift_mm <> 0 AND (drift_px * drift_mm) < 0""",
     },
     {
         "id": "B8", "kind": "B", "owner": "光源使用",
         "desc": "累计时长不能超过标称寿命的 3 倍（超了大概率单位错）",
-        "sql": """SELECT device_id, cumulative_hours, rated_life_hours FROM light_usage
+        "sql": """SELECT device_id, cumulative_hours, rated_life_hours FROM {light_usage}
                   WHERE rated_life_hours <= 0 OR cumulative_hours > rated_life_hours * 3""",
     },
     {
         "id": "B9", "kind": "B", "owner": "工单",
         "desc": "工单的设备号必须存在于设备档案（work_orders 没有外键，能塞进去）",
-        "sql": """SELECT w.order_id, w.device_id FROM work_orders w
-                  LEFT JOIN devices d ON d.device_id = w.device_id
+        "sql": """SELECT w.order_id, w.device_id FROM {work_orders} w
+                  LEFT JOIN {devices} d ON d.device_id = w.device_id
                   WHERE d.device_id IS NULL""",
     },
     {
         "id": "B10", "kind": "B", "owner": "告警",
         "desc": "告警发生时间不能在未来",
-        "sql": "SELECT id, device_id, ts FROM alarm_events WHERE ts > now()",
+        "sql": "SELECT id, device_id, ts FROM {alarm_events} WHERE ts > now()",
     },
     # ---------- A 类：pg 源由 DB 保证，价值在换源之后 ----------
     {
         "id": "A1", "kind": "A", "owner": "误判日志",
-        "desc": "日志的 device_id 必须存在于设备档案（FK 保证）",
-        "sql": """SELECT DISTINCT d.device_id FROM defect_logs d
-                  LEFT JOIN devices x ON x.device_id = d.device_id
+        "desc": "日志的 device_id 必须存在于设备档案（pg 上由 FK 保证）",
+        "sql": """SELECT DISTINCT d.device_id FROM {defect_logs} d
+                  LEFT JOIN {devices} x ON x.device_id = d.device_id
                   WHERE x.device_id IS NULL""",
     },
     {
         "id": "A2", "kind": "A", "owner": "标定记录",
-        "desc": "标定结论只能是 通过/告警/失败（CHECK 保证）",
-        "sql": "SELECT id, result FROM calibrations WHERE result NOT IN ('通过','告警','失败')",
+        "desc": "标定结论只能是 通过/告警/失败（pg 上由 CHECK 保证）",
+        "sql": "SELECT id, result FROM {calibrations} WHERE result NOT IN ('通过','告警','失败')",
     },
     {
         "id": "A3", "kind": "A", "owner": "工单",
-        "desc": "同一幂等键同时只能有一张未关闭的单（部分唯一索引保证）",
-        "sql": """SELECT idempotency_key, count(*) AS n FROM work_orders
+        "desc": "同一幂等键同时只能有一张未关闭的单（pg 上由唯一索引保证）",
+        "sql": """SELECT idempotency_key, count(*) AS n FROM {work_orders}
                   WHERE status NOT IN ('已完成','已合并','已取消')
                   GROUP BY 1 HAVING count(*) > 1""",
     },
     {
         "id": "A4", "kind": "A", "owner": "误判日志",
-        "desc": "verdict 只能是 OK/NG（CHECK 保证）",
-        "sql": "SELECT id, verdict FROM defect_logs WHERE verdict NOT IN ('OK','NG')",
+        "desc": "verdict 只能是 OK/NG（pg 上由 CHECK 保证）",
+        "sql": "SELECT id, verdict FROM {defect_logs} WHERE verdict NOT IN ('OK','NG')",
     },
 ]
 
-# 空表单独处理：它不是一个 SQL 能表达的事，而是「表里有没有数据」。
+DEFAULT_TABLES = {
+    "devices": "devices",
+    "defect_logs": "defect_logs",
+    "calibrations": "calibrations",
+    "light_usage": "light_usage",
+    "work_orders": "work_orders",
+    "alarm_events": "alarm_events",
+}
+
 NONEMPTY_TABLES = [
     "devices", "defect_logs", "alarms", "alarm_events",
     "calibrations", "light_usage", "light_brightness_history", "work_orders",
 ]
+
+_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+
+
+def select_assertions(tables: dict):
+    """只保留「引用的表都在 tables 里」的断言，其余明确跳过而不是静默不跑。
+
+    静默跳过最危险：报告上看起来「全绿」，其实一半没检查。
+    """
+    usable, skipped = [], []
+    for item in ASSERTIONS:
+        need = set(_PLACEHOLDER.findall(item["sql"]))
+        if need <= set(tables):
+            usable.append(dict(item, sql=item["sql"].format(**tables)))
+        else:
+            skipped.append((item["id"], sorted(need - set(tables))))
+    return usable, skipped
 
 
 def fmt_rows(rows: list) -> str:
@@ -147,52 +174,67 @@ def fmt_rows(rows: list) -> str:
     return " / ".join(shown) + more
 
 
+def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool = True):
+    """跑断言，返回 (fails, a_fails, results)。供 CLI 和跨源矩阵共用。"""
+    usable, skipped = select_assertions(tables)
+    results = []
+
+    if verbose:
+        print(f"目标库：{dsn.rsplit('/', 1)[-1]}   表：{', '.join(sorted(tables.values()))}")
+        print(f"断言 {len(usable)} 条" + (f"，跳过 {len(skipped)} 条（缺表）" if skipped else ""))
+        print()
+        print(f"{'编号':<4} {'类':<2} {'检什么':<52} {'结果':<6} {'坏行'}")
+        print("-" * 108)
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+        for item in usable:
+            cur.execute(item["sql"])
+            rows = cur.fetchall()
+            results.append((item["id"], item["kind"], not rows, rows))
+            if verbose:
+                status = "PASS" if not rows else "FAIL"
+                print(f"{item['id']:<4} {item['kind']:<2} {item['desc'][:50]:<52} {status:<6} {fmt_rows(rows)}")
+
+        empty_tables = []
+        for table in nonempty:
+            try:
+                cur.execute(f"SELECT count(*) AS n FROM {table}")
+            except Exception:
+                continue  # 表不存在就不算这条断言的失败
+            if cur.fetchone()["n"] == 0:
+                empty_tables.append(table)
+        results.append(("B11", "B", not empty_tables,
+                        [{"empty_tables": ", ".join(empty_tables)}] if empty_tables else []))
+        if verbose:
+            status = "PASS" if not empty_tables else "FAIL"
+            detail = "" if not empty_tables else ", ".join(empty_tables)
+            print(f"B11  B  {'每张业务表都要有数据（空表会冒充「没有异常」）':<52} {status:<6} {detail}")
+
+    fails = [rid for rid, _, ok, _ in results if not ok]
+    a_fails = [rid for rid, kind, ok, _ in results if not ok and kind == "A"]
+    return fails, a_fails, results
+
+
 def main() -> int:
     dsn = DEFAULT_DSN
     expect = ""
+    prefix = ""
     for arg in sys.argv[1:]:
         if arg.startswith("--dsn="):
             dsn = arg.split("=", 1)[1]
         elif arg.startswith("--expect="):
             expect = arg.split("=", 1)[1]
+        elif arg.startswith("--prefix="):
+            prefix = arg.split("=", 1)[1]
 
-    db_name = dsn.rsplit("/", 1)[-1]
-    print(f"目标库：{db_name}  期望：{expect or '未指定'}")
-    print()
-    print(f"{'编号':<4} {'类':<2} {'检什么':<52} {'结果':<6} {'坏行'}")
-    print("-" * 108)
+    tables = {k: prefix + v for k, v in DEFAULT_TABLES.items()} if prefix else dict(DEFAULT_TABLES)
+    nonempty = [prefix + t for t in NONEMPTY_TABLES] if prefix else NONEMPTY_TABLES
 
-    fails = []
-    a_fails = []
-
-    with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
-        for item in ASSERTIONS:
-            cur.execute(item["sql"])
-            rows = cur.fetchall()
-            status = "PASS" if not rows else "FAIL"
-            if rows:
-                fails.append(item["id"])
-                if item["kind"] == "A":
-                    a_fails.append(item["id"])
-            mark = "" if item["kind"] == "B" else "※"
-            print(f"{item['id']:<4} {item['kind']:<2} {item['desc'][:50]:<52} {status:<6} {fmt_rows(rows)}")
-
-        # 空表检查
-        empty_tables = []
-        for table in NONEMPTY_TABLES:
-            cur.execute(f"SELECT count(*) AS n FROM {table}")
-            if cur.fetchone()["n"] == 0:
-                empty_tables.append(table)
-        status = "PASS" if not empty_tables else "FAIL"
-        ids = "B11"
-        if empty_tables:
-            fails.append(ids)
-        print(f"{ids:<4} {'B':<2} {'每张业务表都要有数据（空表会冒充「没有异常」）':<52} "
-              f"{status:<6} {', '.join(empty_tables)}")
+    fails, a_fails, results = run(dsn, tables, nonempty, expect)
 
     print("-" * 108)
-    print(f"断言 {len(ASSERTIONS) + 1} 条：PASS {len(ASSERTIONS) + 1 - len(fails)} / FAIL {len(fails)}")
-    print("※ 标记为 A 类的断言在 pg 源上由数据库约束保证，换源（CSV / 外部库）后才是主要防线。")
+    print(f"断言 {len(results)} 条：PASS {len(results) - len(fails)} / FAIL {len(fails)}")
+    print("※ A 类在 pg 源上由数据库约束保证；换源（staging / CSV / 外部库）后才是主要防线。")
 
     if expect == "clean" and fails:
         print(f"\n[FAIL] 期望全绿，实际 {len(fails)} 条红：{', '.join(fails)}")
@@ -200,7 +242,7 @@ def main() -> int:
     if expect == "dirty" and not fails:
         print("\n[FAIL] 期望抓出脏行，一条都没抓到——断言本身有问题")
         return 1
-    if a_fails:
+    if a_fails and not prefix:
         print(f"\n[FAIL] A 类断言在 pg 源上不该红：{', '.join(a_fails)}")
         return 1
     print("\n[OK]")

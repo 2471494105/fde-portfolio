@@ -2,28 +2,88 @@
 
 只做决策，不碰数据库。这样边界能被单测钉住，脚本只负责把结果落库。
 
-三条规则：
-1. 严格大于水位才算新数据。等于不算——这会漏掉同一秒进来的多条，
-   是已知限制，不是 bug，见下面「为什么不做重叠」。
-2. 时间在未来的行不进主表。它会给水位带来两种灾难：要么水位跳到未来、
-   增量永久停摆；要么它永远大于水位、每晚被重复灌一次。两个坑的共同解是
-   让它根本不参与主表比较。
-3. 水位只由进主表的行决定。空批次不推进水位，宁可下次多判一次新，
-   也不要把水位往前挪一格。
+## 水位为什么是复合的 (时间戳, 主键)
+
+第一版只存时间戳、用严格大于比较，结果同一秒进来的多条会被整体漏掉：
+水位记到 T 之后，再来任何 ts == T 的行都不算新。设备在线时一秒几十条是常态，
+这不是边角情况，是主路径。
+
+改成 (ts, pk) 二元组后：跟水位同一时间戳、但主键更大的行算新数据，能进来。
+
+## 四条前提（不满足就会安静地错，这几句比代码重要）
+
+1. **主键在同一张源表内单调递增。** 复合比较只能识别「同时间戳里更大的主键」。
+   客户如果重传一条更小的主键（补录旧单），它比水位小，会被判「已灌过」——
+   这一步漏数据且不报错。要覆盖它必须留重叠窗口再按主键去重，属残留边界。
+2. **落库必须幂等。** plan 只按水位判断，不知道主表里已经有什么。客户重传整批、
+   或水位是旧格式（只有时间戳、主键为空）时，plan 会把已灌过的行再吐一遍，
+   由落库侧按主键去重（ON CONFLICT / 先查已有主键）兜住。
+   plan 负责「谁该看一遍」，落库负责「谁是新的」，两个职责不搅在一起。
+3. **未来时间既不进主表、也不参与水位。** 一条 2027 年的脏时间如果参与取 max，
+   水位会跳到 2027，之后真实数据全被判「已灌过」，增量静默停摆。
+4. **空批次不推进水位。** 宁可下次多判一次新，也不要把水位往前挪一格。
 """
 
 from datetime import datetime
+
+# 主键为空时的排序键：比任何真实主键都小。这样「水位只记到时间戳」的旧格式
+# 退化成「同一时间戳的行全部重看一遍」，靠落库幂等兜住，而不是直接漏掉。
+_MIN_PK = (0, float("-inf"))
 
 
 def _ts(v):
     return v if isinstance(v, datetime) else datetime.fromisoformat(str(v))
 
 
-def plan(rows, mark=None, now=None, ts_key="ts"):
-    """返回 (进主表的行, 进隔离的行, 新水位)。"""
+def _pk(v):
+    """主键 -> 可比较的排序键。
+
+    数字主键按数值比（否则 "10" < "9"），其余按字符串比。
+    两种键加了类型前缀，混用时有确定的全序，不会抛 TypeError。
+    """
+    if v is None:
+        return _MIN_PK
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return (0, float(v))
+    s = str(v).strip()
+    try:
+        return (0, float(s))
+    except ValueError:
+        return (1, s)
+
+
+def _mark_key(mark):
+    """外部水位 -> 可比较的 (ts, pk) 排序键；None 表示从未装载过。
+
+    兼容两种入参：(datetime, pk) 二元组，或旧的纯 datetime。
+    """
+    if mark is None:
+        return None
+    if isinstance(mark, (tuple, list)):
+        dt = mark[0]
+        pk = mark[1] if len(mark) > 1 else None
+    else:
+        dt, pk = mark, None
+    return (_ts(dt), _pk(pk))
+
+
+def plan(rows, mark=None, now=None, ts_key="ts", pk_key="id"):
+    """返回 (进主表的行, 进隔离的行, 新水位)。
+
+    新水位是 (时间戳, 主键原值) 二元组，可直接存库；主键缺失时为 (时间戳, None)。
+    """
     now = now or datetime.now()
-    fresh = [r for r in rows if mark is None or _ts(r[ts_key]) > mark]
+    mk = _mark_key(mark)
+
+    def key(r):
+        return (_ts(r[ts_key]), _pk(r.get(pk_key)) if pk_key else _MIN_PK)
+
+    fresh = [r for r in rows if mk is None or key(r) > mk]
     good = [r for r in fresh if _ts(r[ts_key]) <= now]
     bad = [r for r in fresh if _ts(r[ts_key]) > now]
-    new_mark = max((_ts(r[ts_key]) for r in good), default=mark)
+
+    new_mark = mark
+    if good:
+        last = max(good, key=key)
+        new_mark = (_ts(last[ts_key]), last.get(pk_key) if pk_key else None)
     return good, bad, new_mark

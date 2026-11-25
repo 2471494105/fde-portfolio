@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-25 17:48:33",
+ "checked_at": "2026-11-25 18:43:58",
  "contract": {
-  "checked_at": "2026-11-25 17:48:33",
+  "checked_at": "2026-11-25 18:43:58",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-25 17:48:32",
+  "checked_at": "2026-11-25 18:43:58",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-25 17:48:32",
+  "checked_at": "2026-11-25 18:43:58",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -136,18 +136,33 @@
     "mark": "2026-11-06 08:00:00 #9022"
    },
    {
-    "name": "[8] 同时间戳 + 更小主键（残留边界，预期漏 1）",
+    "name": "[8] 同时间戳 + 更小主键（不带窗口，预期漏 1）",
     "added": 0,
     "quarantine": 1,
     "total": 14,
     "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[9] 开 1 天重叠窗口重跑（应补上那 1 条）",
+    "added": 1,
+    "quarantine": 1,
+    "total": 15,
+    "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[10] 重叠区全是旧行（应 0 且水位不倒退）",
+    "added": 0,
+    "quarantine": 1,
+    "total": 15,
+    "mark": "2026-11-06 08:00:00 #9022"
    }
   ],
-  "final_rows": 14,
-  "unique_ids": 14,
+  "final_rows": 15,
+  "unique_ids": 15,
   "duplicated": false,
   "quarantine_rows": 1,
-  "known_gap": "同时间戳 + 更小主键后到会漏（第 [8] 步）；需重叠窗口才对冲",
+  "overlap": "1 day（第 [9] 步）",
+  "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
   "status": "ok"
  },
  "quarantine": {

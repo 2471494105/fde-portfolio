@@ -14,7 +14,9 @@
 
 1. **主键在同一张源表内单调递增。** 复合比较只能识别「同时间戳里更大的主键」。
    客户如果重传一条更小的主键（补录旧单），它比水位小，会被判「已灌过」——
-   这一步漏数据且不报错。要覆盖它必须留重叠窗口再按主键去重，属残留边界。
+   这一步漏数据且不报错。**解法是给 `plan` 传 `overlap`**：把水位往回提一段时间
+   再取候选，重叠区靠落库幂等去重（所以前提 2 必须先成立）。不给 `overlap` 时，
+   这条边界原样保留。
 2. **落库必须幂等。** plan 只按水位判断，不知道主表里已经有什么。客户重传整批、
    或水位是旧格式（只有时间戳、主键为空）时，plan 会把已灌过的行再吐一遍，
    由落库侧按主键去重（ON CONFLICT / 先查已有主键）兜住。
@@ -22,9 +24,12 @@
 3. **未来时间既不进主表、也不参与水位。** 一条 2027 年的脏时间如果参与取 max，
    水位会跳到 2027，之后真实数据全被判「已灌过」，增量静默停摆。
 4. **空批次不推进水位。** 宁可下次多判一次新，也不要把水位往前挪一格。
+5. **水位只进不退。** 开了 `overlap` 之后，good 里可能全是重叠区里的旧行，
+   直接取 max 会让新水位比原水位更早，下一轮又整段重捞。所以只有 max 严格
+   大于原水位时才推进。
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 主键为空时的排序键：比任何真实主键都小。这样「水位只记到时间戳」的旧格式
 # 退化成「同一时间戳的行全部重看一遍」，靠落库幂等兜住，而不是直接漏掉。
@@ -67,10 +72,14 @@ def _mark_key(mark):
     return (_ts(dt), _pk(pk))
 
 
-def plan(rows, mark=None, now=None, ts_key="ts", pk_key="id"):
+def plan(rows, mark=None, now=None, ts_key="ts", pk_key="id", overlap=None):
     """返回 (进主表的行, 进隔离的行, 新水位)。
 
     新水位是 (时间戳, 主键原值) 二元组，可直接存库；主键缺失时为 (时间戳, None)。
+
+    `overlap` 是 timedelta：给定时把水位往回提这么久取候选，且**只按时间比、
+    不比主键**——因为要捞的正是「主键比水位小」的那一类。重叠区里的行已经
+    在主表里，靠落库幂等去重（前提 2）。不给就是原来的严格复合比较。
     """
     now = now or datetime.now()
     mk = _mark_key(mark)
@@ -78,12 +87,21 @@ def plan(rows, mark=None, now=None, ts_key="ts", pk_key="id"):
     def key(r):
         return (_ts(r[ts_key]), _pk(r.get(pk_key)) if pk_key else _MIN_PK)
 
-    fresh = [r for r in rows if mk is None or key(r) > mk]
+    if mk is None:
+        fresh = list(rows)
+    elif overlap is not None and overlap > timedelta(0) and mk[0] is not None:
+        floor = mk[0] - overlap
+        fresh = [r for r in rows if _ts(r[ts_key]) >= floor]
+    else:
+        fresh = [r for r in rows if key(r) > mk]
+
     good = [r for r in fresh if _ts(r[ts_key]) <= now]
     bad = [r for r in fresh if _ts(r[ts_key]) > now]
 
     new_mark = mark
     if good:
         last = max(good, key=key)
-        new_mark = (_ts(last[ts_key]), last.get(pk_key) if pk_key else None)
+        # 水位只进不退：重叠区里可能全是旧行，取 max 后仍早于原水位就不能推
+        if mk is None or key(last) > mk:
+            new_mark = (_ts(last[ts_key]), last.get(pk_key) if pk_key else None)
     return good, bad, new_mark

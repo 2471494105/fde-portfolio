@@ -7,7 +7,7 @@
 """
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.ds.incremental import plan
 
@@ -104,6 +104,42 @@ class IncrementalPlanTest(unittest.TestCase):
         good, _, new_mark = plan(rows, mark, NOW, pk_key=None)
         self.assertEqual(len(good), 1)
         self.assertEqual(new_mark, (datetime(2026, 11, 2, 0, 0, 0), None))
+
+    # ---------- 重叠窗口：把上面那条残留边界补掉 ----------
+
+    def test_overlap_picks_up_smaller_pk_late_arrival(self):
+        """带 overlap 时，主键更小的补录单会被捞回来——这是补边界的正题。"""
+        mark = (datetime(2026, 11, 6, 8, 0, 0), 9022)
+        rows = [_r(9019, "2026-11-06 08:00:00")]
+        good, _, _ = plan(rows, mark, NOW, overlap=timedelta(days=1))
+        self.assertEqual([r["id"] for r in good], [9019])
+
+    def test_overlap_never_moves_watermark_backwards(self):
+        """重叠区全是旧行时，max 比原水位更早；水位必须原地不动，而不是倒退。
+
+        若这里退化成「无条件取 max」，水位会从 11-06 退回 11-02，下一轮整段重捞。
+        """
+        mark = (datetime(2026, 11, 6, 8, 0, 0), 9022)
+        rows = [_r(1, "2026-11-01 08:00:00"), _r(2, "2026-11-02 08:00:00")]
+        good, _, new_mark = plan(rows, mark, NOW, overlap=timedelta(days=30))
+        self.assertEqual([r["id"] for r in good], [1, 2])  # 重叠区确实被看了一遍
+        self.assertEqual(new_mark, mark)                    # 但水位没动
+
+    def test_overlap_still_quarantines_future_rows(self):
+        """开窗口不等于放行未来时间：2027 那条仍然只进隔离区、不参与水位。"""
+        mark = (datetime(2026, 11, 6, 8, 0, 0), 9022)
+        rows = [_r(4, "2027-01-01 08:00:00")]
+        good, bad, new_mark = plan(rows, mark, NOW, overlap=timedelta(days=30))
+        self.assertEqual(good, [])
+        self.assertEqual([r["id"] for r in bad], [4])
+        self.assertEqual(new_mark, mark)
+
+    def test_zero_overlap_behaves_like_none(self):
+        """overlap=0 是显式关掉，不能把「不写」和「写 0」解释成两件事。"""
+        mark = (datetime(2026, 11, 6, 8, 0, 0), 9022)
+        rows = [_r(9019, "2026-11-06 08:00:00")]
+        self.assertEqual(plan(rows, mark, NOW, overlap=timedelta(0))[0], [])
+        self.assertEqual(plan(rows, mark, NOW)[0], [])
 
 
 if __name__ == "__main__":

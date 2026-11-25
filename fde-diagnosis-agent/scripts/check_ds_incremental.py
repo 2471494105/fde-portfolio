@@ -11,14 +11,16 @@
 4. 同时间戳怎么办  -> 水位做成 (时间戳, 主键) 复合，同一秒进来的多条只要有更大的
                       主键就算新。第 [6] 步验证它从「漏 2 条」变成「补 2 条」。
 5. 边界在哪        -> 复合水位要求主键单调递增。客户重传一条更小的主键（补录旧单）
-                      会漏，第 [8] 步把这条残留边界测出来，而不是假装没有。
+                      会漏，第 [8] 步把这条残留边界测出来，而不是假装没有；
+                      第 [9] 步证明 `overlap`（水位往回退一段）能把它补齐，
+                      第 [10] 步证明重叠区全是旧行时水位不会往回退。
 
 用法：python scripts/check_ds_incremental.py
 """
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg
@@ -106,7 +108,7 @@ def put_mark(conn, mark, seen):
         )
 
 
-def load(conn, rows, fail_after_insert=False):
+def load(conn, rows, fail_after_insert=False, overlap=None):
     """返回 (本次新增条数, 水位, 本次隔离条数)。插入与水位推进同事务。
 
     谁算新数据交给 app.ds.incremental.plan（有单测）；这里补上 plan 不知道的一半：
@@ -114,7 +116,7 @@ def load(conn, rows, fail_after_insert=False):
     所以装载前按主键过滤。这就是「plan 负责谁该看，落库负责谁是新的」。
     """
     mark = get_mark(conn)
-    good, bad, new_mark = plan(rows, mark)
+    good, bad, new_mark = plan(rows, mark, overlap=overlap)
 
     with conn.cursor() as cur:
         cur.execute(f"SELECT id FROM {STG}")
@@ -167,6 +169,10 @@ def main(argv=None) -> int:
         {"id": 9019, "ts": "2026-11-06 08:00:00", "device_id": "CX-101", "station": "2号工位", "defect_type": "划伤", "confidence": 0.84, "batch": "B20261106", "verdict": "NG", "is_actually_ok": False},
     ]
 
+    # 重叠窗口取多大是运营口径：按时间倒退（怕迟到很久的补录）还是按行数倒退
+    # （怕大批量）。这里固定 1 天只为把机制测出来，不代表生产建议值。
+    OVERLAP = timedelta(days=1)
+
     log = []
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
         reset(conn)
@@ -200,7 +206,13 @@ def main(argv=None) -> int:
         log.append(("[7] 原样重跑（整批重传，应 0 条且不重复）", n, f, count_rows(conn), m))
 
         n, m, f = load(conn, rows4 + same_ts + late_small)
-        log.append(("[8] 同时间戳 + 更小主键（残留边界，预期漏 1）", n, f, count_rows(conn), m))
+        log.append(("[8] 同时间戳 + 更小主键（不带窗口，预期漏 1）", n, f, count_rows(conn), m))
+
+        n, m, f = load(conn, rows4 + same_ts + late_small, overlap=OVERLAP)
+        log.append(("[9] 开 1 天重叠窗口重跑（应补上那 1 条）", n, f, count_rows(conn), m))
+
+        n, m, f = load(conn, BASE, overlap=timedelta(days=30))
+        log.append(("[10] 重叠区全是旧行（应 0 且水位不倒退）", n, f, count_rows(conn), m))
 
         with conn.cursor() as cur:
             cur.execute(f"SELECT count(*) AS total, count(DISTINCT id) AS uniq FROM {STG}")
@@ -221,7 +233,8 @@ def main(argv=None) -> int:
     print("也不会因为「永远大于水位」而每晚被重复灌一次。")
     print("第 [6] 步是这次修的：水位改成 (时间戳, 主键) 复合后，同一秒进来的多条不再被整体漏掉。")
     print("第 [8] 步是残留边界：复合水位要求主键单调递增，客户补录一条更小的主键仍会漏。")
-    print("真正能覆盖它的做法是留重叠窗口（水位往回退一段）再按主键去重，成本是每次多读一小段。")
+    print("第 [9] 步把这条边界补掉：水位往回退 1 天取候选，重叠区靠落库幂等去重，代价是每次多读一小段。")
+    print("第 [10] 步守住代价的另一头：重叠区全是旧行时 max 会比原水位更早，水位不许因此倒退。")
 
     # 结构化落盘（G6）。known_gap 一起写：报告里不能只有「增量跑通了」，
     # 还得带上「它在什么情况下会漏」——否则这份证据比没有更容易被误读。
@@ -238,7 +251,9 @@ def main(argv=None) -> int:
             "unique_ids": r["uniq"],
             "duplicated": r["total"] != r["uniq"],
             "quarantine_rows": q,
-            "known_gap": "同时间戳 + 更小主键后到会漏（第 [8] 步）；需重叠窗口才对冲",
+            "overlap": "1 day（第 [9] 步）",
+            "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；"
+                         "给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
             "status": "ok" if r["total"] == r["uniq"] else "fail",
         }
         Path(json_out).write_text(

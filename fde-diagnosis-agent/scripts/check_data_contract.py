@@ -174,6 +174,25 @@ def fmt_rows(rows: list) -> str:
     return " / ".join(shown) + more
 
 
+def quarantine_report(dsn: str, table: str = "stg_quarantine"):
+    """隔离区报告：返回 [(reason, 条数, 最近时间)]，表不存在返回 None。
+
+    隔离区不该有数据。有，就说明有行被挡在主表外——它不报错、不影响任何查询，
+    也不会出现在任何业务统计里，是「安静地错」的典型。
+    所以它不能只由装载脚本打印一行，必须由检查脚本主动喊出来。
+    """
+    try:
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT reason, count(*) AS n, max(seen_at) AS latest "
+                    f"FROM {table} GROUP BY reason ORDER BY n DESC"
+                )
+                return cur.fetchall()
+    except Exception:
+        return None
+
+
 def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool = True):
     """跑断言，返回 (fails, a_fails, results)。供 CLI 和跨源矩阵共用。"""
     usable, skipped = select_assertions(tables)
@@ -219,6 +238,7 @@ def main() -> int:
     dsn = DEFAULT_DSN
     expect = ""
     prefix = ""
+    allow_q = False
     for arg in sys.argv[1:]:
         if arg.startswith("--dsn="):
             dsn = arg.split("=", 1)[1]
@@ -226,6 +246,8 @@ def main() -> int:
             expect = arg.split("=", 1)[1]
         elif arg.startswith("--prefix="):
             prefix = arg.split("=", 1)[1]
+        elif arg == "--allow-quarantine":
+            allow_q = True
 
     tables = {k: prefix + v for k, v in DEFAULT_TABLES.items()} if prefix else dict(DEFAULT_TABLES)
     nonempty = [prefix + t for t in NONEMPTY_TABLES] if prefix else NONEMPTY_TABLES
@@ -236,6 +258,22 @@ def main() -> int:
     print(f"断言 {len(results)} 条：PASS {len(results) - len(fails)} / FAIL {len(fails)}")
     print("※ A 类在 pg 源上由数据库约束保证；换源（staging / CSV / 外部库）后才是主要防线。")
 
+    q = quarantine_report(dsn)
+    q_fail = False
+    if q is None:
+        print("隔离区：这张库里没有 stg_quarantine（该场景不涉及增量装载）")
+    elif not q:
+        print("隔离区：空")
+    else:
+        total = sum(r["n"] for r in q)
+        print(f"隔离区：{total} 条未进主表")
+        for r in q:
+            print(f"  - {r['reason']}：{r['n']} 条，最近 {r['latest']}")
+        if allow_q:
+            print("  （--allow-quarantine 已放行：测试场景故意造的脏行）")
+        else:
+            q_fail = True
+
     if expect == "clean" and fails:
         print(f"\n[FAIL] 期望全绿，实际 {len(fails)} 条红：{', '.join(fails)}")
         return 1
@@ -244,6 +282,10 @@ def main() -> int:
         return 1
     if a_fails and not prefix:
         print(f"\n[FAIL] A 类断言在 pg 源上不该红：{', '.join(a_fails)}")
+        return 1
+    if q_fail:
+        print("\n[FAIL] 隔离区非空：有行被挡在主表外。它不会报错，也没人看，"
+              "等于把脏数据藏起来了")
         return 1
     print("\n[OK]")
     return 0

@@ -105,6 +105,27 @@ ASSERTIONS = [
         "desc": "告警发生时间不能在未来",
         "sql": "SELECT id, device_id, ts FROM {alarm_events} WHERE ts > now()",
     },
+    {
+        "id": "B12", "kind": "B", "owner": "手册片段",
+        # P1-7 的正解。不用「所有块都必须有 params」——告警码表 9 块全是 {}，
+        # 它们本来就没有可比对参数，那样写会误报 9 行。
+        # 判据取「正文里原样出现了库内某个参数名，却没有填进 params」：
+        # 这种块是忘填，一旦空着就永久退出 check_doc_conflict 的比对，
+        # 而且没有任何报错——冲突检测少一份证据，结论却照常输出。
+        # 召回有限：正文用简称（「亮度」而不是「光源亮度设定」）抓不到，见输出说明。
+        "desc": "正文提到参数名却没填 params（忘了填就永久退出冲突检测）",
+        # 空对象用 jsonb_build_object() 表达，不写 '{}'::jsonb——那个花括号会被
+        # 下面的 .format(**tables) 当成占位符，报 Replacement index out of range。
+        "sql": """WITH keys AS (
+                      SELECT DISTINCT jsonb_object_keys(params) AS k
+                      FROM {chunks}
+                      WHERE params IS NOT NULL AND params <> jsonb_build_object()
+                  )
+                  SELECT c.chunk_uid, c.doc_type, c.section, k.k AS mentioned_param
+                  FROM {chunks} c
+                  JOIN keys k ON position(k.k IN c.content) > 0
+                  WHERE c.params IS NULL OR c.params = jsonb_build_object()""",
+    },
     # ---------- A 类：pg 源由 DB 保证，价值在换源之后 ----------
     {
         "id": "A1", "kind": "A", "owner": "误判日志",
@@ -139,6 +160,7 @@ DEFAULT_TABLES = {
     "light_usage": "light_usage",
     "work_orders": "work_orders",
     "alarm_events": "alarm_events",
+    "chunks": "device_manual_chunks",
 }
 
 NONEMPTY_TABLES = [
@@ -193,9 +215,15 @@ def quarantine_report(dsn: str, table: str = "stg_quarantine"):
         return None
 
 
-def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool = True):
-    """跑断言，返回 (fails, a_fails, results)。供 CLI 和跨源矩阵共用。"""
+def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool = True,
+        only=None):
+    """跑断言，返回 (fails, a_fails, results)。供 CLI 和跨源矩阵共用。
+
+    only 是一个断言编号集合，只为「单独验证某一条断言」服务；None 表示全跑。
+    """
     usable, skipped = select_assertions(tables)
+    if only:
+        usable = [a for a in usable if a["id"] in only]
     results = []
 
     if verbose:
@@ -215,19 +243,20 @@ def run(dsn: str, tables: dict, nonempty: list, expect: str = "", verbose: bool 
                 print(f"{item['id']:<4} {item['kind']:<2} {item['desc'][:50]:<52} {status:<6} {fmt_rows(rows)}")
 
         empty_tables = []
-        for table in nonempty:
-            try:
-                cur.execute(f"SELECT count(*) AS n FROM {table}")
-            except Exception:
-                continue  # 表不存在就不算这条断言的失败
-            if cur.fetchone()["n"] == 0:
-                empty_tables.append(table)
-        results.append(("B11", "B", not empty_tables,
-                        [{"empty_tables": ", ".join(empty_tables)}] if empty_tables else []))
-        if verbose:
-            status = "PASS" if not empty_tables else "FAIL"
-            detail = "" if not empty_tables else ", ".join(empty_tables)
-            print(f"B11  B  {'每张业务表都要有数据（空表会冒充「没有异常」）':<52} {status:<6} {detail}")
+        if not only or "B11" in only:
+            for table in nonempty:
+                try:
+                    cur.execute(f"SELECT count(*) AS n FROM {table}")
+                except Exception:
+                    continue  # 表不存在就不算这条断言的失败
+                if cur.fetchone()["n"] == 0:
+                    empty_tables.append(table)
+            results.append(("B11", "B", not empty_tables,
+                            [{"empty_tables": ", ".join(empty_tables)}] if empty_tables else []))
+            if verbose:
+                status = "PASS" if not empty_tables else "FAIL"
+                detail = "" if not empty_tables else ", ".join(empty_tables)
+                print(f"B11  B  {'每张业务表都要有数据（空表会冒充「没有异常」）':<52} {status:<6} {detail}")
 
     fails = [rid for rid, _, ok, _ in results if not ok]
     a_fails = [rid for rid, kind, ok, _ in results if not ok and kind == "A"]
@@ -239,6 +268,7 @@ def main() -> int:
     expect = ""
     prefix = ""
     allow_q = False
+    only = None
     for arg in sys.argv[1:]:
         if arg.startswith("--dsn="):
             dsn = arg.split("=", 1)[1]
@@ -246,34 +276,51 @@ def main() -> int:
             expect = arg.split("=", 1)[1]
         elif arg.startswith("--prefix="):
             prefix = arg.split("=", 1)[1]
+        elif arg.startswith("--only="):
+            only = {x.strip().upper() for x in arg.split("=", 1)[1].split(",") if x.strip()}
         elif arg == "--allow-quarantine":
             allow_q = True
 
-    tables = {k: prefix + v for k, v in DEFAULT_TABLES.items()} if prefix else dict(DEFAULT_TABLES)
+    if prefix:
+        # staging 模式没有手册片段表，把它排除掉让 B12 明确跳过，而不是拼出一个不存在的表名去查
+        tables = {k: prefix + v for k, v in DEFAULT_TABLES.items() if k != "chunks"}
+    else:
+        tables = dict(DEFAULT_TABLES)
     nonempty = [prefix + t for t in NONEMPTY_TABLES] if prefix else NONEMPTY_TABLES
 
-    fails, a_fails, results = run(dsn, tables, nonempty, expect)
+    fails, a_fails, results = run(dsn, tables, nonempty, expect, only=only)
 
     print("-" * 108)
     print(f"断言 {len(results)} 条：PASS {len(results) - len(fails)} / FAIL {len(fails)}")
     print("※ A 类在 pg 源上由数据库约束保证；换源（staging / CSV / 外部库）后才是主要防线。")
 
-    q = quarantine_report(dsn)
     q_fail = False
-    if q is None:
-        print("隔离区：这张库里没有 stg_quarantine（该场景不涉及增量装载）")
-    elif not q:
-        print("隔离区：空")
+    if only:
+        # 只验某一条断言时不查隔离区：否则「隔离区有 1 条造出来的脏行」
+        # 会让 B12 的结果根本看不到，退出码也不是 B12 的结论。
+        print("隔离区：本次只验指定断言，跳过")
     else:
-        total = sum(r["n"] for r in q)
-        print(f"隔离区：{total} 条未进主表")
-        for r in q:
-            print(f"  - {r['reason']}：{r['n']} 条，最近 {r['latest']}")
-        if allow_q:
-            print("  （--allow-quarantine 已放行：测试场景故意造的脏行）")
+        q = quarantine_report(dsn)
+        if q is None:
+            print("隔离区：这张库里没有 stg_quarantine（该场景不涉及增量装载）")
+        elif not q:
+            print("隔离区：空")
         else:
-            q_fail = True
+            total = sum(r["n"] for r in q)
+            print(f"隔离区：{total} 条未进主表")
+            for r in q:
+                print(f"  - {r['reason']}：{r['n']} 条，最近 {r['latest']}")
+            if allow_q:
+                print("  （--allow-quarantine 已放行：测试场景故意造的脏行）")
+            else:
+                q_fail = True
 
+    # 没指定 --expect 时，任何一条红都该让退出码非零。
+    # 原来的判断只覆盖了 --expect=clean/dirty 两种，于是「不带参数直接跑」
+    # 会在断言红着的情况下返回 0——CI 里等于永远绿。
+    if not expect and fails:
+        print(f"\n[FAIL] {len(fails)} 条断言红：{', '.join(fails)}")
+        return 1
     if expect == "clean" and fails:
         print(f"\n[FAIL] 期望全绿，实际 {len(fails)} 条红：{', '.join(fails)}")
         return 1

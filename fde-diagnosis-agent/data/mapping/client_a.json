@@ -1,0 +1,32 @@
+{
+  "name": "客户A · QMS 导出",
+  "tables": {
+    "devices": {
+      "source": "equipment.csv",
+      "fields": {
+        "device_id": {"from": "equip_no"},
+        "line": {"from": "prod_line"},
+        "station": {"from": "work_station"},
+        "camera_model": {"from": "cam_model"},
+        "lens_model": {"from": "lens_spec"},
+        "light_model": {"from": "lamp_type"},
+        "install_date": {"from": "install_dt", "type": "date", "format": "%Y/%m/%d"},
+        "maintenance_cycle_days": {"from": "maint_cycle", "type": "int"}
+      }
+    },
+    "defect_logs": {
+      "source": "defect_records.csv",
+      "fields": {
+        "id": {"from": "rec_id", "type": "int"},
+        "ts": {"from": "captured_at", "type": "timestamp", "format": "%Y/%m/%d %H:%M"},
+        "device_id": {"from": "equip_no"},
+        "station": {"from": "work_station"},
+        "defect_type": {"from": "defect_name"},
+        "confidence": {"from": "conf_pct", "type": "real", "scale": 0.01},
+        "batch": {"from": "lot_no", "default": ""},
+        "verdict": {"from": "judge"},
+        "is_actually_ok": {"from": "is_ok", "type": "bool"}
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+equip_no,prod_line,work_station,cam_model,lens_spec,lamp_type,install_dt,maint_cycle
+,3号线,1-3号工位,In-Sight 2801,16mm,CA-DC21E,2025/03/12,90
+cx-101,3号线,1-3号工位,In-Sight 2801,16mm,CA-DC21E,2025/03/12,90
+CX-101,3号线,1-3号工位,In-Sight 2801,16mm,CA-DC21E,2025/03/12,90
+CX-102,3号线,1-3号工位,In-Sight 2802,16mm,CA-DC21E,2025/05/20,90
+CX-104,4号线,1-2号工位,CV-X450 + CA-H200CX,16mm,CA-DC21E,2024/08/15,90

@@ -28,10 +28,14 @@ from psycopg.rows import dict_row
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT))
 import check_data_contract as cdc  # noqa: E402
+from app.ds.mapping import Mapping  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 OUT_DIR = ROOT / "data" / "sandbox" / "from_csv"
+CLIENT_DIR = ROOT / "data" / "sandbox" / "from_client"
+MAPPING_PATH = ROOT / "data" / "mapping" / "client_a.json"
 
 SPECS = {
     "devices": [
@@ -167,6 +171,36 @@ def load_http(conn, data) -> None:
                 page += 1
 
 
+# ---------------------------------------------------------------- client
+def load_client(conn, data=None) -> None:
+    """客户风格：列名、日期格式、百分制全都不一样，过一遍映射再落地。"""
+    mapping = Mapping.from_file(MAPPING_PATH)
+    for table in SPECS:
+        path = CLIENT_DIR / mapping.source_name(table)
+        with path.open("r", encoding="utf-8-sig", newline="") as fh:
+            raw = list(csv.DictReader(fh))
+        rows = mapping.apply(table, raw)
+        insert_rows(conn, table, rows, "client")
+
+
+def probe_nomap(conn) -> str:
+    """反面：不配映射，直接把客户列名灌进去，看它撞在哪儿。"""
+    with (CLIENT_DIR / "equipment.csv").open("r", encoding="utf-8-sig", newline="") as fh:
+        raw = list(csv.DictReader(fh))
+    cols = list(raw[0])
+    ph = ", ".join(["%s"] * len(cols))
+    sql = f"INSERT INTO stg_devices ({', '.join(cols)}) VALUES ({ph})"
+    try:
+        with conn.cursor() as cur:
+            for rec in raw:
+                cur.execute(sql, [rec.get(c) for c in cols])
+        conn.commit()
+        return "意外插进去了"
+    except Exception as exc:
+        conn.rollback()
+        return f"{type(exc).__name__}: {str(exc).splitlines()[0]}"
+
+
 # ---------------------------------------------------------------- main
 def main() -> int:
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
@@ -179,7 +213,13 @@ def main() -> int:
         })
 
         summary = []
-        for name, loader in (("pg", None), ("csv", load_csv), ("http", load_http)):
+        loaders = (
+            ("pg", None),
+            ("csv", load_csv),
+            ("http", load_http),
+            ("client", load_client),
+        )
+        for name, loader in loaders:
             truncate_stg(conn)
             conn.commit()
             if name == "pg":
@@ -198,6 +238,10 @@ def main() -> int:
             b_fails = sorted(set(fails) - set(a_fails))
             summary.append((name, n_dev, n_logs, b_fails, sorted(set(a_fails))))
 
+        nomap_msg = probe_nomap(conn)
+        truncate_stg(conn)
+        conn.commit()
+
     print()
     print(f"{'形态':<6} {'设备':>4} {'日志':>4}  {'B 类红':<22} {'A 类红'}")
     print("-" * 72)
@@ -208,7 +252,8 @@ def main() -> int:
     print("-" * 72)
     print("注：pg 少 1 条日志，是 CX-999 那条被真表的外键挡在门外——它从未进入 stg，")
     print("    所以 A1 在 pg 形态无从报；csv / http 把它原样搬进来，A1 才红。")
-    print(f"B 类在三种形态上一致：{'是' if len(b_sets) == 1 else '否'}")
+    print(f"不配映射直接灌客户文件：{nomap_msg}")
+    print(f"B 类在四种形态上一致：{'是' if len(b_sets) == 1 else '否'}")
     print("A 类只在换源后红，说明 pg 的结构约束不是断言的替代品，是叠加在它上面的额外保护。")
 
     if len(b_sets) != 1:

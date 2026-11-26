@@ -163,5 +163,63 @@ class PlanIssuesTest(unittest.TestCase):
         self.assertTrue(any("值指纹" in x for x in plan_issues(plan)))
 
 
+class RetireTest(unittest.TestCase):
+    """设备被判删之后，事实层必须「关而不开」。
+
+    这一组是 L1 最容易被忘掉的一类：改值有测试、重复同步有测试、NULL 有测试，
+    而「设备整个没了」没有——它不报错，只是让「当前设备清单」永远多一台。
+    """
+
+    def _current_two_devices(self):
+        rows = [dict(DEVICE_ROW),
+                dict(DEVICE_ROW, device_id="CX-102", line="4号线")]
+        incoming = rows_to_facts(rows)
+        return incoming, current_of(incoming)
+
+    def test_deleted_entity_retires_every_current_key(self):
+        incoming, current = self._current_two_devices()
+        # 快照里只剩 CX-102，L-1 明确判删 CX-101
+        left = {k: v for k, v in incoming.items() if k[0] == "CX-102"}
+        plan = plan_facts(current, left, retire_entities=[
+            {"entity_id": "CX-101", "reason": "upstream_purge"}])
+        self.assertEqual(len(plan["retire"]), 7)
+        self.assertEqual({r["fact_key"] for r in plan["retire"]}, set(FACT_KEYS))
+        self.assertTrue(all(r["id"] is not None for r in plan["retire"]))
+        self.assertTrue(all(r["reason"] == "upstream_purge" for r in plan["retire"]))
+        # 关而不开：不能顺手给 CX-101 开新值
+        self.assertFalse([o for o in plan["opens"] if o["entity_id"] == "CX-101"])
+
+    def test_retire_only_touches_the_named_entity(self):
+        incoming, current = self._current_two_devices()
+        left = {k: v for k, v in incoming.items() if k[0] == "CX-102"}
+        plan = plan_facts(current, left, retire_entities=[{"entity_id": "CX-101"}])
+        self.assertEqual({r["entity_id"] for r in plan["retire"]}, {"CX-101"})
+        # CX-101 同时出现在两个结果里，这是对的：uncovered 说的是「这轮没给」
+        # （一个事实），retire 说的是「L-1 已经判删、该关」（一个决策）。
+        # CX-102 在快照里、值没变 → noop，两处都不该出现。
+        self.assertEqual({u["entity_id"] for u in plan["uncovered"]}, {"CX-101"})
+        self.assertEqual({n["entity_id"] for n in plan["noops"]}, {"CX-102"})
+
+    def test_entity_both_deleted_and_in_snapshot_is_a_conflict(self):
+        """上游自相矛盾（标了删除又发回来）：不在这里替它决定，只露出来。"""
+        incoming, current = self._current_two_devices()
+        plan = plan_facts(current, incoming, retire_entities=[{"entity_id": "CX-101"}])
+        self.assertEqual(plan["retire"], [])
+        self.assertEqual(plan["retire_conflicts"], ["CX-101"])
+
+    def test_retire_without_id_is_flagged(self):
+        plan = {"closes": [], "opens": [], "noops": [], "uncovered": [],
+                "retire": [{"id": None, "entity_id": "CX-101", "fact_key": "line"}]}
+        self.assertTrue(any("没有 id" in x for x in plan_issues(plan)))
+
+    def test_retire_and_open_on_same_key_is_flagged(self):
+        plan = {"closes": [], "noops": [], "uncovered": [],
+                "opens": [{"entity_id": "CX-101", "fact_key": "line",
+                           "value_hash": "h", "supersedes": None,
+                           "valid_from_basis": "ingested"}],
+                "retire": [{"id": 1, "entity_id": "CX-101", "fact_key": "line"}]}
+        self.assertTrue(any("两种结论冲突" in x for x in plan_issues(plan)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,8 +112,8 @@ def rows_to_facts(rows, keys=FACT_KEYS, id_key="device_id"):
 
 
 def plan_facts(current, incoming, tenant="client_a", source="sync",
-               basis=DEFAULT_BASIS):
-    """返回 `{"closes", "opens", "noops", "uncovered"}`。
+               basis=DEFAULT_BASIS, retire_entities=()):
+    """返回 `{"closes", "opens", "noops", "uncovered", "retire", "retire_conflicts"}`。
 
     current  : `{(entity_id, fact_key): {"id": int, "value_hash": str, "value": any}}`
                来自 `facts.device_fact_current`
@@ -130,6 +130,16 @@ def plan_facts(current, incoming, tenant="client_a", source="sync",
 
     `supersedes` 只在改值时出现：链条断了就看不出「从 1号线 改到 1号线B」，
     只看得到两个孤立的值。
+
+    `retire`：设备已经**被 L-1 明确判删**（`stg_device_state.deleted_at` 有值），
+    它的每个当前键要关闭、且**不开新行**。这是唯一一种「关而不开」。
+    为什么它必须单独一类、不能混进 `closes`：`closes` 的语义是「这个值被新值取代」，
+    而 retire 的语义是「这个实体不再存在」。两者在下游完全不同——前者还要找新值，
+    后者应当从「当前设备清单」里消失。
+
+    `retire` 只对**不在本轮快照里**的实体生效：既在 `stg_device_state` 标了删除、
+    又出现在 `stg_devices` 里，说明上游自相矛盾（删了又发回来），那种情况交给 L-1 判，
+    这里不替它决定，记进 `retire_conflicts`。
     """
     if basis not in VALID_FROM_BASIS:
         raise ValueError(
@@ -165,7 +175,31 @@ def plan_facts(current, incoming, tenant="client_a", source="sync",
         if (eid, fk) not in incoming
     ]
 
-    return {"closes": closes, "opens": opens, "noops": noops, "uncovered": uncovered}
+    # 被 L-1 判删的实体：关而不开。只对「这一轮快照里确实没有它」生效。
+    retire, retire_conflicts = [], []
+    retire_map = {}
+    for e in (retire_entities or ()):
+        eid = str(e.get("entity_id") or "").strip()
+        if eid:
+            retire_map[eid] = e
+    incoming_entities = {eid for (eid, _fk) in incoming}
+    for eid in sorted(retire_map):
+        if eid in incoming_entities:
+            # 标了删除、又出现在快照里：自相矛盾。不在这里替上游决定（L-1 有一套判据），
+            # 只把它露出来，让调用方知道「有个删除还没落地」。
+            retire_conflicts.append(eid)
+            continue
+        for (e_id, fk), cur in sorted(current.items()):
+            if e_id != eid:
+                continue
+            retire.append({
+                "id": cur.get("id"), "entity_id": eid, "fact_key": fk,
+                "reason": retire_map[eid].get("reason") or "deleted",
+                "deleted_at": retire_map[eid].get("deleted_at"),
+            })
+
+    return {"closes": closes, "opens": opens, "noops": noops, "uncovered": uncovered,
+            "retire": retire, "retire_conflicts": retire_conflicts}
 
 
 def plan_issues(plan):
@@ -194,4 +228,12 @@ def plan_issues(plan):
             out.append(f"{k[0]}.{k[1]} 关了旧行但没开新行：这个键会没有当前值")
         elif o.get("supersedes") is None:
             out.append(f"{k[0]}.{k[1]} 开了新行但没记 supersedes：看不出「从哪个值改过来」")
+    # 删除：关而不开是**正确**的，所以不套用上面那条「关了没开」——
+    # 但必须带得上 id，也不能和 opens 撞（既判删又开新值，两种结论同时成立）。
+    for r in plan.get("retire") or []:
+        k = (r.get("entity_id"), r.get("fact_key"))
+        if r.get("id") is None:
+            out.append(f"{k[0]}.{k[1]} 要按删除关闭却没有 id")
+        if k in opened:
+            out.append(f"{k[0]}.{k[1]} 一边判删一边开了新值（两种结论冲突）")
     return out

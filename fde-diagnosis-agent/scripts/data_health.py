@@ -158,6 +158,68 @@ def facts_issues(f):
     if p.get("valid_from_basis") != "ingested":
         out.append(f"valid_from 口径登记成 {p.get('valid_from_basis')}："
                    "上游没有生效时间，声称 effective 就是说了一句没有证据的话")
+
+    # 删除传导：设备被判删之后，事实层必须「关而不开」。
+    # 缺这一条，设备删了半年「当前清单」里还有它，而一致性检查只比两边都有的键，
+    # 永远报绿——这是 L1 唯一一个会导致「给人看的是已经不存在的设备」的失败形态。
+    r = f.get("retirement") or {}
+    if not r:
+        out.append("事实层没验删除传导（判删后有没有残留当前值，这一条没被证明）")
+    else:
+        if not r.get("retire_count"):
+            out.append("设备被判删后没有产生任何关闭（删除没传导到事实层）")
+        if r.get("still_current"):
+            out.append(f"{r.get('entity_id')} 已被判删，但仍有 "
+                       f"{len(r['still_current'])} 条当前值")
+        if r.get("in_current_view"):
+            out.append(f"{r.get('entity_id')} 已被判删，仍出现在 device_fact_current")
+        if r.get("closed_by_delete") != r.get("retire_count"):
+            out.append(f"判删关闭数 {r.get('closed_by_delete')} 与计划 "
+                       f"{r.get('retire_count')} 不一致（有关闭没落地）")
+
+    # 多租户隔离：改一个租户的当前值，另一个租户的行与值都不能动。
+    # 缺这一条，两个客户同 ID 设备会互相改写，而唯一索引是三列、跨租户不冲突，
+    # 所以整个过程一声不响——多客户部署时这是最贵的那种错。
+    t = f.get("tenant_isolation") or {}
+    if not t:
+        out.append("事实层没验多租户隔离（改一个租户会不会改写另一个，未被证明）")
+    elif not t.get("untouched"):
+        out.append(f"多租户隔离失效：改另一个租户后，{t.get('other_tenant')} 的"
+                   "行数或值指纹变了")
+    iso = f.get("isolation") or {}
+    if iso.get("selftest_cross_tenant_refs"):
+        out.append(f"发现 {iso['selftest_cross_tenant_refs']} 条跨租户 supersedes 引用："
+                   "版本链已经跨客户了（读路径漏过租户过滤）")
+    return out
+
+
+def facts_drift(prev_facts, cur_facts):
+    """跨轮：生产事实层有没有被清空或回退。
+
+    `facts_issues` 只能证明「这一轮没动生产」，不能证明「上一轮攒的还在」——
+    如果别的动作把它清了，这一轮照样 0 → 0「未动」，照样绿。唯一能看见的办法
+    是把上一轮 `data_health.json` 里的数字拿下来比。
+
+    只比行数和最早一条的 `valid_from`，不比内容：内容本来就会变。行数减少可以是
+    正常删除，但那一定伴随「新设备进来」或「孤儿实体」信号；而**行数减少 + 最早
+    一条变新**只有一种解释——老历史被抹掉了。
+    """
+    out = []
+    p = (prev_facts or {}).get("isolation") or {}
+    c = (cur_facts or {}).get("isolation") or {}
+    prev_rows, cur_rows = p.get("prod_rows_after"), c.get("prod_rows_before")
+    pf, cf = p.get("prod_first_valid_from"), c.get("prod_first_valid_from")
+    if isinstance(prev_rows, int) and isinstance(cur_rows, int) and cur_rows < prev_rows:
+        if cf is None or (pf and cf > pf):
+            out.append(
+                f"生产事实层从 {prev_rows} 行降到 {cur_rows} 行、最早一条 "
+                f"{pf or '—'} → {cf or '空'}（跨轮）：历史被清过，不是正常删除"
+            )
+    elif pf and cf and cf > pf:
+        out.append(
+            f"生产事实层最早一条的 valid_from 从 {pf} 变成 {cf}（跨轮）："
+            "老历史消失，行数却没少"
+        )
     return out
 
 
@@ -195,12 +257,14 @@ def main() -> int:
     # 判据不再靠人验一次：增量检查第 [11] 步每轮造一次 +1 再收回，下面只复核它给的
     # 三个数（before/after/restored），不看它自己的 ok 字段。缺证据、涨不上去、
     # 收不回来，三种都红。
-    prev_rows = None
+    prev_doc = {}
     if OUT.exists():
         try:
-            prev_rows = (json.loads(OUT.read_text(encoding="utf-8")).get("quarantine") or {}).get("rows")
+            raw_prev = json.loads(OUT.read_text(encoding="utf-8"))
+            prev_doc = raw_prev if isinstance(raw_prev, dict) else {}
         except Exception:
-            prev_rows = None
+            prev_doc = {}
+    prev_rows = (prev_doc.get("quarantine") or {}).get("rows")
     delta = (q_rows - prev_rows) if isinstance(prev_rows, int) else None
 
     # 事实层放最后：它横跨两库（读沙箱当前值、写主库历史），中途会把 stg_devices
@@ -274,6 +338,8 @@ def main() -> int:
         issues.append("事实层检查没跑起来")
     else:
         issues.extend(facts_issues(fa))
+        # 这一轮没动生产 ≠ 上一轮攒的还在。跨轮比行数与最早一条。
+        issues.extend(facts_drift(prev_doc.get("facts"), fa))
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -303,6 +369,32 @@ def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
+    # 跨轮台账：追加写，不清空。
+    # `data_health.json` 每轮被覆盖，所以「这一轮有没有把上一轮抹掉」这件事，
+    # 只能靠另一份只增不减的文件留证。上一轮的数从这里读，下一轮也从这里读。
+    ledger_path = OUT.parent / "facts_ledger.json"
+    ledger = []
+    if ledger_path.exists():
+        try:
+            raw_ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger = raw_ledger if isinstance(raw_ledger, list) else []
+        except Exception:
+            ledger = []
+    if "isolation" in (fa or {}):
+        iso = fa.get("isolation") or {}
+        ledger.append({
+            "checked_at": payload["checked_at"],
+            "prod_tenant": iso.get("prod_tenant"),
+            "prod_rows": iso.get("prod_rows_after"),
+            "prod_first_valid_from": iso.get("prod_first_valid_from"),
+            "selftest_tenant": iso.get("selftest_tenant"),
+            "selftest_rows": iso.get("selftest_rows"),
+        })
+    ledger = ledger[-90:]
+    if ledger:
+        ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=1),
+                               encoding="utf-8")
+
     print("\n" + "=" * 60)
     print(f"数据健康      {payload['status'].upper()}")
     print(f"契约断言      {(c.get('pass'), c.get('total'))}（库 {(c.get('db') or '?')}）")
@@ -326,6 +418,11 @@ def main() -> int:
           f"唯一索引拒第二条：{fu.get('rejected')}，"
           f"与当前值一致 {fc.get('checked')} 项（不符 {len(fc.get('mismatched') or [])} 项）")
     qd = payload["quarantine"]
+    iso = fa.get("isolation") or {}
+    print(f"生产事实层    {iso.get('prod_tenant')} {iso.get('prod_rows_before')} → "
+          f"{iso.get('prod_rows_after')} 行"
+          f"（{'未动' if iso.get('unchanged') else '被验收动了'}），"
+          f"验收租户 {iso.get('selftest_tenant')} {iso.get('selftest_rows')} 行")
     delta_text = "" if qd["delta"] is None else f"（较上次 {qd['delta']:+d} 条）"
     readable_text = "" if qd["readable"] else "**读不到**："
     print(f"隔离区        {readable_text}{qd['rows']} 条{delta_text}（来自检查夹具，见 note）")

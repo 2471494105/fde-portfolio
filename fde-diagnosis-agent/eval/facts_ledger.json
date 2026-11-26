@@ -1,0 +1,58 @@
+[
+ {
+  "checked_at": "2026-11-26 14:15:13",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:02",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 36
+ },
+ {
+  "checked_at": "2026-11-26 14:15:27",
+  "prod_tenant": "client_a",
+  "prod_rows": 0,
+  "prod_first_valid_from": null,
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 36
+ },
+ {
+  "checked_at": "2026-11-26 14:15:39",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 36
+ },
+ {
+  "checked_at": "2026-11-26 14:21:37",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 44
+ },
+ {
+  "checked_at": "2026-11-26 14:21:40",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 44
+ },
+ {
+  "checked_at": "2026-11-26 14:23:17",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 44
+ },
+ {
+  "checked_at": "2026-11-26 14:23:21",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 44
+ }
+]

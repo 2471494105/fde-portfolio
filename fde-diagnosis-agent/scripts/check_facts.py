@@ -5,12 +5,18 @@
 2. 值变了会发生什么          -> 旧行写 valid_to、新行 supersedes 指旧行、视图只剩 1 行
 3. 值没变会发生什么          -> 不写新行（判 hash），重复同步 0 关 0 开
 4. 同键能不能有两条当前值    -> 部分唯一索引拒绝；拒不了就是装饰
-5. 历史会不会被检查脚本清掉  -> 不会：facts 在主库，检查 TRUNCATE 的是沙箱
+5. 历史会不会被检查脚本清掉  -> 不会：验收只写 fcheck 租户，生产 client_a 只计数
 6. 和当前值对不对得上        -> facts_current 与 stg_devices 逐键比对，差一个就红
 7. 上游少给一个属性会怎样    -> 不关（保持当前值望），但要露在 uncovered 里
+8. 生产租户被这一轮碰到没有  -> 每轮前后各数一次行数，相等才叫没动
 
 跨两个库是刻意的：事实在主库 fde_rag，当前值在沙箱 fde_sandbox。
-这不是「没设计好」，是第 5 条要回答的东西——检查脚本每轮清沙箱，历史必须活下来。
+这不是「没设计好」，是第 5 条要回答的东西——检查每轮 TRUNCATE 沙箱，历史必须活下来。
+
+**但「活下来」不能靠一句承诺**：上一版把 `TRUNCATE facts.device_fact` 写在 main 开头，
+库里 36 行全是 `source='facts_check'`、`valid_from` 全在同一秒，然后它用
+「沙箱重置后 36→36」宣布历史存活——自己就是凶手。现在验收跑在自己的租户里，
+生产租户的行数在前后各数一次，第 8 条才是那条证据。
 
 用法：
     python scripts/check_facts.py --json=<path>
@@ -30,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.ds.facts import (  # noqa: E402
     FACT_KEYS,
+    fact_hash,
     fact_value,
     plan_facts,
     plan_issues,
@@ -40,7 +47,18 @@ PROD_DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
 SBX_DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 SQL = ROOT / "data" / "facts.sql"
 
-TENANT = "client_a"
+# 两个租户必须分开，这是这一层最容易犯的错。
+#
+# 验收要从「一个空的事实层」开始跑七步，因此它必须能清空自己的起点；而生产租户
+# 的历史一旦被验收清掉，「版本」这件事就永远不成立——脚本每天跑一次，历史每天
+# 只剩一次巡检那么长。第一版直接把 `TRUNCATE facts.device_fact` 写在 main 开头，
+# 结果库里 36 行全是 `source='facts_check'`、`valid_from` 全落在同一秒：巡检
+# 每天生产一份「历史」，再报「历史存活 ✅」。
+#
+# 所以：验收只碰 SELFTEST_TENANT，生产租户只读不写，并在每轮前后各数一次行数，
+# 用「前后相等」证明验收没有伸手进去（`isolation`）。那一条比任何断言都硬。
+PROD_TENANT = "client_a"      # 生产租户：巡检只计数、只读
+SELFTEST_TENANT = "fcheck"    # 验收租户：七步在这里跑，允许清掉自己
 SOURCE = "facts_check"
 
 # 夹具照抄 data/external/devices.csv：不拿库里剩下的行凑数，
@@ -77,11 +95,39 @@ def ensure_schema(prod):
     prod.commit()
 
 
-def reset_facts(prod):
-    # 自引用外键（supersedes -> id）让裸 TRUNCATE 被 PG 拒绝，要带 CASCADE。
-    # CASCADE 在这里只波及它自己，因为引用它的表只有它自己。
-    prod.execute("TRUNCATE facts.device_fact RESTART IDENTITY CASCADE")
+def reset_tenant(prod, tenant):
+    """清掉一个租户的全部行——只清这个租户，不是清表。返回 (删了多少行, 跨租户引用数)。
+
+    四处刻意：
+
+    1. **用 DELETE 不用 TRUNCATE**。`TRUNCATE ... RESTART IDENTITY` 会把全表 id
+       序列重置回 1：别的租户还在的行，在巡检后 id 会与新建的行撞号，`supersedes`
+       指错行、报告里引用的 id 指向另一条事实。DELETE 保住序列单调。
+    2. **先置空本租户的 supersedes 再删**。自引用外键让 DELETE 也会被拒，而
+       `TRUNCATE ... CASCADE` 会连别的租户一起波及，这里不能那么干。
+    3. **只删 tenant = ?**。第一版是全表 TRUNCATE，等于每天把生产历史清一遍，
+       然后用「沙箱重置后 36→36」宣布历史存活——自己就是凶手。
+    4. **跨租户引用要先查再清**。如果别的租户的行 `supersedes` 指向本租户的行，
+       直接 DELETE 会被外键拒掉：脚本崩了，而真正该说的话（隔离被破坏过）一句没说出来。
+       先数一遍当证据，再只清引用、不碰别的租户的行。
+    """
+    cross = prod.execute(
+        "SELECT count(*) AS n FROM facts.device_fact "
+        "WHERE tenant <> %s "
+        "AND supersedes IN (SELECT id FROM facts.device_fact WHERE tenant = %s)",
+        (tenant, tenant)).fetchone()["n"]
+    if cross:
+        prod.execute(
+            "UPDATE facts.device_fact SET supersedes = NULL "
+            "WHERE tenant <> %s "
+            "AND supersedes IN (SELECT id FROM facts.device_fact WHERE tenant = %s)",
+            (tenant, tenant))
+    prod.execute(
+        "UPDATE facts.device_fact SET supersedes = NULL "
+        "WHERE tenant = %s AND supersedes IS NOT NULL", (tenant,))
+    n = prod.execute("DELETE FROM facts.device_fact WHERE tenant = %s", (tenant,)).rowcount
     prod.commit()
+    return n, cross
 
 
 def load_devices(sbx, rows):
@@ -100,23 +146,42 @@ def load_devices(sbx, rows):
     sbx.commit()
 
 
-def read_current(prod):
+def read_current(prod, tenant):
+    """只读本租户的当前值。
+
+    不带过滤地读全表、却用 `(entity_id, fact_key)` 当键，等于把所有租户的同 ID
+    设备挤进同一个槽：两个客户都有 CX-101 时，后读的覆盖先读的，`plan_facts`
+    拿错的那条去比 hash，判成「改值」，于是 `closes` 按 id 关掉**另一个客户**的行。
+    唯一索引是 `(tenant, entity_id, fact_key)` 三列，跨租户不会冲突、不会报错，
+    只会安静地把 A 的历史换成 B 的值。第一版就是这样。
+    """
     rows = prod.execute(
-        "SELECT id, entity_id, fact_key, value_hash FROM facts.device_fact_current"
+        "SELECT id, entity_id, fact_key, value_hash FROM facts.device_fact_current "
+        "WHERE tenant = %s", (tenant,)
     ).fetchall()
     return {(r["entity_id"], r["fact_key"]): {"id": r["id"], "value_hash": r["value_hash"]}
             for r in rows}
 
 
-def count_rows(prod):
-    return prod.execute("SELECT count(*) AS n FROM facts.device_fact").fetchone()["n"]
+def count_rows(prod, tenant=None):
+    """行数。给 tenant 就只数那个租户——巡检全靠这个数证明自己没动生产。"""
+    if tenant is None:
+        return prod.execute("SELECT count(*) AS n FROM facts.device_fact").fetchone()["n"]
+    return prod.execute(
+        "SELECT count(*) AS n FROM facts.device_fact WHERE tenant = %s",
+        (tenant,)).fetchone()["n"]
 
 
-def current_rows(prod):
-    return prod.execute("SELECT count(*) AS n FROM facts.device_fact_current").fetchone()["n"]
+def current_rows(prod, tenant=None):
+    if tenant is None:
+        return prod.execute(
+            "SELECT count(*) AS n FROM facts.device_fact_current").fetchone()["n"]
+    return prod.execute(
+        "SELECT count(*) AS n FROM facts.device_fact_current WHERE tenant = %s",
+        (tenant,)).fetchone()["n"]
 
 
-def sync(prod, sbx, source=SOURCE):
+def sync(prod, sbx, tenant=SELFTEST_TENANT, source=SOURCE):
     """一轮同步：读沙箱当前值，写主库事实。
 
     事务 + advisory lock 是必要的：两个同步实例并发时，单靠「先读后写」会同时
@@ -125,18 +190,41 @@ def sync(prod, sbx, source=SOURCE):
     """
     rows = sbx.execute("SELECT * FROM stg_devices").fetchall()
     incoming = rows_to_facts(rows)
+    live_ids = {str(r["device_id"]) for r in rows if r.get("device_id")}
+
+    # 删除的唯一合法来源是 L-1 的判定（stg_device_state.deleted_at 有值），
+    # 而且必须「这一轮快照里确实没有它」。只看「快照里没有」就关，等于把
+    # 一次分页超时导致的漏行当成全公司设备报废——那是 L-1 用「缺席两次」才敢下的结论。
+    state_rows = sbx.execute(
+        "SELECT device_id, deleted_at, deleted_reason FROM stg_device_state "
+        "WHERE deleted_at IS NOT NULL").fetchall()
+    retire_entities = [
+        {"entity_id": s["device_id"], "reason": s["deleted_reason"] or "deleted",
+         "deleted_at": s["deleted_at"]}
+        for s in state_rows if s["device_id"] not in live_ids
+    ]
 
     with prod.transaction():
         prod.execute("SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
-                     (f"facts:{TENANT}",))
-        current = read_current(prod)
-        plan = plan_facts(current, incoming, tenant=TENANT, source=source)
+                     (f"facts:{tenant}",))
+        current = read_current(prod, tenant)
+        plan = plan_facts(current, incoming, tenant=tenant, source=source,
+                          retire_entities=retire_entities)
 
         for c in plan["closes"]:
             # valid_to IS NULL 条件不能省：重复关同一条会让时间窗变成负的
             prod.execute(
-                "UPDATE facts.device_fact SET valid_to = now() "
-                "WHERE id = %s AND valid_to IS NULL", (c["id"],))
+                "UPDATE facts.device_fact SET valid_to = now(), close_reason = %s "
+                "WHERE id = %s AND valid_to IS NULL", ("superseded", c["id"]))
+        # 删除关闭：关而不开。valid_to 取 L-1 判删的时刻（那是有来源的时间），
+        # 用 GREATEST 兜住「删除时刻早于这条值生效」的异常窗口（否则违反 CHECK）。
+        for r in plan["retire"]:
+            prod.execute(
+                "UPDATE facts.device_fact "
+                "SET valid_to = GREATEST(COALESCE(%s::timestamptz, now()), valid_from), "
+                "    close_reason = %s "
+                "WHERE id = %s AND valid_to IS NULL",
+                (r["deleted_at"], f"deleted:{r['reason']}", r["id"]))
         for o in plan["opens"]:
             prod.execute(
                 """INSERT INTO facts.device_fact
@@ -150,7 +238,7 @@ def sync(prod, sbx, source=SOURCE):
     return plan
 
 
-def uniqueness_probe(prod):
+def uniqueness_probe(prod, tenant=SELFTEST_TENANT):
     """手插一条同键的第二条当前值：数据库必须拒绝。
 
     这条测的不是我们的代码，是那道约束还在不在。「拒不了就是装饰」——
@@ -158,7 +246,7 @@ def uniqueness_probe(prod):
     """
     base = prod.execute(
         "SELECT tenant, entity_id, fact_key, valid_from_basis FROM facts.device_fact_current "
-        "ORDER BY id LIMIT 1").fetchone()
+        "WHERE tenant = %s ORDER BY id LIMIT 1", (tenant,)).fetchone()
     params = (base["tenant"], base["entity_id"], base["fact_key"],
               json.dumps("重复值", ensure_ascii=False), "dup_probe",
               base["valid_from_basis"], "dup_probe")
@@ -174,16 +262,25 @@ def uniqueness_probe(prod):
     return {"rejected": False, "constraint": None}
 
 
-def consistency(prod, sbx):
+def consistency(prod, sbx, tenant=SELFTEST_TENANT):
     """facts_current 与 stg_devices 在「当前值」上必须逐键一致。
 
     两套真相并存在**历史维度**（源端口径的现在 vs 我方口径的当时），
     但在**当前维度**必须一样——不一样就是 bug，不是设计。
     这一条是从根上防「两套真相打架」：只靠人去记得核对，迟早会漏。
+
+    `orphaned_entities` 补的是第三个维度：**实体还在不在**。前两个维度只比
+    「两边都有的键」，于是设备被删掉之后，facts 里那条当前值永远不会被拉进比较，
+    也就永远不会红——而这恰好是 L1 最该回答的问题：这台设备现在还算不算数。
+    第一版把这种情况只塞进 `extra_in_facts` 一个数字里，而调用方不判红。
     """
-    live = sbx.execute("SELECT * FROM stg_devices ORDER BY device_id").fetchall()
+    live = sbx.execute(
+        "SELECT device_id, " + ", ".join(FACT_KEYS) +
+        " FROM stg_devices ORDER BY device_id").fetchall()
     facts = {(r["entity_id"], r["fact_key"]): r["value"] for r in prod.execute(
-        "SELECT entity_id, fact_key, value FROM facts.device_fact_current").fetchall()}
+        "SELECT entity_id, fact_key, value FROM facts.device_fact_current "
+        "WHERE tenant = %s", (tenant,)).fetchall()}
+    live_entities = {r["device_id"] for r in live}
     checked, bad = 0, []
     live_keys = set()
     for r in live:
@@ -195,33 +292,40 @@ def consistency(prod, sbx):
             if facts.get(key) != want:
                 bad.append({"device_id": r["device_id"], "fact_key": k,
                             "stg": want, "facts": facts.get(key)})
-    # 反向：facts 里有、当前值表里没有的键（设备已经不在上游了）。
-    # 不判红——那可能是刻意的保留；但要报数，不能装作没看见。
+    # 反向：facts 里有、当前值表里没有的键。设备已经不在上游了——可能是刻意的保留，
+    # 但「当前值」这个视图不能替它继续声称有效。
     extra = [f"{k[0]}.{k[1]}" for k in facts if k not in live_keys]
-    return {"checked": checked, "mismatched": bad, "extra_in_facts": extra}
+    orphaned = sorted({str(k[0]) for k in facts if k[0] not in live_entities})
+    return {"checked": checked, "mismatched": bad, "extra_in_facts": extra,
+            "orphaned_entities": orphaned}
 
 
-def survives_reset(prod, sbx, restore):
+def survives_reset(prod, sbx, restore, tenant=SELFTEST_TENANT):
     """沙箱被 TRUNCATE 之后，历史还在不在。
 
     这是「facts 不放沙箱」唯一能证明的方式：真的清一次，再查一次。
-    讲道理不算证据——检查脚本本来就每轮 TRUNCATE。
+    讲道理不算证据——检查脚本本来就每轮 TRUNCATE 沙箱。
+
+    注意这条只证明「沙箱那一下没有波及主库」。它**不能**证明「主库没被别的动作
+    清掉」，因为主库被清是同一个脚本在更早的位置做的。第一版就在这个位置上
+    宣布「历史存活 ✅」，而三行之前它刚把主库 TRUNCATE 过。
     """
-    before = count_rows(prod)
+    before = count_rows(prod, tenant)
     sbx.execute("TRUNCATE stg_devices")
     sbx.commit()
     audit = sbx.execute("SELECT count(*) AS n FROM stg_devices").fetchone()["n"]
-    after = count_rows(prod)
+    after = count_rows(prod, tenant)
     load_devices(sbx, restore)       # 恢复成与 facts 一致的状态，别的检查块之后还要用它
     return {"facts_before": before, "facts_after": after,
             "sandbox_rows_after_truncate": audit, "restored_rows": len(restore)}
 
 
-def version_chain(prod, entity_id, fact_key):
+def version_chain(prod, entity_id, fact_key, tenant=SELFTEST_TENANT):
     """某个键的版本链：从最老到最新，每行给出有效区间与被谁取代。"""
     rows = prod.execute(
         "SELECT id, value, valid_from, valid_to, supersedes FROM facts.device_fact "
-        "WHERE entity_id = %s AND fact_key = %s ORDER BY id", (entity_id, fact_key)).fetchall()
+        "WHERE tenant = %s AND entity_id = %s AND fact_key = %s ORDER BY id",
+        (tenant, entity_id, fact_key)).fetchall()
     return [
         {"id": r["id"], "value": r["value"],
          "valid_from": r["valid_from"].strftime("%Y-%m-%d %H:%M:%S"),
@@ -233,29 +337,48 @@ def version_chain(prod, entity_id, fact_key):
 
 def main(argv=None) -> int:
     json_out = ""
+    seed_prod = False
     for arg in (argv if argv is not None else sys.argv[1:]):
         if arg.startswith("--json="):
             json_out = arg.split("=", 1)[1]
+        elif arg == "--seed-prod":
+            seed_prod = True
 
     log = []
     with psycopg.connect(PROD_DSN, row_factory=dict_row, autocommit=True) as prod, \
             psycopg.connect(SBX_DSN, row_factory=dict_row, autocommit=True) as sbx:
         ensure_schema(prod)
-        reset_facts(prod)
+
+        if seed_prod:
+            # 手动入口：把 BASE 当作生产租户的首次导入，之后巡检只读它、绝不再写。
+            # 幂等——重复跑是 0 关 0 开。它不在 data_health 的调用路径里，
+            # 只能人手执行一次；自动化永远走不到这个分支。
+            load_devices(sbx, BASE)
+            plan = sync(prod, sbx, tenant=PROD_TENANT, source="initial_load")
+            print(f"生产租户 {PROD_TENANT} 初始化：开 {len(plan['opens'])} 条、"
+                  f"关 {len(plan['closes'])} 条，现有 {count_rows(prod, PROD_TENANT)} 行")
+            return 0
+
+        # 生产租户在验收开始前的行数。整段跑完再数一次，两个数相等才叫「没伸手进去」。
+        # 这条判据测的不是代码逻辑，是**验收动作本身的副作用**——上一版栽在这儿：
+        # 脚本先 TRUNCATE 主库，三条语句之后用「沙箱清空后 36→36」宣布历史存活。
+        prod_before = count_rows(prod, PROD_TENANT)
+        # 只清验收租户的起点（七步必须从空表开始）。生产租户在这里一个字都不写。
+        dropped, cross_refs = reset_tenant(prod, SELFTEST_TENANT)
         load_devices(sbx, BASE)
 
         def step(label, rows=None, source=SOURCE):
             if rows is not None:
                 load_devices(sbx, rows)
-            plan = sync(prod, sbx, source=source)
+            plan = sync(prod, sbx, tenant=SELFTEST_TENANT, source=source)
             entry = {
                 "name": label,
                 "closes": len(plan["closes"]),
                 "opens": len(plan["opens"]),
                 "noops": len(plan["noops"]),
                 "uncovered": [f"{u['entity_id']}.{u['fact_key']}" for u in plan["uncovered"]],
-                "total_rows": count_rows(prod),
-                "current_rows": current_rows(prod),
+                "total_rows": count_rows(prod, SELFTEST_TENANT),
+                "current_rows": current_rows(prod, SELFTEST_TENANT),
                 "plan_issues": plan_issues(plan),
             }
             log.append(entry)
@@ -277,18 +400,129 @@ def main(argv=None) -> int:
         step("[4] 只给 CX-104 的两列（其余列在库里是 NULL：不许关旧值）", two_cols)
 
         # [5] 同键第二条当前值：数据库必须拒绝
-        uniq = uniqueness_probe(prod)
+        uniq = uniqueness_probe(prod, tenant=SELFTEST_TENANT)
 
         # [6] 当前值一致性（此时 [4] 把 stg_devices 变成了 1 台，先恢复）
         load_devices(sbx, changed)
-        cons = consistency(prod, sbx)
+        cons = consistency(prod, sbx, tenant=SELFTEST_TENANT)
 
         # [7] 沙箱重置后历史存活
-        surv = survives_reset(prod, sbx, changed)
+        surv = survives_reset(prod, sbx, changed, tenant=SELFTEST_TENANT)
 
-        chain = version_chain(prod, "CX-101", "line")
-        total = count_rows(prod)
-        cur = current_rows(prod)
+        # [9] 设备被上游删掉：L-1 判删（state.deleted_at 有值）+ 快照里没有 →
+        # facts 关而不开。这条如果缺，设备删了半年，事实层仍然认为它是当前状态，
+        # 而一致性检查只比「两边都还在的键」，永远报绿。
+        DELETED = "CX-105"
+        sbx.execute(
+            "INSERT INTO stg_device_state (device_id, deleted_at, deleted_reason) "
+            "VALUES (%s, now(), %s) "
+            "ON CONFLICT (device_id) DO UPDATE SET deleted_at = now(), "
+            "deleted_reason = EXCLUDED.deleted_reason",
+            (DELETED, "event:upstream_purge"))
+        sbx.execute("DELETE FROM stg_devices WHERE device_id = %s", (DELETED,))
+        sbx.commit()
+        plan_del = sync(prod, sbx, tenant=SELFTEST_TENANT, source="delete_check")
+        del_rows = prod.execute(
+            "SELECT fact_key, valid_to, close_reason FROM facts.device_fact "
+            "WHERE tenant = %s AND entity_id = %s ORDER BY fact_key",
+            (SELFTEST_TENANT, DELETED)).fetchall()
+        still_current = [r["fact_key"] for r in del_rows if r["valid_to"] is None]
+        closed_by_delete = [r for r in del_rows
+                            if (r["close_reason"] or "").startswith("deleted:")]
+        cur_view_rows = prod.execute(
+            "SELECT count(*) AS n FROM facts.device_fact_current "
+            "WHERE tenant = %s AND entity_id = %s",
+            (SELFTEST_TENANT, DELETED)).fetchone()["n"]
+        retire_ev = {
+            "entity_id": DELETED,
+            "retire_count": len(plan_del["retire"]),
+            "conflicts": plan_del["retire_conflicts"],
+            "rows": len(del_rows),
+            "still_current": still_current,
+            "closed_by_delete": len(closed_by_delete),
+            "closed_by_superseded": len([r for r in del_rows
+                                         if r["close_reason"] == "superseded"]),
+            "in_current_view": cur_view_rows,
+        }
+
+        # 恢复：撤掉删除状态、设备回补、再同步（应 7 开 0 关，值重新成为当前）。
+        # 这一下也顺手证明「删除是可撤销的」——与 L-1 的 revive 同一口径。
+        # 用 UPDATE 置空而不是 DELETE 行：这一行是 L-1 的状态记录，删了它等于替
+        # 删除同步抹掉一段状态，而且别的检查块之后还要用它。
+        sbx.execute(
+            "UPDATE stg_device_state SET deleted_at = NULL, deleted_reason = NULL "
+            "WHERE device_id = %s", (DELETED,))
+        sbx.commit()
+        load_devices(sbx, changed)
+        plan_back = sync(prod, sbx, tenant=SELFTEST_TENANT, source="delete_restore")
+        retire_ev["restore_opens"] = len(plan_back["opens"])
+        retire_ev["restore_closes"] = len(plan_back["closes"])
+
+        # [10] 多租户：同一个 entity_id 在两个租户下各有一条当前值，改一个不许碰另一个。
+        # 这一条测的是 `read_current` 那个 WHERE：不带租户过滤时，两个客户的 CX-101
+        # 会挤进同一个槽，plan 判成「改值」，于是按 id 关掉另一个客户的当前行——
+        # 唯一索引是 (tenant, entity_id, fact_key) 三列，跨租户不冲突、不报错。
+        OTHER = "fcheck_b"
+        _, other_cross = reset_tenant(prod, OTHER)
+        prod.execute(
+            "INSERT INTO facts.device_fact (tenant, entity_id, fact_key, value, value_hash, "
+            "valid_from, valid_from_basis, ingested_at, source) "
+            "VALUES (%s, 'CX-101', 'line', %s::jsonb, %s, now(), 'ingested', now(), %s)",
+            (OTHER, json.dumps("5号线", ensure_ascii=False), fact_hash("5号线"),
+             "tenant_probe"))
+        other_before = count_rows(prod, OTHER)
+        other_hash_before = prod.execute(
+            "SELECT value_hash FROM facts.device_fact_current WHERE tenant = %s "
+            "AND entity_id = 'CX-101' AND fact_key = 'line'", (OTHER,)).fetchone()
+        t2 = [dict(r) for r in changed]
+        for r in t2:
+            if r["device_id"] == "CX-102":
+                r["station"] = "9-9号工位"
+        load_devices(sbx, t2)
+        sync(prod, sbx, tenant=SELFTEST_TENANT, source="tenant_probe")
+        other_after = count_rows(prod, OTHER)
+        other_hash_after = prod.execute(
+            "SELECT value_hash FROM facts.device_fact_current WHERE tenant = %s "
+            "AND entity_id = 'CX-101' AND fact_key = 'line'", (OTHER,)).fetchone()
+        tenant_ev = {
+            "other_tenant": OTHER,
+            "other_rows_before": other_before,
+            "other_rows_after": other_after,
+            "other_hash_before": other_hash_before["value_hash"] if other_hash_before else None,
+            "other_hash_after": other_hash_after["value_hash"] if other_hash_after else None,
+            "untouched": (other_before == other_after == 1
+                          and other_hash_before is not None
+                          and other_hash_after is not None
+                          and other_hash_before["value_hash"] == other_hash_after["value_hash"]),
+        }
+
+        chain = version_chain(prod, "CX-101", "line", tenant=SELFTEST_TENANT)
+        total = count_rows(prod, SELFTEST_TENANT)
+        cur = current_rows(prod, SELFTEST_TENANT)
+
+        # [8] 生产租户有没有被这一轮碰到。这是 P0-1 的正面证据：不是「代码里
+        # 没写 TRUNCATE」，是真的数了前后两次行数，相等才叫没动。
+        prod_after = count_rows(prod, PROD_TENANT)
+        prod_span = prod.execute(
+            "SELECT min(valid_from) AS f, max(valid_from) AS l "
+            "FROM facts.device_fact WHERE tenant = %s", (PROD_TENANT,)).fetchone()
+        fmt = "%Y-%m-%d %H:%M:%S"
+        isolation = {
+            "prod_tenant": PROD_TENANT,
+            "prod_rows_before": prod_before,
+            "prod_rows_after": prod_after,
+            "unchanged": prod_before == prod_after,
+            # 生产租户的时间跨度。单看这一轮没用（可能本来就是空的），
+            # 但要留给下一轮比：最早一条的 valid_from 变新，就是老历史消失了。
+            "prod_first_valid_from": prod_span["f"].strftime(fmt) if prod_span["f"] else None,
+            "prod_last_valid_from": prod_span["l"].strftime(fmt) if prod_span["l"] else None,
+            "selftest_tenant": SELFTEST_TENANT,
+            "selftest_rows_cleared_at_start": dropped,
+            # 别的租户的行 supersedes 指向验收租户的行：只有一个解释——某个版本的
+            # 读路径漏了租户过滤，跨客户写了引用。正常应为 0。
+            "selftest_cross_tenant_refs": cross_refs,
+            "selftest_rows": total,
+        }
 
     print()
     print(f"{'步骤':<52} {'关闭':>4} {'新增':>4} {'不变':>4} {'总行':>5} {'当前':>5}")
@@ -312,13 +546,29 @@ def main(argv=None) -> int:
           f"（{uniq['constraint'] or '—'}）—— 拒不了就是装饰")
     print(f"当前值一致   {cons['checked']} 项比对，不符 {len(cons['mismatched'])} 项；"
           f"facts 多出 {len(cons['extra_in_facts'])} 键")
+    print(f"孤儿实体     {len(cons['orphaned_entities'])} 台在 facts 有当前值、但已经不在 stg_devices"
+          f"{'（' + '、'.join(cons['orphaned_entities']) + '）' if cons['orphaned_entities'] else ''}")
+    de = retire_ev
+    print(f"删除传导     {de['entity_id']} 判删 → 关 {de['closed_by_delete']} 条、"
+          f"当前值残留 {len(de['still_current'])} 条、视图里 {de['in_current_view']} 条；"
+          f"恢复后重开 {de.get('restore_opens')} 条")
+    tn = tenant_ev
+    print(f"多租户隔离   {tn['other_tenant']} 的 CX-101.line：{tn['other_rows_before']} → "
+          f"{tn['other_rows_after']} 行，值指纹 {'未变' if tn['untouched'] else '被改了'}")
     print(f"沙箱重置后   facts {surv['facts_before']} → {surv['facts_after']} 行"
           f"（沙箱清空后 {surv['sandbox_rows_after_truncate']} 行，已恢复 {surv['restored_rows']} 台）")
+    print(f"生产租户     {isolation['prod_tenant']} {isolation['prod_rows_before']} → "
+          f"{isolation['prod_rows_after']} 行"
+          f"（{'未动' if isolation['unchanged'] else '被验收动了'}）；"
+          f"验收只清 {isolation['selftest_tenant']}（本轮起点清掉 "
+          f"{isolation['selftest_rows_cleared_at_start']} 行）")
     print()
     print("第 [2] 步是关键：同一份值再同步必须 0 关 0 开，否则历史表会被自己的重复同步撑爆，")
     print("三个月后查起来全是「每天改了一次」的噪声，等于没有历史。")
     print("第 [5] 步是第二道：这条约束拒不了，代码里所有「只保留一条当前值」的说法都不成立。")
-    print("第 [7] 步回答「数据存哪里」：facts 在主库、检查清的是沙箱，历史不会被验证动作销毁。")
+    print("第 [7] 步回答「数据存哪里」：facts 在主库、检查清的是沙箱。")
+    print("第 [8] 步是这一层的护栏：验收只写自己的租户，生产租户行数前后必须相等——")
+    print("           上一版正是在这里自证清白的：先 TRUNCATE 主库，再报告「36 → 36 存活」。")
 
     issues = []
     for e in log:
@@ -328,8 +578,43 @@ def main(argv=None) -> int:
     if cons["mismatched"]:
         issues.append(f"facts_current 与 stg_devices 有 {len(cons['mismatched'])} 个键不一致"
                       "（两套真相在当前维度打架）")
+    if cons["orphaned_entities"]:
+        issues.append(f"{len(cons['orphaned_entities'])} 台设备已经不在 stg_devices，"
+                      f"但 facts_current 里仍有当前值（删除没传导到 L1）："
+                      f"{'、'.join(cons['orphaned_entities'])}")
     if surv["facts_after"] != surv["facts_before"]:
         issues.append("沙箱 TRUNCATE 把历史一起清掉了（facts 放错了库）")
+    if not de.get("retire_count"):
+        issues.append("设备被判删后没有产生任何关闭（删除没传导到事实层）")
+    if de.get("still_current"):
+        issues.append(f"{de['entity_id']} 已被判删，但 facts 仍有 "
+                      f"{len(de['still_current'])} 条当前值："
+                      f"{', '.join(de['still_current'])}")
+    if de.get("in_current_view"):
+        issues.append(f"{de['entity_id']} 已被判删，但仍出现在 device_fact_current"
+                      "（「当前设备清单」里还有它）")
+    if de.get("closed_by_delete") != de.get("retire_count"):
+        issues.append(
+            f"判删关闭数 {de.get('closed_by_delete')} 与计划 {de.get('retire_count')} 不一致"
+            "（有关闭没落地）")
+    if de.get("conflicts"):
+        issues.append(f"标了删除却仍在快照里（自相矛盾，L-1 判据未收敛）："
+                      f"{', '.join(de['conflicts'])}")
+    if not tenant_ev.get("untouched"):
+        issues.append(
+            f"多租户隔离失效：改 {SELFTEST_TENANT} 的当前值之后，"
+            f"{tenant_ev.get('other_tenant')} 的行数或值指纹变了"
+            "（read_current 少了租户过滤，同 ID 设备会跨客户改写）")
+    if isolation.get("selftest_cross_tenant_refs"):
+        issues.append(
+            f"发现 {isolation['selftest_cross_tenant_refs']} 条跨租户 supersedes 引用"
+            f"（别的租户的行指向 {SELFTEST_TENANT} 的行）：读路径曾经漏过租户过滤，"
+            "版本链已经跨客户了")
+    if not isolation["unchanged"]:
+        issues.append(
+            f"验收动到了生产租户（{isolation['prod_tenant']} "
+            f"{isolation['prod_rows_before']} → {isolation['prod_rows_after']} 行）："
+            "验收只能写自己的租户")
     if len(chain) != 2:
         issues.append(f"CX-101.line 版本链 {len(chain)} 行（改一次应恰好 2 行）")
     elif chain[0]["valid_to"] is None or chain[1]["supersedes"] != chain[0]["id"]:
@@ -342,11 +627,13 @@ def main(argv=None) -> int:
             "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "host_db": {"facts": "fde_rag", "current": "fde_sandbox"},
             "policy": {
-                "tenant": TENANT,
+                "tenant": SELFTEST_TENANT,
+                "prod_tenant": PROD_TENANT,
                 "fact_keys": list(FACT_KEYS),
                 "valid_from_basis": "ingested",
                 "note": ("valid_from 只能取同步时刻（到货），上游不提供生效时刻；"
-                         "两次快照之间的中间状态不可见"),
+                         "两次快照之间的中间状态不可见。验收只写 "
+                         f"{SELFTEST_TENANT}，生产 {PROD_TENANT} 只计数不清"),
             },
             "steps": log,
             "versioning": {
@@ -359,6 +646,9 @@ def main(argv=None) -> int:
             "uniqueness": uniq,
             "consistency": cons,
             "survives_sandbox_reset": surv,
+            "isolation": isolation,
+            "retirement": de,
+            "tenant_isolation": tenant_ev,
             "totals": {"rows": total, "current": cur},
             "issues": issues,
             "status": status,

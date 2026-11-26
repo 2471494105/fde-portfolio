@@ -37,6 +37,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS device_fact_unique_current
     ON facts.device_fact (tenant, entity_id, fact_key)
     WHERE valid_to IS NULL;
 
+-- 关闭原因：改值（superseded）与设备被删（deleted:<reason>）必须能分开。
+-- 不加这一列，「这台设备的历史为什么停在某一天」只能靠猜——而 L1 存在的意义就是不用猜。
+-- 用 ADD COLUMN IF NOT EXISTS 而不是改上面的 CREATE：表已经建过，改 CREATE 不会生效。
+ALTER TABLE facts.device_fact ADD COLUMN IF NOT EXISTS close_reason TEXT;
+
 -- 历史查询：某台设备某个属性的时间线
 CREATE INDEX IF NOT EXISTS device_fact_history
     ON facts.device_fact (tenant, entity_id, fact_key, valid_from DESC);

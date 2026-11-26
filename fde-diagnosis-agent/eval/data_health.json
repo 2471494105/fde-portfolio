@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 13:54:05",
+ "checked_at": "2026-11-26 14:23:21",
  "contract": {
-  "checked_at": "2026-11-26 13:54:04",
+  "checked_at": "2026-11-26 14:23:20",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 13:54:04",
+  "checked_at": "2026-11-26 14:23:19",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 13:54:04",
+  "checked_at": "2026-11-26 14:23:20",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -248,7 +248,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 13:54:04",
+  "checked_at": "2026-11-26 14:23:20",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -472,13 +472,14 @@
   "status": "ok"
  },
  "facts": {
-  "checked_at": "2026-11-26 13:54:05",
+  "checked_at": "2026-11-26 14:23:21",
   "host_db": {
    "facts": "fde_rag",
    "current": "fde_sandbox"
   },
   "policy": {
-   "tenant": "client_a",
+   "tenant": "fcheck",
+   "prod_tenant": "client_a",
    "fact_keys": [
     "line",
     "station",
@@ -489,7 +490,7 @@
     "maintenance_cycle_days"
    ],
    "valid_from_basis": "ingested",
-   "note": "valid_from 只能取同步时刻（到货），上游不提供生效时刻；两次快照之间的中间状态不可见"
+   "note": "valid_from 只能取同步时刻（到货），上游不提供生效时刻；两次快照之间的中间状态不可见。验收只写 fcheck，生产 client_a 只计数不清"
   },
   "steps": [
    {
@@ -573,18 +574,18 @@
    "fact_key": "line",
    "chain": [
     {
-     "id": 5,
+     "id": 1000,
      "value": "3号线",
-     "valid_from": "2026-11-26 13:54:05",
-     "valid_to": "2026-11-26 13:54:05",
+     "valid_from": "2026-11-26 14:23:20",
+     "valid_to": "2026-11-26 14:23:20",
      "supersedes": null
     },
     {
-     "id": 36,
+     "id": 1031,
      "value": "1号线B",
-     "valid_from": "2026-11-26 13:54:05",
+     "valid_from": "2026-11-26 14:23:20",
      "valid_to": null,
-     "supersedes": 5
+     "supersedes": 1000
     }
    ],
    "old_closed": true,
@@ -598,7 +599,8 @@
   "consistency": {
    "checked": 35,
    "mismatched": [],
-   "extra_in_facts": []
+   "extra_in_facts": [],
+   "orphaned_entities": []
   },
   "survives_sandbox_reset": {
    "facts_before": 36,
@@ -606,8 +608,40 @@
    "sandbox_rows_after_truncate": 0,
    "restored_rows": 5
   },
+  "isolation": {
+   "prod_tenant": "client_a",
+   "prod_rows_before": 35,
+   "prod_rows_after": 35,
+   "unchanged": true,
+   "prod_first_valid_from": "2026-11-26 14:15:35",
+   "prod_last_valid_from": "2026-11-26 14:15:35",
+   "selftest_tenant": "fcheck",
+   "selftest_rows_cleared_at_start": 44,
+   "selftest_cross_tenant_refs": 0,
+   "selftest_rows": 44
+  },
+  "retirement": {
+   "entity_id": "CX-105",
+   "retire_count": 7,
+   "conflicts": [],
+   "rows": 7,
+   "still_current": [],
+   "closed_by_delete": 7,
+   "closed_by_superseded": 0,
+   "in_current_view": 0,
+   "restore_opens": 7,
+   "restore_closes": 0
+  },
+  "tenant_isolation": {
+   "other_tenant": "fcheck_b",
+   "other_rows_before": 1,
+   "other_rows_after": 1,
+   "other_hash_before": "d687460a1b1f9d16",
+   "other_hash_after": "d687460a1b1f9d16",
+   "untouched": true
+  },
   "totals": {
-   "rows": 36,
+   "rows": 44,
    "current": 35
   },
   "issues": [],

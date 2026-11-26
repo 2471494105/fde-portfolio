@@ -342,6 +342,62 @@ class UnsupportedCheckTest(unittest.TestCase):
         self.assertIn("D1", r["problems"][0])
 
 
+class FieldFoldTest(unittest.TestCase):
+    """T17：状态之外的列（priority / 班组）也必须二选一——折法，或带理由地声明不可用。
+
+    这类字段最阴：数字比数字永远「能跑」，判错了也不报。所以要求不是「做对」，是「留下说法」。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = sp.load()
+
+    def test_both_clients_claim_every_judged_field(self):
+        self.assertEqual(sp.judged_fields(self.policy), ["priority", "maintenance_team_id"])
+        self.assertEqual(sp.field_fold_problems(self.policy), [])
+        self.assertEqual(sp.field_fold("client_b_odoo", self.policy)["priority"]["3"], "3")
+        b = sp.client("client_b_odoo", self.policy)
+        self.assertIn("maintenance_team_id", b["unsupported_columns"])
+        self.assertTrue(b["unsupported_columns_why"]["maintenance_team_id"].strip())
+
+    def test_silently_dropped_field_is_reported(self):
+        """既没折法也没声明不可用：下游按字面比，静默判错。必须报。"""
+        base = self.policy["clients"]["client_b_odoo"]
+        patched = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**base, "field_fold": {},
+                                          "unsupported_columns": [],
+                                          "unsupported_columns_why": {}}},
+        }
+        probs = sp.field_fold_problems(patched)
+        self.assertTrue(any("priority" in p and "既没折法" in p for p in probs), probs)
+        self.assertTrue(any("maintenance_team_id" in p and "既没折法" in p for p in probs), probs)
+
+    def test_unsupported_column_without_reason_is_reported(self):
+        """没有理由的「不可用」和「忘了做」看不出区别。"""
+        base = self.policy["clients"]["client_b_odoo"]
+        patched = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**base, "unsupported_columns_why": {}}},
+        }
+        self.assertTrue(any("没写理由" in p for p in sp.field_fold_problems(patched)))
+
+    def test_fold_key_outside_judged_fields_is_reported(self):
+        """折一张没人看的表，等于没折。"""
+        base = self.policy["clients"]["client_b_odoo"]
+        patched = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**base,
+                                          "field_fold": {**base["field_fold"],
+                                                         "state": {"done": "已完成"}}}},
+        }
+        self.assertTrue(any("'state'" in p and "judged_fields" in p
+                            for p in sp.field_fold_problems(patched)))
+
+
 class EntryBypassTest(unittest.TestCase):
     """T15：只许从 `run_check` 调实现——这条要用扫描守住，不能停在约定。
 

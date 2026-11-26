@@ -314,3 +314,57 @@ def check_problems(policy: dict | None = None) -> list[str]:
     if reg and not applies_any:
         out.append("所有登记客户都对每条判据声明了不适用：这条判据永远不跑，是装饰")
     return out
+
+
+# ---------- 字段面覆盖（T17）：状态之外的列，也得二选一 ----------
+
+def judged_fields(policy: dict | None = None) -> list[str]:
+    """参与判定/比较、但不归 vocab_fold 或判据词表管的字段（目前是 priority 与班组）。"""
+    return list((policy or load()).get("judged_fields") or [])
+
+
+def field_fold(name: str | None = None, policy: dict | None = None) -> dict:
+    """字段级折法：{字段: {客户值: 我方值}}。未登记客户照旧拒跑。"""
+    c = client(name, policy)
+    if not c.get("registered"):
+        raise PolicyNotRegistered(f"客户 {c.get('display_name') or name!r} 未登记，没有字段折法")
+    return dict(c.get("field_fold") or {})
+
+
+def field_fold_problems(policy: dict | None = None) -> list[str]:
+    """G 判据：字段面覆盖。空列表表示每个登记客户对每个被判字段都给了说法。
+
+    为什么需要它：`vocab_fold` 只管 state，`stage_id` 由判据的客户词表管，剩下的
+    `priority` / `maintenance_team_id` 一直没人管——下游拿它们做比较或分组时，按字面比，
+    不报错，只是静默判错。而这恰好是最难发现的一类：数字比数字永远「能跑」。
+
+    要求二选一：`field_fold`（折法）或 `unsupported_columns`（声明不可用）。后者必须带理由——
+    跟 `unsupported_checks` 同一个道理：没有理由的「不可用」和「忘了做」看不出区别。
+    """
+    p = policy or load()
+    fields = judged_fields(p)
+    out: list[str] = []
+    if not fields:
+        out.append("judged_fields 为空——字段面没有任何一格被盯着，等于这层判据不存在")
+    for name, c in sorted(p.get("clients", {}).items()):
+        if not c.get("registered"):
+            continue
+        fold = c.get("field_fold") or {}
+        unsupported = set(c.get("unsupported_columns") or [])
+        why = c.get("unsupported_columns_why") or {}
+        for f in fields:
+            if f in fold:
+                if not fold[f]:
+                    out.append(f"{name}：{f} 的折法是空表——等于没折，下游只能按字面比")
+            elif f in unsupported:
+                if not str(why.get(f) or "").strip():
+                    out.append(f"{name}：{f} 声明不可用却没写理由——与忘了做看不出区别")
+            else:
+                out.append(f"{name}：{f} 既没折法也没声明不可用——下游会按字面比，静默判错")
+        for f in fold:
+            if f not in fields:
+                out.append(f"{name}：field_fold 里有 {f!r}，但它不在 judged_fields 里"
+                           "（要么登记漏了，要么折了一张没人看的表）")
+        for f in sorted(unsupported - set(fields)):
+            out.append(f"{name}：unsupported_columns 里的 {f!r} 不在 judged_fields 里")
+    return out

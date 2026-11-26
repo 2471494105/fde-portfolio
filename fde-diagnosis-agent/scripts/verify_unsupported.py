@@ -220,6 +220,52 @@ def main() -> int:
     print(f"  已合并 + 看板未关：{len(m['problems'])} 条（closed_order_labels 不含已合并）")
     chk("T16 已合并不算关单（否则红从 19 变 28）", m["problems"] == [], f"实得 {m['problems']}")
 
+    print("== T17 字段面：priority / 班组 必须二选一（折法，或带理由地声明不可用）")
+    chk("T17 现有策略 G 判据为空", sp.field_fold_problems(policy) == [],
+        note=str(sp.field_fold_problems(policy)))
+    a_fold = sp.field_fold("client_a", policy)
+    print(f"  client_a 折法：priority {sorted(a_fold['priority'])} / team {sorted(a_fold['maintenance_team_id'])}")
+
+    dropped = {
+        **policy,
+        "clients": {**policy["clients"],
+                    "client_b_odoo": {**policy["clients"]["client_b_odoo"],
+                                      "field_fold": {},
+                                      "unsupported_columns": [],
+                                      "unsupported_columns_why": {}}},
+    }
+    dp = sp.field_fold_problems(dropped)
+    for h in dp:
+        print("    · " + h)
+    chk("T17 两条都撤掉 → 两个字段都报", len(dp) == 2, f"实得 {len(dp)} 条")
+
+    no_reason = {
+        **policy,
+        "clients": {**policy["clients"],
+                    "client_b_odoo": {**policy["clients"]["client_b_odoo"],
+                                      "unsupported_columns_why": {}}},
+    }
+    chk("T17 声明不可用却没理由 → 报",
+        any("没写理由" in p for p in sp.field_fold_problems(no_reason)),
+        note=str(sp.field_fold_problems(no_reason)))
+
+    # 折法得对得上真数据：A 侧的观测值必须全在折法键里，否则折法只是纸面文章。
+    import psycopg
+
+    with psycopg.connect(DSN) as conn:
+        observed = {
+            "priority": {str(r[0]) for r in conn.execute(
+                "select distinct priority from public.biz_work_order").fetchall()},
+            "maintenance_team_id": {str(r[0]) for r in conn.execute(
+                "select distinct maintenance_team_id from public.biz_work_order").fetchall()},
+        }
+    for f, vals in observed.items():
+        print(f"  真库 {f} 观测值 {sorted(vals)}")
+        chk(f"T17 折法覆盖真库 {f} 的全部观测值",
+            vals == set(a_fold[f]), note=f"差集 {vals - set(a_fold[f])}")
+    chk("T17 折法是恒等（不偷偷改语义）",
+        all(a_fold[f][v] == v for f, vals in observed.items() for v in vals))
+
     print("\nRESULT:", "ALL PASS" if ok else "HAS FAIL")
     return 0 if ok else 1
 

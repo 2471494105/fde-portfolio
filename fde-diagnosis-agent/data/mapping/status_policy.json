@@ -1,5 +1,5 @@
 {
-  "version": "v3",
+  "version": "v4",
   "updated": "2026-11-26",
   "default_client": "client_a",
   "why": "状态集是契约的一个版本，不是字典。OPC UA FiniteStateMachineType 规定子类型不得增删 States/Transitions，所以换客户 = 换一版口径，必须登记、必须能拒跑。",
@@ -23,6 +23,19 @@
       },
       "priority_dropped": null,
       "unsupported_columns": [],
+      "field_fold": {
+        "priority": {
+          "0": "0",
+          "1": "1",
+          "2": "2",
+          "3": "3"
+        },
+        "maintenance_team_id": {
+          "TEAM-1": "TEAM-1",
+          "TEAM-2": "TEAM-2",
+          "TEAM-3": "TEAM-3"
+        }
+      },
       "source_of_truth": "mock_qms/reset.py + data/schema.sql 的 work_orders_open_key 部分唯一索引（同一口径，2026-11-26 起改为读本表；索引谓词因不可参数化仍留字面量，由 scripts/check_status_policy.py 盯漂移）",
       "stage_board_closed": [
         "已关闭"
@@ -57,6 +70,18 @@
       "unsupported_columns": [
         "maintenance_team_id"
       ],
+      "unsupported_columns_why": {
+        "maintenance_team_id": "Odoo 是 Many2one → maintenance.team 记录 id（required），默认值由 equipment 反推（_compute_maintenance_team_id）；我方是文本名 TEAM-n。没有对方的团队字典就没法映射，猜一个 id 只会让「归给哪个班组」静默错。登记为不可用。"
+      },
+      "field_fold": {
+        "priority": {
+          "0": "0",
+          "1": "1",
+          "2": "2",
+          "3": "3"
+        }
+      },
+      "field_fold_note": "Odoo 的 priority 是一手 Selection [('0','Very Low'),('1','Low'),('2','Normal'),('3','High')]（07_外部样本/odoo-maintenance-model.py:291），与我方 smallint 0–3 同为四档、数值同序。只做恒等折法，不声称标签语义等价——那要在真数据上对齐，目前没有。",
       "source_of_truth": "Odoo maintenance.request：闭环看 state + stage_id 看板阶段，与本项目三词无对应（07_外部样本/odoo-maintenance-model.py）",
       "note": "折法已登记（v2），不再按『所有词都当未闭环』去猜；保护集按 closed_states 反查。但『已合并』无对应（见 fold_gaps）、跨字段判据不适用（见 unsupported_checks），这两处是显式声明的损失，不是没发生。",
       "vocab_fold": {
@@ -97,6 +122,11 @@
     "已合并",
     "已取消"
   ],
+  "judged_fields": [
+    "priority",
+    "maintenance_team_id"
+  ],
+  "judged_fields_why": "参与判定/比较、但既不在 vocab_fold（state 专用）也不在判据词表（stage_id 由 requires_client_words 管）的那两个字段。每个登记客户必须对它们二选一：折法 field_fold，或者声明不适用 unsupported_columns + 理由。两条都不做，下游就会按字面比——不报错，只是悄悄判错。",
   "checks": {
     "work_order_state_stage_conflict": {
       "what": "业务说已关单（折成「已完成」/「已取消」）、看板阶段却还停在未关闭列 → 红。两套状态并存时，谁也不是权威，只能判「事实与状态对不上」。",
@@ -138,6 +168,11 @@
       "version": "v3",
       "date": "2026-11-26",
       "what": "T14：unsupported_checks 从「id+散文混在一个字符串」改成一串 id→理由的对象，加顶层 checks 登记表（what / reads / 看板词 / 落点），让「声明不适用」能被机器匹配、被 E 判据验证「真的没跑」。旧写法不再静默兼容：机器匹配不上就等于只有声明。"
+    },
+    {
+      "version": "v4",
+      "date": "2026-11-26",
+      "what": "T16+T17：看板关闭词 stage_board_closed 与「哪些闭环词算关单」closed_order_labels 显式登记（缺了抛 CheckNotConfigured，不许推）；新增 judged_fields（priority / maintenance_team_id）与 field_fold、unsupported_columns_why，要求每个登记客户对这两个字段二选一：折法，或者带理由地声明不可用。"
     }
   ]
 }

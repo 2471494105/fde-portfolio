@@ -185,6 +185,12 @@ def check_unsupported(policy: dict) -> dict:
     }
 
 
+def check_field_fold(policy: dict) -> dict:
+    """G：状态之外那两个被判字段（priority / 班组）必须二选一：折法，或带理由地声明不可用。"""
+    detail = sp.field_fold_problems(policy)
+    return {"status": "fail" if detail else "ok", "fields": sp.judged_fields(policy), "detail": detail}
+
+
 def check_entry_bypass(policy: dict) -> dict:
     """F：实现只许从 `run_check` 进去（AST 扫全仓库）。
 
@@ -221,6 +227,7 @@ def main(argv: list) -> int:
         "D_fold_completeness": check_fold(policy),
         "E_unsupported_checks": check_unsupported(policy),
         "F_check_entry_bypass": check_entry_bypass(policy),
+        "G_field_fold_coverage": check_field_fold(policy),
     }
     ok = all(c["status"] in ("ok", "skipped") for c in checks.values()) and any(
         c["status"] == "ok" for c in checks.values()

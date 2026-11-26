@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 12:25:16",
+ "checked_at": "2026-11-26 12:29:36",
  "contract": {
-  "checked_at": "2026-11-26 12:25:16",
+  "checked_at": "2026-11-26 12:29:36",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 12:25:16",
+  "checked_at": "2026-11-26 12:29:35",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 12:25:16",
+  "checked_at": "2026-11-26 12:29:35",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -161,12 +161,23 @@
   "unique_ids": 15,
   "duplicated": false,
   "quarantine_rows": 1,
-  "overlap": "1 day（第 [9] 步）",
+  "overlap": "1 天（第 [9] 步）",
+  "policy": {
+   "window_seconds": 86400,
+   "window_days": 1.0,
+   "mode": "按时间倒退（捞回主键更小的补录单）",
+   "basis": "没有运营依据，1 天只为把机制测出来"
+  },
+  "overlap_evidence": {
+   "leaked_without_window": 0,
+   "recovered_with_window": 1,
+   "probe_window_seconds": 2592000
+  },
   "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 12:25:16",
+  "checked_at": "2026-11-26 12:29:35",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [

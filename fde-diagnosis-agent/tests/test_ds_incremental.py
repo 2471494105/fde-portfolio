@@ -6,10 +6,15 @@
 水位是 (时间戳, 主键) 复合的，所以断言里连主键一起比。
 """
 
+import sys
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app.ds.incremental import plan
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import check_ds_incremental as cdd  # noqa: E402
 
 NOW = datetime(2026, 11, 25, 12, 0, 0)
 
@@ -140,6 +145,27 @@ class IncrementalPlanTest(unittest.TestCase):
         rows = [_r(9019, "2026-11-06 08:00:00")]
         self.assertEqual(plan(rows, mark, NOW, overlap=timedelta(0))[0], [])
         self.assertEqual(plan(rows, mark, NOW)[0], [])
+
+
+class OverlapPolicyTest(unittest.TestCase):
+    """报告里写出去的窗口必须等于代码真在用的那个。"""
+
+    def test_policy_matches_module_constant(self):
+        p = cdd.overlap_policy()
+        self.assertEqual(p["window_seconds"], int(cdd.OVERLAP_WINDOW.total_seconds()))
+        self.assertGreater(p["window_seconds"], 0)
+
+    def test_window_actually_recovers_the_leaked_row(self):
+        """窗口开着就必须真的多捞一条：这是判据的实证，不是声明。
+
+        不带窗口时主键更小的补录单会被判「已灌过」；带上窗口（只按时间比、
+        不比主键）它才回到候选里。
+        """
+        mark = (datetime(2026, 11, 6, 8, 0, 0), 9022)
+        rows = [_r(9019, "2026-11-06 08:00:00")]
+        self.assertEqual(plan(rows, mark, NOW)[0], [])            # 漏
+        self.assertEqual([r["id"] for r in plan(rows, mark, NOW, overlap=cdd.OVERLAP_WINDOW)[0]],
+                         [9019])                                   # 补
 
 
 if __name__ == "__main__":

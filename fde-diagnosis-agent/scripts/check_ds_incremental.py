@@ -108,6 +108,27 @@ def put_mark(conn, mark, seen):
         )
 
 
+# 重叠窗口取多大是运营口径：按时间倒退（怕迟到很久的补录）还是按行数倒退（怕大批量）。
+# 这里 1 天只为把机制测出来，**不是生产建议值**——理由与删除阈值同款，见契约第九节。
+OVERLAP_WINDOW = timedelta(days=1)
+# 探针专用窗口：证明「重叠区全是旧行时水位不倒退」。故意与上一值不同，它不是口径。
+PROBE_OVERLAP = timedelta(days=30)
+
+
+def overlap_policy():
+    """报告里写出去的窗口必须等于代码真在用的那个。
+
+    原来 JSON 里写死字符串 `"overlap": "1 day（第 [9] 步）"`：改常量时没人会记得
+    改这行字，读报告的人就按错窗口理解。现在由常量生成。
+    """
+    return {
+        "window_seconds": int(OVERLAP_WINDOW.total_seconds()),
+        "window_days": OVERLAP_WINDOW.total_seconds() / 86400,
+        "mode": "按时间倒退（捞回主键更小的补录单）",
+        "basis": "没有运营依据，1 天只为把机制测出来",
+    }
+
+
 def load(conn, rows, fail_after_insert=False, overlap=None):
     """返回 (本次新增条数, 水位, 本次隔离条数)。插入与水位推进同事务。
 
@@ -169,10 +190,6 @@ def main(argv=None) -> int:
         {"id": 9019, "ts": "2026-11-06 08:00:00", "device_id": "CX-101", "station": "2号工位", "defect_type": "划伤", "confidence": 0.84, "batch": "B20261106", "verdict": "NG", "is_actually_ok": False},
     ]
 
-    # 重叠窗口取多大是运营口径：按时间倒退（怕迟到很久的补录）还是按行数倒退
-    # （怕大批量）。这里固定 1 天只为把机制测出来，不代表生产建议值。
-    OVERLAP = timedelta(days=1)
-
     log = []
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
         reset(conn)
@@ -208,10 +225,11 @@ def main(argv=None) -> int:
         n, m, f = load(conn, rows4 + same_ts + late_small)
         log.append(("[8] 同时间戳 + 更小主键（不带窗口，预期漏 1）", n, f, count_rows(conn), m))
 
-        n, m, f = load(conn, rows4 + same_ts + late_small, overlap=OVERLAP)
-        log.append(("[9] 开 1 天重叠窗口重跑（应补上那 1 条）", n, f, count_rows(conn), m))
+        n, m, f = load(conn, rows4 + same_ts + late_small, overlap=OVERLAP_WINDOW)
+        log.append((f"[9] 开 {OVERLAP_WINDOW.total_seconds() / 86400:g} 天重叠窗口重跑"
+                    f"（应补上那 1 条）", n, f, count_rows(conn), m))
 
-        n, m, f = load(conn, BASE, overlap=timedelta(days=30))
+        n, m, f = load(conn, BASE, overlap=PROBE_OVERLAP)
         log.append(("[10] 重叠区全是旧行（应 0 且水位不倒退）", n, f, count_rows(conn), m))
 
         with conn.cursor() as cur:
@@ -251,7 +269,15 @@ def main(argv=None) -> int:
             "unique_ids": r["uniq"],
             "duplicated": r["total"] != r["uniq"],
             "quarantine_rows": q,
-            "overlap": "1 day（第 [9] 步）",
+            "overlap": f"{overlap_policy()['window_days']:g} 天（第 [9] 步）",
+            "policy": overlap_policy(),
+            # 交叉验证的实证：不带窗口漏几条、带窗口补几条。数字来自实跑，
+            # 不是声明——窗口若被改成 0 或写错，这两个数会相等，判据立刻红。
+            "overlap_evidence": {
+                "leaked_without_window": log[7][1],     # [8]
+                "recovered_with_window": log[8][1],     # [9]
+                "probe_window_seconds": int(PROBE_OVERLAP.total_seconds()),
+            },
             "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；"
                          "给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
             "status": "ok" if r["total"] == r["uniq"] else "fail",

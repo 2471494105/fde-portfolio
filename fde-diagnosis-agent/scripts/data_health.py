@@ -107,6 +107,14 @@ def main() -> int:
         issues.append("增量检查没跑起来")
     elif i.get("status") != "ok":
         issues.append("增量装载出现重复 id（落库幂等失效）")
+    # 重叠窗口不能只有声明：policy 说开着，[9] 步就必须真的比 [8] 多捞回来一条
+    if i.get("status") == "ok":
+        p = i.get("policy") or {}
+        ev = i.get("overlap_evidence") or {}
+        if not p.get("window_seconds"):
+            issues.append("增量没带重叠窗口口径（policy 缺失或窗口为 0，报告里的窗口没有来源）")
+        elif (ev.get("recovered_with_window") or 0) <= (ev.get("leaked_without_window") or 0):
+            issues.append("重叠窗口没把漏掉的那条补回来（宣称开着但没生效）")
     if d.get("status") == "error":
         issues.append("删除同步检查没跑起来")
     elif d.get("status") != "ok":

@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:20:58",
+ "checked_at": "2026-11-26 11:28:46",
  "contract": {
-  "checked_at": "2026-11-26 11:20:58",
+  "checked_at": "2026-11-26 11:28:46",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:20:58",
+  "checked_at": "2026-11-26 11:28:45",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:20:58",
+  "checked_at": "2026-11-26 11:28:45",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,7 +166,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:20:58",
+  "checked_at": "2026-11-26 11:28:45",
   "db": "fde_sandbox",
   "steps": [
    {

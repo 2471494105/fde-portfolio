@@ -15,8 +15,11 @@
   C 未登记客户必须拒跑       —— 反例自证：它得抛 `PolicyNotRegistered`，不抛就红
   D 折法完整性（K-5）        —— 登记了词表就要说清每个词折成我方哪一态；
                                 我方基准词在这家客户身上没有落点的，必须在 fold_gaps_states 认领
+  E 不适用声明（T14）        —— `unsupported_checks` 的 id 必须在 `checks` 登记表里，
+                                而且真跑一遍入口：声明不适用的必须 `ran=False`，
+                                没声明的必须 `ran=True`（「被静默跳过」也要报）
 
-判据 B 需要连库；`--skip-db` 只跑 A/C/D。连不上库时状态是 `skipped`，**不是绿**。
+判据 B 需要连库；`--skip-db` 只跑 A/C/D/E。连不上库时状态是 `skipped`，**不是绿**。
 B 的观测面默认是 `fde_rag.work_orders`（本家库）；换客户时用 `--dsn=` 与 `--table=`
 把它指到客户库，否则「查的是自己家的词、说的是客户家的事」。
 
@@ -140,6 +143,48 @@ def check_fold(policy: dict) -> dict:
     }
 
 
+def check_unsupported(policy: dict) -> dict:
+    """E：`unsupported_checks` 不能只是一句话，要能被机器对上。
+
+    两层：
+      静 —— id 是否都在 `checks` 登记表里、有没有写理由、是不是所有客户都把它关掉了；
+      动 —— 真调一次 `run_check`：声明不适用的必须 `ran=False` 且 `not_applicable`，
+            没声明的必须 `ran=True`。**「声明了但还在跑」和「没声明却被跳过」都报。**
+    动的这一层是这条判据的全部意义：静态对账只能证明「字对上了」，证明不了「没跑」。
+    """
+    from app.ds import checks as ck
+
+    detail = list(sp.check_problems(policy))
+    checked = []
+    for name, c in sorted(policy["clients"].items()):
+        if not c.get("registered"):
+            continue
+        declared = c.get("unsupported_checks") or {}
+        if isinstance(declared, list):
+            continue  # 已在静态那层报过「旧写法」
+        for cid in sorted(sp.checks_registry(policy)):
+            checked.append(f"{name}/{cid}")
+            try:
+                r = ck.run_check(cid, rows=[], name=name, policy=policy)
+            except Exception as e:
+                detail.append(f"{name}/{cid}：入口抛 {type(e).__name__}——{e}")
+                continue
+            if cid in declared:
+                if r.get("ran") or r.get("status") != "not_applicable":
+                    detail.append(
+                        f"{name}/{cid}：声明不适用，但入口仍然跑了（ran={r.get('ran')}、"
+                        f"status={r.get('status')}）——声明没落到代码里，每天会造一批假红")
+            elif not r.get("ran"):
+                detail.append(
+                    f"{name}/{cid}：没声明不适用，入口却没跑（status={r.get('status')}）"
+                    "——判据被静默跳过，比跑错更难发现")
+    return {
+        "status": "fail" if detail else "ok",
+        "checked": checked,
+        "detail": detail,
+    }
+
+
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
@@ -162,6 +207,7 @@ def main(argv: list) -> int:
         if skip_db else check_db_states(policy, dsn, table),
         "C_unregistered_client_refuses": check_unregistered_refuses(policy),
         "D_fold_completeness": check_fold(policy),
+        "E_unsupported_checks": check_unsupported(policy),
     }
     ok = all(c["status"] in ("ok", "skipped") for c in checks.values()) and any(
         c["status"] == "ok" for c in checks.values()

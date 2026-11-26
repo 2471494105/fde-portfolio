@@ -208,3 +208,95 @@ def fold_problems(name: str | None = None, policy: dict | None = None) -> list[s
     for s in sorted(declared_gaps - set(canonical)):
         out.append(f"fold_gaps_states 里的 {s!r} 不在我方基准词表里（认领错了对象）")
     return out
+
+
+# ---------- 「不适用」判据（T14）：说过的话，要能被机器对上 ----------
+
+class UnknownCheck(KeyError):
+    """判据 id 不在顶层 `checks` 登记表里。
+
+    声明一个登记表里没有的 id，跟写一句「这条对你不适用」的散文没区别：
+    没人能兑现它，判据也没法验证它真的没跑。
+    """
+
+
+def checks_registry(policy: dict | None = None) -> dict:
+    """顶层判据登记表：id → what / reads / enforced_where / 判据用到的词表。"""
+    return dict((policy or load()).get("checks") or {})
+
+
+def unsupported_checks(name: str | None = None, policy: dict | None = None) -> dict:
+    """客户声明「这条判据对我这不适用」：id → 理由。
+
+    v2 的写法把 id 和散文塞进同一个字符串（`"xxx（我方…）：理由…"`），机器根本匹配不上——
+    那种「声明」在机器眼里等于零，只能靠人朗读。所以旧写法**显式拒绝**，不做静默兼容：
+    兼容等于把「只有声明」的旧状态再养一遍。
+    """
+    c = client(name, policy)
+    if not c.get("registered"):
+        raise PolicyNotRegistered(f"客户 {c.get('display_name') or name!r} 未登记，谈不上哪条判据不适用")
+    raw = c.get("unsupported_checks") or {}
+    if isinstance(raw, list):
+        raise PolicyNotRegistered(
+            f"客户 {c.get('display_name') or name!r} 的 unsupported_checks 还是 v2 的字符串数组，"
+            "id 与理由混在一起无法机器匹配——改成 {check_id: 理由}"
+        )
+    return dict(raw)
+
+
+def check_applies(check_id: str, name: str | None = None, policy: dict | None = None) -> bool:
+    """这条判据对这家客户适不适用。判据 id 本身必须已登记。"""
+    p = policy or load()
+    if check_id not in checks_registry(p):
+        raise UnknownCheck(f"判据 {check_id!r} 没登记在 {POLICY_PATH} 的 checks 里")
+    return check_id not in unsupported_checks(name, p)
+
+
+def check_problems(policy: dict | None = None) -> list[str]:
+    """E 判据：声明与登记必须对得上，且「不适用」不许把判据整体架空。
+
+    报六类：
+      1. `checks` 登记表为空 —— 那就没有 id 可匹配，`unsupported_checks` 退化成散文；
+      2. 某条登记判据缺 what / reads / enforced_where —— 说不出它读什么、在哪跑；
+      3. 登记了但 `app/ds/checks.py` 里没有实现 —— 永远不会判出任何东西；
+      4. 客户声明了一个登记表里不存在的 id —— 声明了一句没人能兑现的话；
+      5. 声明了却不写理由 —— 与「随手关掉」没有区别；
+      6. 全部客户都对同一条判据声明不适用 —— 它永远不会运行，是装饰。
+    """
+    p = policy or load()
+    reg = checks_registry(p)
+    out: list[str] = []
+    if not reg:
+        out.append("checks 登记表为空——unsupported_checks 无从机器匹配，等于只有声明")
+    for cid, spec in reg.items():
+        for k in ("what", "reads", "enforced_where"):
+            if not spec.get(k):
+                out.append(f"判据 {cid!r} 缺 {k}：说不出它做什么、读什么、在哪跑")
+    # 登记了却没人实现：它永远不会判出任何东西，跟「被声明关掉」是两回事，但同样安静。
+    from . import checks as _ck  # 延迟导入，避免模块循环
+
+    implemented = _ck.runners()
+    for cid in reg:
+        if cid not in implemented:
+            out.append(f"判据 {cid!r} 登记了但 app/ds/checks.py 里没有实现——永远不会判出任何东西")
+    applies_any: set[str] = set()
+    for name, c in sorted(p.get("clients", {}).items()):
+        if not c.get("registered"):
+            continue
+        raw = c.get("unsupported_checks") or {}
+        if isinstance(raw, list):
+            out.append(f"{name}：unsupported_checks 仍是 v2 字符串数组（id 与理由混在一起，无法机器匹配）")
+            continue
+        for cid, reason in sorted(raw.items()):
+            if cid not in reg:
+                out.append(f"{name} 声明 {cid!r} 不适用，但 checks 登记表里没有这个 id——"
+                           "声明了一个没人能兑现的判据")
+            if not str(reason or "").strip():
+                out.append(f"{name} 声明 {cid!r} 不适用却没写理由——与随手关掉没区别")
+        applies = set(reg) - set(raw)
+        if reg and not applies:
+            out.append(f"{name} 把所有登记判据都声明不适用——这家客户身上没有任何一条判据在跑")
+        applies_any |= applies
+    if reg and not applies_any:
+        out.append("所有登记客户都对每条判据声明了不适用：这条判据永远不跑，是装饰")
+    return out

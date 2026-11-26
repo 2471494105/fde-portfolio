@@ -1,5 +1,5 @@
 {
-  "version": "v2",
+  "version": "v3",
   "updated": "2026-11-26",
   "default_client": "client_a",
   "why": "状态集是契约的一个版本，不是字典。OPC UA FiniteStateMachineType 规定子类型不得增删 States/Transitions，所以换客户 = 换一版口径，必须登记、必须能拒跑。",
@@ -66,9 +66,9 @@
       "fold_gaps": [
         "「已合并」在 Odoo 词表里没有对应：合并动作在对方表现为 done + 看板归档，所以这一桶在 B 侧为空，合并事实折进 done。代价是『合并』这一层语义在 B 客户身上丢失，我方按『已完成』处理——不影响闭环判断，影响的是『同一问题被并到别的单』这类追溯。"
       ],
-      "unsupported_checks": [
-        "work_order_state_stage_conflict（我方『已完成但看板未关闭』）：Odoo 的 stage_id 是看板列不是终态，两者不该互判，这条判据对 B 不适用；强行套会每天造出一批假红。"
-      ],
+      "unsupported_checks": {
+        "work_order_state_stage_conflict": "Odoo 的 stage_id 是看板列（可随手拖动），不是终态；拿它判「已完成但看板未关闭」等于每天造一批假红。对 B 不适用，显式声明，由 E 判据验证「真的没跑」。"
+      },
       "fold_gaps_states": [
         "已合并"
       ]
@@ -94,6 +94,32 @@
     "已合并",
     "已取消"
   ],
+  "checks": {
+    "work_order_state_stage_conflict": {
+      "what": "业务说已关单（折成「已完成」）、看板阶段却还停在未关闭列 → 红。两套状态并存时，谁也不是权威，只能判「事实与状态对不上」。",
+      "reads": [
+        "state",
+        "stage_id"
+      ],
+      "board_closed_states": [
+        "已关闭"
+      ],
+      "closed_labels": [
+        "已完成",
+        "已取消"
+      ],
+      "enforced_where": "app/ds/checks.py::work_order_state_stage_conflict（唯一入口 run_check，先过 check_applies）",
+      "counterpart": "mock-mes/api/static/index.html 的 work_orders.flag（行内红标「关单未关板」）"
+    },
+    "status_vocabulary_coverage": {
+      "what": "库里出现的状态词必须都在闭环或已知未闭环里；冒出一个不认识的词 → 红。它只问「这个词我认识吗」，与版面/看板无关，所以对每一家客户都适用。",
+      "reads": [
+        "state"
+      ],
+      "enforced_where": "app/ds/checks.py::status_vocabulary_coverage（同一入口）",
+      "counterpart": "scripts/check_status_policy.py 的 B 判据（同一口径，B 连库取数、这里吃喂进来的 rows）"
+    }
+  },
   "change_log": [
     {
       "version": "v1",
@@ -104,6 +130,11 @@
       "version": "v2",
       "date": "2026-11-26",
       "what": "登记第二家客户 client_b_odoo（K-5）：补 vocab_fold 声明折法、canonical_states 定我方基准词，并加未登记占位 client_c_unregistered——C 判据需要一个活的反例，不能因为没有反例就把护栏当装饰"
+    },
+    {
+      "version": "v3",
+      "date": "2026-11-26",
+      "what": "T14：unsupported_checks 从「id+散文混在一个字符串」改成一串 id→理由的对象，加顶层 checks 登记表（what / reads / 看板词 / 落点），让「声明不适用」能被机器匹配、被 E 判据验证「真的没跑」。旧写法不再静默兼容：机器匹配不上就等于只有声明。"
     }
   ]
 }

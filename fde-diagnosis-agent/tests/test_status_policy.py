@@ -178,5 +178,125 @@ class FoldTest(unittest.TestCase):
         }))
 
 
+class UnsupportedCheckTest(unittest.TestCase):
+    """T14：声明「不适用」必须能被机器证明真的没跑。
+
+    这组测试守的不是「声明存在」，是「声明与执行一致」。静态对账只能证明字对上了；
+    能不能证明「没跑」，靠 `run_check` 返回的 `ran`。
+    """
+
+    CHECK = "work_order_state_stage_conflict"
+    COVER = "status_vocabulary_coverage"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = sp.load()
+        from app.ds import checks as ck
+        cls.ck = ck
+
+    def test_registry_has_both_checks_and_each_carries_a_place(self):
+        """每条判据都要说清做什么、读什么、在哪跑——否则「登记」只是起个名字。"""
+        reg = sp.checks_registry(self.policy)
+        self.assertIn(self.CHECK, reg)
+        self.assertIn(self.COVER, reg)
+        for cid, spec in reg.items():
+            for k in ("what", "reads", "enforced_where"):
+                self.assertTrue(spec.get(k), f"{cid} 缺 {k}")
+        self.assertEqual(sp.check_problems(self.policy), [])
+
+    def test_declaration_is_id_keyed_not_prose(self):
+        """id 必须能机器匹配；v2 那种 id+散文塞一个字符串的写法要显式拒绝，不做静默兼容。"""
+        d = sp.unsupported_checks("client_b_odoo", self.policy)
+        self.assertEqual(list(d), [self.CHECK])
+        self.assertTrue(d[self.CHECK].strip())
+        patched = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**self.policy["clients"]["client_b_odoo"],
+                                          "unsupported_checks": [self.CHECK + "（理由）"]}},
+        }
+        with self.assertRaises(sp.PolicyNotRegistered):
+            sp.unsupported_checks("client_b_odoo", patched)
+        self.assertTrue(any("v2 字符串数组" in p for p in sp.check_problems(patched)))
+
+    def test_check_applies_and_unknown_id_raises(self):
+        self.assertFalse(sp.check_applies(self.CHECK, "client_b_odoo", self.policy))
+        self.assertTrue(sp.check_applies(self.CHECK, "client_a", self.policy))
+        self.assertTrue(sp.check_applies(self.COVER, "client_b_odoo", self.policy))
+        with self.assertRaises(sp.UnknownCheck):
+            sp.check_applies("stage_conflict_v1", "client_b_odoo", self.policy)
+
+    def test_not_applicable_never_touches_rows(self):
+        """声明不适用的客户，入口要返回 ran=False + checked=0，而且不读数据（rows=None 也不崩）。"""
+        r = self.ck.run_check(self.CHECK, rows=None, name="client_b_odoo", policy=self.policy)
+        self.assertEqual(r["status"], "not_applicable")
+        self.assertFalse(r["ran"])
+        self.assertEqual(r["checked"], 0)
+        self.assertEqual(r["problems"], [])
+        self.assertTrue(r["reason"])
+
+    def test_applicable_client_really_runs_and_folds_words(self):
+        """适用时真跑：A 词与 B 词都要能被折法对上，判出同一件事。"""
+        rows = [
+            {"wo_no": "W1", "state": "已完成", "stage_id": "进行中"},
+            {"wo_no": "W2", "state": "已完成", "stage_id": "已关闭"},
+            {"wo_no": "W3", "state": "处理中", "stage_id": "进行中"},
+        ]
+        a = self.ck.run_check(self.CHECK, rows=rows, name="client_a", policy=self.policy)
+        self.assertTrue(a["ran"])
+        self.assertEqual(a["checked"], 3)
+        self.assertEqual(a["status"], "fail")
+        self.assertEqual([p.split("：")[0] for p in a["problems"]], ["W1"])
+
+        # 同一批事实换成 Odoo 词：done 折成「已完成」，红的是同一张单
+        b_rows = [{"wo_no": "W1", "state": "done", "stage_id": "进行中"},
+                  {"wo_no": "W2", "state": "done", "stage_id": "已关闭"}]
+        stripped = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**self.policy["clients"]["client_b_odoo"],
+                                          "unsupported_checks": {}}},
+        }
+        b = self.ck.run_check(self.CHECK, rows=b_rows, name="client_b_odoo", policy=stripped)
+        self.assertEqual(b["status"], "fail")
+        self.assertIn("done→已完成", b["problems"][0])
+
+    def test_coverage_check_flags_unknown_word_on_any_client(self):
+        """这条判据对所有客户都适用：它只问「这个词我认识吗」。它是 E 判据的对照组。"""
+        rows = [{"wo_no": "W1", "state": "rework"},
+                {"wo_no": "W2", "state": "draft"},        # B 的已知未闭环
+                {"wo_no": "W3", "state": "done"}]         # B 的闭环
+        r = self.ck.run_check(self.COVER, rows=rows, name="client_b_odoo", policy=self.policy)
+        self.assertTrue(r["ran"])
+        self.assertEqual(r["status"], "fail")
+        self.assertEqual(len(r["problems"]), 1)
+        self.assertIn("rework", r["problems"][0])
+
+    def test_every_client_must_keep_at_least_one_check_running(self):
+        """一家客户可以把某条判据声明不适用，但不该关到一条都不跑——那等于没人管。"""
+        all_off = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_b_odoo": {**self.policy["clients"]["client_b_odoo"],
+                                          "unsupported_checks": {
+                                              self.CHECK: "不适用", self.COVER: "也不适用"}}},
+        }
+        self.assertTrue(any("把所有登记判据都声明不适用" in p
+                            for p in sp.check_problems(all_off)))
+
+    def test_registered_but_unimplemented_check_is_reported(self):
+        """登记了没实现，等于永远不会判出东西——比「被关掉」更安静。"""
+        patched = {
+            **self.policy,
+            "checks": {**self.policy["checks"],
+                       "ghost_check": {"what": "只有名字", "reads": ["state"],
+                                       "enforced_where": "不存在"}},
+        }
+        self.assertTrue(any("ghost_check" in p and "没有实现" in p
+                            for p in sp.check_problems(patched)))
+        with self.assertRaises(sp.UnknownCheck):
+            self.ck.run_check("ghost_check", rows=[], policy=patched)
+
+
 if __name__ == "__main__":
     unittest.main()

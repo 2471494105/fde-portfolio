@@ -47,22 +47,36 @@ def _to_set(ids):
 
 
 def plan_deletes(local_ids, snapshot_ids, states=None, protected=None, events=None,
-                 threshold=ABSENT_CONFIRM, min_ratio=MIN_SNAPSHOT_RATIO):
+                 threshold=ABSENT_CONFIRM, min_ratio=MIN_SNAPSHOT_RATIO,
+                 snapshot_hashes=None):
     """返回 {"aborted": bool, "reason": str, "decisions": [ {...}, ... ]}。
 
-    local_ids    : 本地已装载的设备主键集合（落地表里存在的）
-    snapshot_ids : 这一次上游全量快照的主键集合
-    states       : {id: {"absent_count": int, "deleted": bool}} 本地已记的状态
-    protected    : 有未闭环引用的 id 集合，一律不删
-    events       : {id: reason} 上游明确下发的删除事件
+    local_ids       : 本地已装载的设备主键集合（落地表里存在的）
+    snapshot_ids    : 这一次上游全量快照的主键集合
+    states          : {id: {"absent_count": int, "deleted": bool, "content_hash": str}}
+    protected       : 有未闭环引用的 id 集合，一律不删
+    events          : {id: reason} 上游明确下发的删除事件
+    snapshot_hashes : {id: 本轮内容指纹}；不传则不做内容变更判定。
+                      指纹由我方算（不依赖上游给 hash），所以换了源也能用。
 
-    决策动作只有五种：mark_absent / soft_delete / revive / protect / noop。
+    决策动作六种：mark_absent / soft_delete / revive / protect / noop / resync。
+
+    ## 三个方向的分工
+
+    一张记录在客户系统里有三种遭遇：**新增、内容变更、删除**。三者不能靠一套判断兜住：
+
+    - 新增：只在快照里、本地没有 → 本函数**刻意不产生决策**。新增是增量路径的活，
+      这里若顺手 INSERT，两条路径会同时写同一张表，谁对谁错看不出来。
+    - 内容变更：在快照里、本地也有，但指纹不同 → `resync`（重灌这一条）。
+      判指纹而不是逐字段比：字段加一个，逐字段的逻辑就要跟着改一处，漏一处就静默不更新。
+    - 删除：不在快照里 → 缺席计数、软删（见上面的三条硬规则）。
     """
     local = _to_set(local_ids)
     snap = _to_set(snapshot_ids)
     states = states or {}
     protected = _to_set(protected)
     events = dict(events or {})
+    hashes = dict(snapshot_hashes or {})
 
     # 护栏一：快照骤降，整轮拒绝。这条比任何单行判断都重要。
     if local and len(snap) < len(local) * min_ratio:
@@ -88,13 +102,23 @@ def plan_deletes(local_ids, snapshot_ids, states=None, protected=None, events=No
         #    即使同时收到删除事件也不删——两个信号自相矛盾时选「不删」，
         #    因为删除不可逆，而矛盾下一次快照就可能自己消除。
         if did in snap:
+            new_hash = hashes.get(did)
             if ev:
                 decisions.append({"id": did, "action": "noop", "absent_count": 0,
                                   "reason": f"快照里仍有它，却又收到删除事件（event:{ev}），"
                                             "信号矛盾，本轮不删"})
             elif deleted or n:
                 decisions.append({"id": did, "action": "revive",
-                                  "reason": "重新出现在快照里", "absent_count": 0})
+                                  "reason": "重新出现在快照里", "absent_count": 0,
+                                  "content_hash": new_hash})
+            else:
+                # 在、也没被删过：唯一还该看的是内容变没变。
+                # 旧指纹读不到时不判「变了」——首次装载会把每一行都判成更新。
+                old_hash = (states.get(did) or {}).get("content_hash")
+                if content_changed(old_hash, new_hash):
+                    decisions.append({"id": did, "action": "resync", "absent_count": 0,
+                                      "content_hash": new_hash,
+                                      "reason": "内容指纹与上一轮不同，重灌这一条"})
             continue
 
         # 2. 有未闭环引用：不管是不在快照还是收到删除事件，都不删。

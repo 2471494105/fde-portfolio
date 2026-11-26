@@ -95,6 +95,42 @@ class PlanDeletesTest(unittest.TestCase):
         self.assertEqual(_acts(r), {"A": "revive"})
         self.assertEqual(r["decisions"][0]["absent_count"], 0)
 
+    def test_content_change_produces_resync(self):
+        """在快照里、本地也有、指纹变了：该重灌这一条，而不是当它没变。"""
+        r = plan_deletes({"A", "B"}, {"A", "B"},
+                         states={"A": {"content_hash": "h1"}},
+                         snapshot_hashes={"A": "h2", "B": "hx"})
+        self.assertEqual(_acts(r), {"A": "resync"})
+        self.assertEqual(r["decisions"][0]["content_hash"], "h2")
+
+    def test_same_hash_no_resync(self):
+        """指纹没变就不该重灌：否则每轮全量重写，增量退化成全量。"""
+        r = plan_deletes({"A", "B"}, {"A", "B"},
+                         states={"A": {"content_hash": "h1"}},
+                         snapshot_hashes={"A": "h1"})
+        self.assertEqual(r["decisions"], [])
+
+    def test_no_hash_means_no_update_judgement(self):
+        """不传指纹就完全不做更新判定，否则每个调用方都被迫先算 hash。"""
+        r = plan_deletes({"A", "B"}, {"A", "B"}, states={"A": {"content_hash": "h1"}})
+        self.assertEqual(r["decisions"], [])
+
+    def test_first_time_hash_is_baseline_not_change(self):
+        """本地没基线时只补基线，不判「改了」——否则首次同步会把每一行都重灌。"""
+        r = plan_deletes({"A", "B"}, {"A", "B"}, states={"A": {}}, snapshot_hashes={"A": "h1"})
+        self.assertEqual(r["decisions"], [])
+
+    def test_revive_carries_new_hash(self):
+        """复活时要把本轮指纹一并写回。
+
+        不写回就会拿着旧指纹继续比，下一轮立刻又判一次 resync——重灌一次接一次。
+        """
+        r = plan_deletes({"A", "B"}, {"A", "B"},
+                         states={"A": {"absent_count": 2, "deleted": True, "content_hash": "old"}},
+                         snapshot_hashes={"A": "new"})
+        self.assertEqual(_acts(r), {"A": "revive"})
+        self.assertEqual(r["decisions"][0]["content_hash"], "new")
+
     def test_content_changed(self):
         self.assertTrue(content_changed("h1", "h2"))
         self.assertFalse(content_changed("h1", "h1"))

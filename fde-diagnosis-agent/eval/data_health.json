@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:51:15",
+ "checked_at": "2026-11-26 11:57:44",
  "contract": {
-  "checked_at": "2026-11-26 11:51:15",
+  "checked_at": "2026-11-26 11:57:44",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:51:14",
+  "checked_at": "2026-11-26 11:57:44",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:51:14",
+  "checked_at": "2026-11-26 11:57:44",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,18 +166,20 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:51:14",
+  "checked_at": "2026-11-26 11:57:44",
   "db": "fde_sandbox",
   "steps": [
    {
     "name": "[1] 首轮全量 5 台（无水可删）",
     "aborted": false,
+    "added": 5,
     "actions": {},
     "live": 5
    },
    {
     "name": "[2] CX-105 第一次缺席（只记账，不删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "mark_absent": 1
     },
@@ -186,6 +188,7 @@
    {
     "name": "[3] CX-105 第二次缺席（判删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "soft_delete": 1
     },
@@ -194,6 +197,7 @@
    {
     "name": "[4] CX-105 回补（应复活）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "revive": 1
     },
@@ -202,6 +206,7 @@
    {
     "name": "[5] CX-104 下发删除事件（立刻软删，不等第二次）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "soft_delete": 1
     },
@@ -210,6 +215,7 @@
    {
     "name": "[6a] CX-103 缺席 1 次（被保护，转人工）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "protect": 1,
      "noop": 1
@@ -219,6 +225,7 @@
    {
     "name": "[6b] CX-103 缺席 2 次（仍不删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "protect": 1,
      "noop": 1
@@ -228,6 +235,7 @@
    {
     "name": "[6c] CX-103 缺席 3 次（仍不删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "protect": 1,
      "noop": 1
@@ -237,6 +245,7 @@
    {
     "name": "[6d] CX-105 缺席 1 次 + CX-103 回到快照（复活）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "revive": 1,
      "noop": 1,
@@ -247,12 +256,14 @@
    {
     "name": "[7] 快照骤降到 1 台（整轮拒绝，一条不删）",
     "aborted": true,
+    "added": 0,
     "actions": {},
     "live": 4
    },
    {
     "name": "[8] CX-101 仍在快照，却又收到删除事件（矛盾，不删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "noop": 2,
      "revive": 1
@@ -262,16 +273,53 @@
    {
     "name": "[9] CX-103 收到删除事件，但它有未闭环工单（转人工，不删）",
     "aborted": false,
+    "added": 0,
     "actions": {
      "protect": 1,
      "noop": 1
     },
     "live": 4
+   },
+   {
+    "name": "[10] CX-101 内容变了（line -> 1号线B）→ 重灌这一条",
+    "aborted": false,
+    "added": 0,
+    "actions": {
+     "resync": 1,
+     "revive": 1,
+     "noop": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[11] 同一份快照再跑（指纹没变）→ 不该重灌",
+    "aborted": false,
+    "added": 0,
+    "actions": {
+     "noop": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[12] 新增 CX-106 只在快照里 → 装载插入，决策层不决策",
+    "aborted": false,
+    "added": 1,
+    "actions": {
+     "noop": 1
+    },
+    "live": 5
    }
   ],
-  "live_devices": 4,
+  "live_devices": 5,
   "soft_deleted": 1,
-  "audit_rows": 18,
+  "audit_rows": 23,
+  "three_ways": {
+   "added": 6,
+   "added_baseline": 5,
+   "added_later": 1,
+   "updated": 1,
+   "deleted": 2
+  },
   "protected": [
    {
     "id": "CX-101",
@@ -281,7 +329,7 @@
    },
    {
     "id": "CX-103",
-    "absent_count": 1,
+    "absent_count": 0,
     "deleted": false,
     "marked": true
    }

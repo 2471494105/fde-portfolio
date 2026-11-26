@@ -23,7 +23,7 @@ from psycopg.rows import dict_row, tuple_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.ds.delete_sync import plan_deletes  # noqa: E402
+from app.ds.delete_sync import ABSENT_CONFIRM, MIN_SNAPSHOT_RATIO, plan_deletes  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 SQL = ROOT / "data" / "sandbox" / "delete_sync.sql"
@@ -137,6 +137,19 @@ def resync_cols(row):
     误删来源，比漏更新危险得多。所以这里按 key 是否存在判断，不看值。
     """
     return [k for k in CONTENT_COLS if k in row and k != "device_id"]
+
+
+def policy():
+    """本脚本实际在用的判定参数。
+
+    写进 JSON 而不是在 `guards` 里抄成散文：报告里的「阈值 2」必须是代码真在用的
+    那个 2。抄一份出去，改常量的时候没人会记得改那行字，读报告的人就会按旧口径判断。
+    """
+    return {
+        "absent_confirm": ABSENT_CONFIRM,
+        "min_snapshot_ratio": MIN_SNAPSHOT_RATIO,
+        "open_status_exclude": list(OPEN_STATUS_EXCLUDE),
+    }
 
 
 def row_hash(row):
@@ -398,10 +411,15 @@ def main(argv=None) -> int:
     print(f"活跃 {log[-1][3]} 台 / 软删 {soft} 台 / 审计 {audit} 条")
     # 骤降轮的证据只在中间态：后续 [8] 会把快照补回来、被删的设备复活，
     # 最终台数看不出护栏开没开。所以把那一刻单独打出来，别靠人翻中间行。
-    drop_step = next((x for x in log if x[0].startswith("[7]")), None)
-    if drop_step:
-        print(f"骤降轮 [7] 当时的活跃台数：{drop_step[3]} 台"
-              f"（正常模式应为 4；低于 4 说明护栏没拦住）")
+    drop_idx = next((i for i, x in enumerate(log) if x[0].startswith("[7]")), None)
+    if drop_idx is not None:
+        # 期望值不能写死台数——夹具加一台就错。判据是「整轮拒绝之后台数不该变」，
+        # 所以拿上一步的活跃台数当基准，这是与夹具长度无关的不变量。
+        prev_live = log[drop_idx - 1][3] if drop_idx else None
+        now_live = log[drop_idx][3]
+        verdict = "护栏生效" if prev_live == now_live else "护栏没拦住"
+        print(f"骤降轮 [7] 当时的活跃台数：{now_live} 台"
+              f"（应与上一步 {prev_live} 台相同；{verdict}）")
     print("被保护的那台（从 work_orders 反查未闭环工单）：", protected_rows)
     print(f"反查到的保护集：{protected_source}"
           f"（口径：status NOT IN {OPEN_STATUS_EXCLUDE}）")
@@ -450,7 +468,10 @@ def main(argv=None) -> int:
                 "rule": f"status NOT IN {list(OPEN_STATUS_EXCLUDE)}",
                 "ids": protected_source,
             },
-            "guards": ["首次缺席不删（阈值 2）", "快照骤降整轮拒绝（<50%）",
+            # 判定参数随产物走：报告里的阈值必须是代码真在用的那个值，不靠人抄
+            "policy": policy(),
+            "guards": [f"首次缺席不删（阈值 {ABSENT_CONFIRM}）",
+                       f"快照骤降整轮拒绝（<{MIN_SNAPSHOT_RATIO:.0%}）",
                        "未闭环引用不删（优先于删除事件）", "信号矛盾不删",
                        "重新出现即复活", "每次判定留审计"],
             "status": "ok",

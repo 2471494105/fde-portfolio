@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 12:08:53",
+ "checked_at": "2026-11-26 12:25:16",
  "contract": {
-  "checked_at": "2026-11-26 12:08:53",
+  "checked_at": "2026-11-26 12:25:16",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 12:08:52",
+  "checked_at": "2026-11-26 12:25:16",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 12:08:53",
+  "checked_at": "2026-11-26 12:25:16",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,7 +166,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 12:08:52",
+  "checked_at": "2026-11-26 12:25:16",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -368,6 +368,15 @@
     "CX-101",
     "CX-103",
     "CX-999"
+   ]
+  },
+  "policy": {
+   "absent_confirm": 2,
+   "min_snapshot_ratio": 0.5,
+   "open_status_exclude": [
+    "已完成",
+    "已合并",
+    "已取消"
    ]
   },
   "guards": [

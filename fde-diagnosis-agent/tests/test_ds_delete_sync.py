@@ -8,6 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
+import app.ds.delete_sync as ds
 from app.ds.delete_sync import content_changed, plan_deletes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -176,6 +177,33 @@ class HashColumnsTest(unittest.TestCase):
         self.assertEqual(cdd.resync_cols({"device_id": "A", "line": "1", "station": "宁波"}),
                          ["line", "station"])
         self.assertEqual(cdd.resync_cols({"device_id": "A"}), [])
+
+
+class PolicyTest(unittest.TestCase):
+    """报告里写出去的参数必须等于决策层真在用的默认值。
+
+    手抄一份阈值出去，改常量时没人会记得改那行字；读报告的人就按旧规则判断。
+    """
+
+    def test_policy_is_derived_from_constants(self):
+        p = cdd.policy()
+        self.assertEqual(p["absent_confirm"], ds.ABSENT_CONFIRM)
+        self.assertEqual(p["min_snapshot_ratio"], ds.MIN_SNAPSHOT_RATIO)
+        self.assertIn("已完成", p["open_status_exclude"])
+
+    def test_default_threshold_equals_policy_value(self):
+        """缺席次数到阈值-1 不删、到阈值才删——用 policy 的值验，不写死 2。
+
+        注意快照不能给空集：local 2 台、快照 0 台会先撞上骤降护栏（0 < 2×0.5），
+        整轮 aborted、decisions 为空，缺席计数根本没机会跑。
+        """
+        t = cdd.policy()["absent_confirm"]
+        self.assertEqual(
+            _acts(plan_deletes({"A", "B"}, {"B"}, states={"A": {"absent_count": t - 2}})),
+            {"A": "mark_absent"})
+        self.assertEqual(
+            _acts(plan_deletes({"A", "B"}, {"B"}, states={"A": {"absent_count": t - 1}})),
+            {"A": "soft_delete"})
 
 
 if __name__ == "__main__":

@@ -121,6 +121,14 @@ def main() -> int:
         hc = d.get("content_hash_cols") or {}
         if hc.get("missing"):
             issues.append(f"内容指纹没纳入 {'/'.join(hc['missing'])}（这些列变了不会触发重灌）")
+    # 判定参数必须随产物走：报告里的阈值若被人手写回旧值，读报告的人就按错的规则判断
+    if d.get("status") == "ok":
+        p = d.get("policy") or {}
+        guards = d.get("guards") or []
+        if not p.get("absent_confirm") or not p.get("min_snapshot_ratio"):
+            issues.append("删除同步没带判定参数（policy 缺失，报告里的阈值没有来源）")
+        elif guards and str(p["absent_confirm"]) not in guards[0]:
+            issues.append("护栏文案里的阈值与 policy 不一致（有人手写了旧值）")
     if q is None:
         # 表不存在和连不上库在 quarantine_report 里是同一个返回值（None），
         # 但两种都不能当成「隔离区是空的」——读不到不等于没有

@@ -1,0 +1,53 @@
+{
+  "client": "client_a",
+  "tables": [
+    {
+      "client": "client_a",
+      "table": "defect_logs",
+      "source": "E:\\fde工程师学习指南\\06_GitHub作品仓库\\fde-diagnosis-agent\\data\\sandbox\\from_client\\defect_records.csv",
+      "rows_scanned": 10,
+      "domains_checked": [
+        "captured_at",
+        "conf_pct",
+        "is_ok",
+        "judge"
+      ],
+      "findings": [
+        {
+          "column": "conf_pct",
+          "check": "range",
+          "severity": "yellow",
+          "message": "2/10 个值超出声明 [0,100]",
+          "samples": [
+            150.0,
+            -10.0
+          ]
+        }
+      ],
+      "status": "warn",
+      "exit": 0
+    },
+    {
+      "client": "client_a",
+      "table": "devices",
+      "source": "E:\\fde工程师学习指南\\06_GitHub作品仓库\\fde-diagnosis-agent\\data\\sandbox\\from_client\\equipment.csv",
+      "rows_scanned": 5,
+      "domains_checked": [
+        "equip_no",
+        "install_dt",
+        "maint_cycle"
+      ],
+      "findings": [
+        {
+          "column": "equip_no",
+          "check": "empty",
+          "severity": "note",
+          "message": "空值 1/5（声明允许空）",
+          "samples": []
+        }
+      ],
+      "status": "warn",
+      "exit": 0
+    }
+  ]
+}

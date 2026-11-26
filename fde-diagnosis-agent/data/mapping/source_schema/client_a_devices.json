@@ -35,5 +35,21 @@
       "name": "maint_cycle"
     }
   ],
-  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。"
+  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。",
+  "domains": {
+    "maint_cycle": {
+      "unit": "day",
+      "range": [
+        1,
+        3650
+      ]
+    },
+    "install_dt": {
+      "format": "%Y/%m/%d"
+    },
+    "equip_no": {
+      "allow_empty": true,
+      "note": "真实样本第一行 equip_no 为空，登记为允许空；空值交给断言层"
+    }
+  }
 }

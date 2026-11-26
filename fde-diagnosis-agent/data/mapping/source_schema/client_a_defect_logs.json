@@ -38,5 +38,31 @@
       "name": "is_ok"
     }
   ],
-  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。"
+  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。",
+  "domains": {
+    "conf_pct": {
+      "unit": "percent",
+      "range": [
+        0,
+        100
+      ],
+      "range_severity": "yellow",
+      "note": "真实样本第 5、6 行是 150 与 -10，属隔离区夹具（check_data_contract 需要它们触发断言），不是源端口径变化；整列量纲真变了（全列 ≤1）仍然判 breaking"
+    },
+    "captured_at": {
+      "format": "%Y/%m/%d %H:%M"
+    },
+    "judge": {
+      "enum": [
+        "NG",
+        "OK"
+      ]
+    },
+    "is_ok": {
+      "enum": [
+        "N",
+        "Y"
+      ]
+    }
+  }
 }

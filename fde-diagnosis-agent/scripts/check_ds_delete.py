@@ -69,10 +69,22 @@ def load_snapshot(conn, rows):
 
 def get_states(conn):
     rows = conn.execute(
-        "SELECT device_id, absent_count, deleted_at IS NOT NULL AS deleted FROM stg_device_state"
+        "SELECT device_id, absent_count, deleted_at IS NOT NULL AS deleted, protected "
+        "FROM stg_device_state"
     ).fetchall()
-    return {r["device_id"]: {"absent_count": r["absent_count"], "deleted": r["deleted"]}
+    return {r["device_id"]: {"absent_count": r["absent_count"], "deleted": r["deleted"],
+                             "protected": r["protected"]}
             for r in rows}
+
+
+def protected_ids(conn):
+    """库里的保护标记 ∪ 夹具。
+
+    保护不能只活在一个脚本常量里：常量改了、或者换成别的入口跑，保护就静默失效。
+    写进表之后，下一轮从表读，保护才跟着设备走。
+    """
+    rows = conn.execute("SELECT device_id FROM stg_device_state WHERE protected").fetchall()
+    return set(PROTECTED) | {r["device_id"] for r in rows}
 
 
 def local_ids(conn):
@@ -90,11 +102,17 @@ def apply(conn, result):
                          "deleted_reason = %s, updated_at = now() WHERE device_id = %s",
                          (n, d["reason"], did))
         elif a == "revive":
+            # 刻意不清 protected：保护的理由是「有未写完的工单」，设备重新出现并不
+            # 说明工单闭环了。自动解开会让保护名存实亡。
             conn.execute("UPDATE stg_device_state SET absent_count = 0, deleted_at = NULL, "
                          "deleted_reason = NULL, updated_at = now() WHERE device_id = %s", (did,))
-        elif a in ("mark_absent", "protect"):
+        elif a == "mark_absent":
             conn.execute("UPDATE stg_device_state SET absent_count = %s, updated_at = now() "
                          "WHERE device_id = %s", (n, did))
+        elif a == "protect":
+            # 把判定落到表里：否则「受保护」只活在脚本常量里，查库永远是空
+            conn.execute("UPDATE stg_device_state SET absent_count = %s, protected = true, "
+                         "updated_at = now() WHERE device_id = %s", (n, did))
         # noop：什么都不改
         conn.execute("INSERT INTO stg_delete_log (device_id, action, reason, absent_count) "
                      "VALUES (%s, %s, %s, %s)", (did, a, d["reason"], n))
@@ -114,7 +132,8 @@ def run_step(conn, label, snapshot, events=None, min_ratio=None):
     load_snapshot(conn, snapshot)
     kwargs = {} if min_ratio is None else {"min_ratio": min_ratio}
     result = plan_deletes(local_ids(conn), {r["device_id"] for r in snapshot},
-                          states=get_states(conn), protected=PROTECTED, events=events, **kwargs)
+                          states=get_states(conn), protected=protected_ids(conn),
+                          events=events, **kwargs)
     apply(conn, result)
     acts = {}
     for d in result["decisions"]:
@@ -166,6 +185,14 @@ def main(argv=None) -> int:
         log.append(run_step(conn, "[7] 快照骤降到 1 台（整轮拒绝，一条不删）", [BASE[0]],
                             min_ratio=min_ratio))
 
+        # 最后两组是「信号冲突」：这两步以前会直接删，是 11-26 下午补的
+        snap_no_104 = [r for r in BASE if r["device_id"] != "CX-104"]
+        log.append(run_step(conn, "[8] CX-101 仍在快照，却又收到删除事件（矛盾，不删）",
+                            snap_no_104, events={"CX-101": "upstream_purge"}))
+        snap_no_103_104 = [r for r in BASE if r["device_id"] not in ("CX-103", "CX-104")]
+        log.append(run_step(conn, "[9] CX-103 收到删除事件，但它有未闭环工单（转人工，不删）",
+                            snap_no_103_104, events={"CX-103": "upstream_purge"}))
+
         soft = conn.execute(
             "SELECT count(*) AS n FROM stg_device_state WHERE deleted_at IS NOT NULL").fetchone()["n"]
         audit = conn.execute("SELECT count(*) AS n FROM stg_delete_log").fetchone()["n"]
@@ -183,6 +210,12 @@ def main(argv=None) -> int:
         print(f"{label:<46} {shown:<28} {live}")
     print("-" * 96)
     print(f"活跃 {log[-1][3]} 台 / 软删 {soft} 台 / 审计 {audit} 条")
+    # 骤降轮的证据只在中间态：后续 [8] 会把快照补回来、被删的设备复活，
+    # 最终台数看不出护栏开没开。所以把那一刻单独打出来，别靠人翻中间行。
+    drop_step = next((x for x in log if x[0].startswith("[7]")), None)
+    if drop_step:
+        print(f"骤降轮 [7] 当时的活跃台数：{drop_step[3]} 台"
+              f"（正常模式应为 4；低于 4 说明护栏没拦住）")
     print("被保护的那台（夹具 CX-103）：", protected_rows)
     print()
     print("第 [2] 步是关键：只缺席一次时一条都没删——一次分页超时就会误删整批客户数据，")
@@ -190,6 +223,7 @@ def main(argv=None) -> int:
     print("第 [4] 步证明删除可撤销：上游回补数据、或我们上一轮判错了，必须能复活。")
     print("第 [7] 步是第二道护栏：上游挂了返回空表时，差额等于全库，照规则跑就是全删。")
     print("第 [6] 步是第三道：有未闭环工单引用的设备删了就是悬空引用，转人工，不自动判。")
+    print("第 [8][9] 步是补的：删除事件不能删掉「这次还在快照里」的设备，也不能越过未闭环工单。")
 
     if json_out:
         payload = {
@@ -203,7 +237,8 @@ def main(argv=None) -> int:
             "protected": [{"id": r["device_id"], "absent_count": r["absent_count"],
                            "deleted": r["deleted"]} for r in protected_rows],
             "guards": ["首次缺席不删（阈值 2）", "快照骤降整轮拒绝（<50%）",
-                       "未闭环引用不删", "重新出现即复活", "每次判定留审计"],
+                       "未闭环引用不删（优先于删除事件）", "信号矛盾不删",
+                       "重新出现即复活", "每次判定留审计"],
             "status": "ok",
         }
         Path(json_out).write_text(json.dumps(payload, ensure_ascii=False, indent=1),

@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:34:39",
+ "checked_at": "2026-11-26 11:46:21",
  "contract": {
-  "checked_at": "2026-11-26 11:34:39",
+  "checked_at": "2026-11-26 11:46:20",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:34:39",
+  "checked_at": "2026-11-26 11:46:20",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:34:39",
+  "checked_at": "2026-11-26 11:46:20",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,7 +166,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:34:39",
+  "checked_at": "2026-11-26 11:46:20",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -249,22 +249,41 @@
     "aborted": true,
     "actions": {},
     "live": 4
+   },
+   {
+    "name": "[8] CX-101 仍在快照，却又收到删除事件（矛盾，不删）",
+    "aborted": false,
+    "actions": {
+     "noop": 2,
+     "revive": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[9] CX-103 收到删除事件，但它有未闭环工单（转人工，不删）",
+    "aborted": false,
+    "actions": {
+     "protect": 1,
+     "noop": 1
+    },
+    "live": 4
    }
   ],
   "live_devices": 4,
   "soft_deleted": 1,
-  "audit_rows": 13,
+  "audit_rows": 18,
   "protected": [
    {
     "id": "CX-103",
-    "absent_count": 0,
+    "absent_count": 1,
     "deleted": false
    }
   ],
   "guards": [
    "首次缺席不删（阈值 2）",
    "快照骤降整轮拒绝（<50%）",
-   "未闭环引用不删",
+   "未闭环引用不删（优先于删除事件）",
+   "信号矛盾不删",
    "重新出现即复活",
    "每次判定留审计"
   ],

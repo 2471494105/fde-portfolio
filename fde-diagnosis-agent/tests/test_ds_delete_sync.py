@@ -67,6 +67,34 @@ class PlanDeletesTest(unittest.TestCase):
         r = plan_deletes({"A", "B"}, {"A", "B"})
         self.assertEqual(r["decisions"], [])
 
+    def test_event_cannot_override_protection(self):
+        """删除事件是「最强证据」，但最强不等于能删掉有活工单的设备。
+
+        这条是 11-26 补的：原实现把 event 分支排在 protected 前面，
+        上游一句 purge 就能把有未闭环工单的设备删掉，工单随之悬空。
+        """
+        r = plan_deletes({"A", "B"}, {"B"}, protected={"A"},
+                         events={"A": "upstream_purge"})
+        self.assertEqual(_acts(r), {"A": "protect"})
+        self.assertIn("未闭环引用", r["decisions"][0]["reason"])
+        self.assertIn("upstream_purge", r["decisions"][0]["reason"])
+
+    def test_event_does_not_delete_what_is_still_in_snapshot(self):
+        """既在快照里、又收到删除事件：两个信号自相矛盾，选「不删」。
+
+        删除不可逆，而矛盾下一次快照就可能自己消除；反过来删错了无法自动恢复。
+        """
+        r = plan_deletes({"A", "B"}, {"A", "B"}, events={"A": "upstream_purge"})
+        self.assertEqual(_acts(r), {"A": "noop"})
+        self.assertIn("矛盾", r["decisions"][0]["reason"])
+
+    def test_protected_still_revives_when_it_reappears(self):
+        """保护不阻止复活：受保护设备回到快照里，该清缺席计数（但保护标记本身不清）。"""
+        r = plan_deletes({"A", "B"}, {"A", "B"}, protected={"A"},
+                         states={"A": {"absent_count": 3}})
+        self.assertEqual(_acts(r), {"A": "revive"})
+        self.assertEqual(r["decisions"][0]["absent_count"], 0)
+
     def test_content_changed(self):
         self.assertTrue(content_changed("h1", "h2"))
         self.assertFalse(content_changed("h1", "h1"))

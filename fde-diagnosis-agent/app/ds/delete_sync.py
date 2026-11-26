@@ -12,12 +12,16 @@
 2. **快照骤降要整轮拒绝。** 上游挂了返回空表时，「差额」等于全库，照规则跑就是
    一次把客户数据全软删掉。行数掉到上轮的 `min_ratio` 以下，本轮不产生任何删除决策。
 3. **有删除事件时不信缺席次数。** 明确 tombstone 是最强证据，立刻软删。
+   但「最强」不等于可以越过下面两条：事件不能删掉有未闭环引用的设备，
+   也不能删掉这一次还出现在快照里的设备——后者是两个信号自相矛盾，选「不删」。
 
 ## 三种不删
 
 - **有未闭环引用**（未完成工单指向这台设备）→ `protect`，转人工。删了它就是悬空引用。
+  **这条优先于删除事件**：事件只说明上游那边没了，不说明本地工单已经闭环。
 - **已是软删状态**又缺席 → `noop`，不重复删、不刷 reason。
 - **本地没有、只在快照里出现的 id** → 不产生决策，那是新增路径的事。
+- **信号矛盾**：既在快照里、又收到删除事件 → `noop`，等下一次快照自己消除，或转人工。
 
 ## 删除必须可撤销
 
@@ -78,32 +82,45 @@ def plan_deletes(local_ids, snapshot_ids, states=None, protected=None, events=No
     decisions = []
     for did in sorted(local | set(events), key=str):
         n, deleted = _state(did)
+        ev = events.get(did)
 
-        # 1. 明确删除事件：不信缺席次数，立刻软删
-        if did in events:
-            decisions.append({"id": did, "action": "soft_delete",
-                              "reason": f"event:{events[did]}", "absent_count": 0})
-            continue
-
-        # 2. 在快照里：正常在，或需要复活
+        # 1. 在快照里：上游这一次还给了它。
+        #    即使同时收到删除事件也不删——两个信号自相矛盾时选「不删」，
+        #    因为删除不可逆，而矛盾下一次快照就可能自己消除。
         if did in snap:
-            if deleted or n:
+            if ev:
+                decisions.append({"id": did, "action": "noop", "absent_count": 0,
+                                  "reason": f"快照里仍有它，却又收到删除事件（event:{ev}），"
+                                            "信号矛盾，本轮不删"})
+            elif deleted or n:
                 decisions.append({"id": did, "action": "revive",
                                   "reason": "重新出现在快照里", "absent_count": 0})
             continue
 
-        # 3. 已经软删过又缺席：不重复删
+        # 2. 有未闭环引用：不管是不在快照还是收到删除事件，都不删。
+        #    顺序很关键——事件是「最强证据」，但最强不等于能删掉有活工单的设备。
+        if did in protected:
+            why = (f"上游下发删除事件（event:{ev}），但本地有未闭环引用"
+                   if ev else "不在快照，且本地有未闭环引用")
+            decisions.append({"id": did, "action": "protect",
+                              "reason": f"{why}，转人工", "absent_count": n + 1})
+            continue
+
+        # 3. 明确删除事件：不信缺席次数，立刻软删
+        if ev:
+            decisions.append({"id": did, "action": "soft_delete",
+                              "reason": f"event:{ev}", "absent_count": 0})
+            continue
+
+        # 4. 已经软删过又缺席：不重复删
         if deleted:
             decisions.append({"id": did, "action": "noop",
                               "reason": "已是软删状态", "absent_count": n})
             continue
 
-        # 4. 不在快照：清点缺席
+        # 5. 不在快照：清点缺席
         n1 = n + 1
-        if did in protected:
-            decisions.append({"id": did, "action": "protect",
-                              "reason": "有未闭环引用，转人工", "absent_count": n1})
-        elif n1 < threshold:
+        if n1 < threshold:
             decisions.append({"id": did, "action": "mark_absent",
                               "reason": f"第 {n1} 次缺席，未达阈值 {threshold}",
                               "absent_count": n1})

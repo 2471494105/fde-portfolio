@@ -114,8 +114,8 @@ def main() -> int:
     # 三道护栏任一失效都算红：这是「不报错但删多了」的地方，不能只看 status
     if d.get("status") == "ok":
         guards = d.get("guards") or []
-        if len(guards) < 5:
-            issues.append("删除同步的护栏少了（应有 5 条）")
+        if len(guards) < 6:
+            issues.append("删除同步的护栏少了（应有 6 条）")
     if q is None:
         # 表不存在和连不上库在 quarantine_report 里是同一个返回值（None），
         # 但两种都不能当成「隔离区是空的」——读不到不等于没有

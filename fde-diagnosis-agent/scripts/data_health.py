@@ -1,18 +1,18 @@
 """数据健康检查的一键入口（G6）。
 
-为什么要这一层：契约断言 / 跨源矩阵 / 增量水位 / 删除同步四块证据各自有脚本，但评测报告
-需要的是**一份能写进 meta 的汇总**。让 run_eval 现场跑它们不行——它们要连库、
+为什么要这一层：契约断言 / 跨源矩阵 / 增量水位 / 删除同步 / 事实层五块证据各自有脚本，
+但评测报告需要的是**一份能写进 meta 的汇总**。让 run_eval 现场跑它们不行——它们要连库、
 会 TRUNCATE 沙箱表、耗时不可控，而评测本身已经 53 分钟；更糟的是「跑模型」和
 「查数据」两个动作的失败会混在一起，定位时得先猜是谁坏的。
 
 所以分工成这样：
 
-    本脚本   = 动作。跑四块检查，汇总落盘 eval/data_health.json
+    本脚本   = 动作。跑五块检查，汇总落盘 eval/data_health.json
     run_eval = 只读。把这份结果写进报告 meta，标上时效（多少分钟前的检查）
 
 顺序有讲究：矩阵和删除同步都会动沙箱 stg_devices，所以挨着跑；增量动 stg_defect_logs，
-契约检查跑主库 fde_rag 完全不受影响。最后跑契约，沙箱状态停在删除检查那套（5 台设备、
-1 台软删），便于人工核对。
+契约检查跑主库 fde_rag 完全不受影响；事实层横跨两库（当前值读沙箱、历史写主库），
+放最后——它会 TRUNCATE 沙箱再恢复，放在中间会打乱后面几块的前提。
 
 用法：
     python scripts/data_health.py
@@ -32,6 +32,7 @@ import check_data_contract as cdc  # noqa: E402
 import check_ds_delete as delsync  # noqa: E402
 import check_ds_incremental as incr  # noqa: E402
 import check_ds_matrix as matrix  # noqa: E402
+import check_facts as factschk  # noqa: E402
 
 PROD_DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
 SBX_DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
@@ -111,20 +112,69 @@ def time_axis_issues(ta):
     return out
 
 
+def facts_issues(f):
+    """事实层的判据：只看真查库的数字，不看脚本自评的 status。
+
+    L1 只有一种失败形态——**历史看起来在，实际不可信**：
+    改值没作废旧行（两条同时有效）、新行没指回旧行（链条断了）、
+    同键第二条当前值没被拒（约束是装饰）、历史被沙箱重置清掉（放错了库）、
+    或与当前值对不上（两套真相打架）。任何一条成立，L1 就只是「多了一张表」，
+    不是「多了一个版本」。
+    """
+    if not f:
+        return ["事实层没被验过（检查没给证据，L1 等于没落地）"]
+    out = []
+    v = f.get("versioning") or {}
+    if v.get("old_closed") is not True:
+        out.append("改值没有作废旧行（valid_to 为空：两条同时有效）")
+    if v.get("new_supersedes_old") is not True:
+        out.append("新行没指回旧行（supersedes 缺失：看不出是从哪个值改过来的）")
+    if v.get("view_single_row") is not True:
+        out.append("视图里这个键不止一行当前值")
+
+    u = f.get("uniqueness") or {}
+    if u.get("rejected") is not True:
+        out.append("同键第二条当前值没被唯一索引拒绝（约束是装饰）")
+
+    c = f.get("consistency") or {}
+    if not c.get("checked"):
+        out.append("事实层没做当前值一致性比对（不知道它和 stg_devices 是否对得上）")
+    elif c.get("mismatched"):
+        out.append(f"facts_current 与 stg_devices 有 {len(c['mismatched'])} 个键不一致"
+                   "（两套真相在当前维度打架，这不是设计）")
+
+    s = f.get("survives_sandbox_reset") or {}
+    before, after = s.get("facts_before"), s.get("facts_after")
+    if not (isinstance(before, int) and isinstance(after, int)):
+        out.append("沙箱重置探针证据不完整（缺 before/after）")
+    elif after != before:
+        out.append(f"沙箱重置把历史清掉了（{before} → {after}）：facts 放错了库")
+    elif s.get("sandbox_rows_after_truncate") != 0:
+        out.append("沙箱 TRUNCATE 之后还有行（探针没生效，「历史独立」没被证明）")
+
+    p = f.get("policy") or {}
+    if not p.get("fact_keys"):
+        out.append("事实层没带属性清单（不知道哪些列有历史）")
+    if p.get("valid_from_basis") != "ingested":
+        out.append(f"valid_from 口径登记成 {p.get('valid_from_basis')}："
+                   "上游没有生效时间，声称 effective 就是说了一句没有证据的话")
+    return out
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="data_health_"))
 
-    print("== [1/4] 跨源矩阵：四种形态同一套断言 ==")
+    print("== [1/5] 跨源矩阵：四种形态同一套断言 ==")
     m = _run(matrix.main, [f"--json={tmp / 'matrix.json'}"], tmp / "matrix.json")
 
     # 删除检查排在矩阵之后：两者都动 stg_devices，相邻跑不容易互相踩
-    print("\n== [2/4] 删除同步：缺席两次才删、骤降整轮拒绝 ==")
+    print("\n== [2/5] 删除同步：缺席两次才删、骤降整轮拒绝 ==")
     d = _run(delsync.main, [f"--json={tmp / 'delete.json'}"], tmp / "delete.json")
 
-    print("\n== [3/4] 增量水位：十步装载 ==")
+    print("\n== [3/5] 增量水位：十步装载 ==")
     i = _run(incr.main, [f"--json={tmp / 'incr.json'}"], tmp / "incr.json")
 
-    print("\n== [4/4] 数据契约：主库 fde_rag（干净数据，应全绿）==")
+    print("\n== [4/5] 数据契约：主库 fde_rag（干净数据，应全绿）==")
     c = _run(
         cdc.main,
         [f"--dsn={PROD_DSN}", "--expect=clean", f"--json={tmp / 'contract.json'}"],
@@ -152,6 +202,11 @@ def main() -> int:
         except Exception:
             prev_rows = None
     delta = (q_rows - prev_rows) if isinstance(prev_rows, int) else None
+
+    # 事实层放最后：它横跨两库（读沙箱当前值、写主库历史），中途会把 stg_devices
+    # TRUNCATE 再恢复，放在前面会打乱其他几块对沙箱状态的前提。
+    print("\n== [5/5] 事实层：改值留版本、同键拒第二条 ==")
+    fa = _run(factschk.main, [f"--json={tmp / 'facts.json'}"], tmp / "facts.json")
 
     issues = []
     if c.get("status") == "error":
@@ -213,6 +268,12 @@ def main() -> int:
     # 证明「业务时间早于水位的行被灌进来了」，都意味着真源上会整批静默丢。
     if i.get("status") != "error":
         issues.extend(time_axis_issues(i.get("time_axis") or {}))
+    # 事实层：改值必须留版本、同键第二条当前值必须被拒。这两条不成立，
+    # L1 就只是多了一张表，不是多了一个版本。
+    if fa.get("status") == "error":
+        issues.append("事实层检查没跑起来")
+    else:
+        issues.extend(facts_issues(fa))
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -220,6 +281,7 @@ def main() -> int:
         "matrix": m,
         "incremental": i,
         "delete": d,
+        "facts": fa,
         "quarantine": {
             "db": "fde_sandbox",
             "readable": q is not None,
@@ -255,6 +317,14 @@ def main() -> int:
           f"业务时间字段 {((ta.get('registry') or {}).get('business_time_field') or '?')}")
     print(f"删除同步      活跃 {d.get('live_devices')} 台 / 软删 {d.get('soft_deleted')} 台 / "
           f"审计 {d.get('audit_rows')} 条 / 护栏 {len(d.get('guards') or [])} 条")
+    ft = fa.get("totals") or {}
+    fv = fa.get("versioning") or {}
+    fu = fa.get("uniqueness") or {}
+    fc = fa.get("consistency") or {}
+    print(f"事实层        历史 {ft.get('rows')} 行 / 当前 {ft.get('current')} 行，"
+          f"改值 1 关 1 开：{fv.get('old_closed')}/{fv.get('new_supersedes_old')}，"
+          f"唯一索引拒第二条：{fu.get('rejected')}，"
+          f"与当前值一致 {fc.get('checked')} 项（不符 {len(fc.get('mismatched') or [])} 项）")
     qd = payload["quarantine"]
     delta_text = "" if qd["delta"] is None else f"（较上次 {qd['delta']:+d} 条）"
     readable_text = "" if qd["readable"] else "**读不到**："

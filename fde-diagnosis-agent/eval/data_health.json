@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 13:23:22",
+ "checked_at": "2026-11-26 13:54:05",
  "contract": {
-  "checked_at": "2026-11-26 13:23:22",
+  "checked_at": "2026-11-26 13:54:04",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 13:23:22",
+  "checked_at": "2026-11-26 13:54:04",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 13:23:22",
+  "checked_at": "2026-11-26 13:54:04",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -248,7 +248,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 13:23:22",
+  "checked_at": "2026-11-26 13:54:04",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -469,6 +469,148 @@
    "重新出现即复活",
    "每次判定留审计"
   ],
+  "status": "ok"
+ },
+ "facts": {
+  "checked_at": "2026-11-26 13:54:05",
+  "host_db": {
+   "facts": "fde_rag",
+   "current": "fde_sandbox"
+  },
+  "policy": {
+   "tenant": "client_a",
+   "fact_keys": [
+    "line",
+    "station",
+    "camera_model",
+    "lens_model",
+    "light_model",
+    "install_date",
+    "maintenance_cycle_days"
+   ],
+   "valid_from_basis": "ingested",
+   "note": "valid_from 只能取同步时刻（到货），上游不提供生效时刻；两次快照之间的中间状态不可见"
+  },
+  "steps": [
+   {
+    "name": "[1] 首轮同步 5 台 × 7 属性（无水可关）",
+    "closes": 0,
+    "opens": 35,
+    "noops": 0,
+    "uncovered": [],
+    "total_rows": 35,
+    "current_rows": 35,
+    "plan_issues": []
+   },
+   {
+    "name": "[2] 同一份值再同步（应 0 关 0 开）",
+    "closes": 0,
+    "opens": 0,
+    "noops": 35,
+    "uncovered": [],
+    "total_rows": 35,
+    "current_rows": 35,
+    "plan_issues": []
+   },
+   {
+    "name": "[3] CX-101 line -> 1号线B（应 1 关 1 开）",
+    "closes": 1,
+    "opens": 1,
+    "noops": 34,
+    "uncovered": [],
+    "total_rows": 36,
+    "current_rows": 35,
+    "plan_issues": []
+   },
+   {
+    "name": "[4] 只给 CX-104 的两列（其余列在库里是 NULL：不许关旧值）",
+    "closes": 0,
+    "opens": 0,
+    "noops": 1,
+    "uncovered": [
+     "CX-101.camera_model",
+     "CX-101.install_date",
+     "CX-101.lens_model",
+     "CX-101.light_model",
+     "CX-101.line",
+     "CX-101.maintenance_cycle_days",
+     "CX-101.station",
+     "CX-102.camera_model",
+     "CX-102.install_date",
+     "CX-102.lens_model",
+     "CX-102.light_model",
+     "CX-102.line",
+     "CX-102.maintenance_cycle_days",
+     "CX-102.station",
+     "CX-103.camera_model",
+     "CX-103.install_date",
+     "CX-103.lens_model",
+     "CX-103.light_model",
+     "CX-103.line",
+     "CX-103.maintenance_cycle_days",
+     "CX-103.station",
+     "CX-104.camera_model",
+     "CX-104.install_date",
+     "CX-104.lens_model",
+     "CX-104.light_model",
+     "CX-104.maintenance_cycle_days",
+     "CX-104.station",
+     "CX-105.camera_model",
+     "CX-105.install_date",
+     "CX-105.lens_model",
+     "CX-105.light_model",
+     "CX-105.line",
+     "CX-105.maintenance_cycle_days",
+     "CX-105.station"
+    ],
+    "total_rows": 36,
+    "current_rows": 35,
+    "plan_issues": []
+   }
+  ],
+  "versioning": {
+   "entity_id": "CX-101",
+   "fact_key": "line",
+   "chain": [
+    {
+     "id": 5,
+     "value": "3号线",
+     "valid_from": "2026-11-26 13:54:05",
+     "valid_to": "2026-11-26 13:54:05",
+     "supersedes": null
+    },
+    {
+     "id": 36,
+     "value": "1号线B",
+     "valid_from": "2026-11-26 13:54:05",
+     "valid_to": null,
+     "supersedes": 5
+    }
+   ],
+   "old_closed": true,
+   "new_supersedes_old": true,
+   "view_single_row": true
+  },
+  "uniqueness": {
+   "rejected": true,
+   "constraint": "device_fact_unique_current"
+  },
+  "consistency": {
+   "checked": 35,
+   "mismatched": [],
+   "extra_in_facts": []
+  },
+  "survives_sandbox_reset": {
+   "facts_before": 36,
+   "facts_after": 36,
+   "sandbox_rows_after_truncate": 0,
+   "restored_rows": 5
+  },
+  "totals": {
+   "rows": 36,
+   "current": 35
+  },
+  "issues": [],
   "status": "ok"
  },
  "quarantine": {

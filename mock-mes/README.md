@@ -95,9 +95,9 @@ python -X utf8 scripts\verify_obs.py   # 可观测性六段（连库/指标/新�
 
 **可观测性三个入口**：`GET /healthz`（真连库 `select 1`，失败 503，不是进程活着就算健康）、`GET /v1/obs/summary`（接口指标 + 新鲜度 + 判据台账一次取全，页面首屏只打这一枪）、`GET /v1/obs/{api,freshness,runs}`（各自单独取）。中间件给每个响应加 `X-Resp-Ms`，并跳过 `/v1/obs*` 自身——读指标不能污染指标。`/v1/obs/api` 另给 `errors_by_path`（不只报错误总数，还要答出哪条接口在坏），并跳过浏览器自己来要的 `/favicon.ico`（它的 404 不是接口故障）。`scripts/verify_obs.py` 的 O1–O6 分段证明：连库 / 计数在涨 / 读指标不进样本 / p95 有值 / 工单表被标陈旧（7497.7 h）/ 缺陷表被标**未来时间**（-849.3 h）/ 主数据无时间列不误报 / 30 小时没跑判静默 / `--no-record` 不写台账。口径写在 `docs/20261126_21_可观测性.md`（`DOC-63`）。
 
-**中控台的口径**：事件不是「每次运行一条」，而是「同一件事只留一条活着」（`dedup_key` + `seen_count`）；同一批红再跑不推、变绿只写「复跑归零」、外发失败写进 `detail.delivery` 且不当作已推。页面只读，不重算判据：未处理事件来自 `/v1/alerts`，违约行与趋势来自 `/v1/obs/runs`，p95/新鲜度来自 `/v1/obs/summary`。验收 `scripts/verify_console.py` C1–C9 全 PASS（含「无任何外网资源」——断网现场也能开），`scripts/verify_alerts.py` A1–A7 全 `[ok]`（在 `fde-diagnosis-agent` 下跑）。口径写在 `docs/20261126_23_中控台与推送.md`（`DOC-65`）。
+**中控台的口径**：事件不是「每次运行一条」，而是「同一件事只留一条活着」（`dedup_key` + `seen_count`）；同一批红再跑不推、变绿只写「复跑归零」、外发失败写进 `detail.delivery` 且不当作已推。页面只读，不重算判据：未处理事件来自 `/v1/alerts`，违约行与趋势来自 `/v1/obs/runs`，p95/新鲜度来自 `/v1/obs/summary`。趋势线纵轴从 0 起，所以 1 行的变化图上只有约 0.1 px——**不拉伸纵轴**（那会把噪音画成悬崖），改在数字右侧写「较上一次」`−1 / ±0 / +n`。验收 `scripts/verify_console.py` C1–C9 + C7c/C7d 全 PASS（含「无任何外网资源」——断网现场也能开），`scripts/verify_alerts.py` A1–A7 全 `[ok]`（在 `fde-diagnosis-agent` 下跑）。口径写在 `docs/20261126_23_中控台与推送.md`（`DOC-65`），「补一行→367 变 366→复原」的彩排见 `docs/20261127_25_收口演示.md`（`DOC-67`）。
 
-**截图证据**：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单/判据运行各一套，另有 `console-1280/1024.png`）。
+**截图证据**：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单/判据运行各一套，另有 `console-1280/1024.png` 与彩排瞬间的 `console-fix-visible-1280.png`：合计 366、工单 361、趋势 `−1`、事件 #1「已认领」）。
 
 ## 目录
 
@@ -130,7 +130,7 @@ api/static/console.html    数据中控台（深色，只读；与作业页同�
 api/obs.py                 可观测性：接口指标环形缓冲 + 数据新鲜度 + 判据运行台账
 api/static/flag.js         红/橙判定唯一的一份实现（行标与 KPI 共用；判据 H 拿它对账）
 scripts/verify_ui.py       五页渲染对账（DOM vs 接口，10 组检查）
-scripts/verify_console.py  中控台渲染对账（C1–C9：五组数字 + 环形 + 趋势 + 无外链）
+scripts/verify_console.py  中控台渲染对账（C1–C9 + C7c/C7d：五组数字 + 环形 + 趋势「较上一次」+ 无外链）
 scripts/verify_obs.py      可观测性六段验收（O1–O6）
 ```
 

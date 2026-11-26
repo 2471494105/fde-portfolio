@@ -363,7 +363,7 @@ venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --close=1 --reason="复�
 venv\Scripts\python.exe -X utf8 scripts\verify_alerts.py
 ```
 
-实测：2 条活事件（工位归属 362 行 / 缺陷字段 5 行），各 6 轮仍红；页面环形 362 / 5 / 0（98.6% 集中在工位归属）。`verify_alerts.py` A1–A7 全 `[ok]`，`mock-mes/scripts/verify_console.py` C1–C9 ALL PASS（无外网资源、五个数字与接口逐项相等、趋势恰三条），单测 18 条、全量 594。证据与「没做什么」（无值班表、阈值是拍的、无实时推送）在 `docs/20261126_23_中控台与推送.md`（`DOC-65`）。
+实测：2 条活事件（工位归属 362 行 / 缺陷字段 5 行），轮次看页面当前值（只会涨，不写死）；页面环形 362 / 5 / 0（98.6% 集中在工位归属）。`verify_alerts.py` A1–A7 全 `[ok]`，`mock-mes/scripts/verify_console.py` C1–C9 ALL PASS（无外网资源、五个数字与接口逐项相等、趋势恰三条），单测 18 条、全量 594。证据与「没做什么」（无值班表、阈值是拍的、无实时推送）在 `docs/20261126_23_中控台与推送.md`（`DOC-65`）。
 
 ### 一条命令巡检 + 扫描自检（T24）
 
@@ -386,6 +386,28 @@ venv\Scripts\python.exe -X utf8 scripts\verify_patrol.py
 
 实测 `patrol.py --quiet` 输出 `[红] station_contract` / `[绿] status_policy` / `[红] defect_fields` + 扫描 `run_id`；自检行 `alert_sweep ok pushed 0`，复跑 exit 0 且自检行 +1。静默横幅用「把三行 `ran_at` 临时改到 30 h 前、截完逐行还原」验过（`out/ui/console-stale-1280.png`）。`verify_patrol.py` P1–P6 全 `[ok]`，`verify_alerts` / `verify_console` 仍全 PASS，单测 594。证据在 `docs/20261126_24_巡检与自检.md`（`DOC-66`）。
 
+### 收口演示：认领 + 补一行 + 复原（T25）
+
+前两轮证明了「判据会红」「数字是现在」，没证明**有人动手之后系统跟得上**。`scripts/demo_closeout.py` 一条命令把三段连起来，默认全程可回放：
+
+- 认领：`#1 open → acked`（`--by` 必填，没有责任人的认领等于没认领），`seen_count` 不动；
+- 补一行：拿 `md_station` 的「产线A」试算 `(产线A, 第1工位) → S-A01`，真写一行 `prod_line` 再复跑 → **362 → 361**，且只少 `wo_station_identity#WO-2026-0001` 这一条编号；
+- 复原：`prod_line` 回 NULL + 复跑 → 362，**整表指纹与基线逐字相同**（`df7c564b4185077b`）；复原放在 `finally`，崩了也先退回去再报错。
+
+顺手补的洞：趋势线纵轴从 0 起，1 行变化只有 0.1px，图上永远平——不改纵轴（拉开等于把噪音画成悬崖），改为数字右侧加「较上一次」`−1 / ±0 / +n`，`verify_console.py` 加 C7c/C7d 锁住。
+
+```powershell
+# 六段全套（结束复原；加 --keep-ack 认领留在页面上）
+venv\Scripts\python.exe -X utf8 scripts\demo_closeout.py
+venv\Scripts\python.exe -X utf8 scripts\demo_closeout.py --dry-run          # 只打印计划
+venv\Scripts\python.exe -X utf8 scripts\demo_closeout.py --shot=out\ui\console-fix-visible-1280.png
+
+# 验收：V1–V6（不写库 / 只少一行 / 复原三项一致 / 认领还原 / 不留台账 / 独立重算）
+venv\Scripts\python.exe -X utf8 scripts\verify_demo_closeout.py
+```
+
+实测：`362 → 361 → 362`，`missing=['wo_station_identity#WO-2026-0001']`，指纹两侧同为 `df7c564b4185077b`；页面 367 → **366**（工单 361，趋势 `−1`，事件 #1「已认领」）；`verify_demo_closeout.py` V1–V6 ALL PASS；反例 `--line=产线Z` → `exit 2` 且不写库。代价写清：每次彩排留两行台账（361/362）、`seen_count` +1。证据与「那一行是假设不是真相」的口径在 `docs/20261127_25_收口演示.md`（`DOC-67`）。
+
 
 ## 目录
 
@@ -400,14 +422,16 @@ eval/        trajectories.py（26 条，含 3 条多轮）、run_eval.py、repor
 mock_qms/    FastAPI 模拟 QMS（刻意复现"HTTP 200 但业务码在响应体"）
 scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_multi_turn / smoke_web_session
               check_status_policy（A–H）/ check_station_contract（I/J）/ raise_remediation / verify_station_governance
+              raise_alerts / patrol / demo_closeout / verify_alerts / verify_patrol / verify_demo_closeout
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
              数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）、
              量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）、不适用声明要能证伪（DOC-58）、
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
-             数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）
-             00_文档索引.md 是全部 63 篇（`DOC-01`–`DOC-62` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
+             中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）
+             00_文档索引.md 是全部 68 篇（`DOC-01`–`DOC-67` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -452,3 +476,6 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
     `MAX_CTX_TURNS=2` 是按实测 token 拍的，没做 token 级控制
 11. **同一 thread_id 并发不设防**：两个请求同时进同一会话会互相覆盖 checkpoint，LangGraph 不拦。
     Web 端一人一 session 天然隔离，多人共享 session 才会撞
+12. **收口演示会留痕**：`demo_closeout.py` 每次彩排写两行台账（361 / 362），事件 `seen_count` +1。
+    数字会动是它的目的，但「362」这个基线每彩排一次都要重新解释一遍；不想留痕就 `--no-record`，
+    代价是页面不跟着动（`DOC-67` 第五节）

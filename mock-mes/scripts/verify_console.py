@@ -108,6 +108,12 @@ def main():
     spark_n = len(re.findall(r'<div class="spark">', markup))
     ok("C7 趋势三条", spark_n == 3, "spark=%d" % spark_n)
     ok("C7b 三条副标题写明各自次数", dom.count("各自最近 6 次") >= 1)
+    # 纵轴从 0 起，1 行的变化在图上只有 0.1px；所以必须有一条文字把差值写出来，
+    # 否则「修复可见」在页面上只剩数字在动、趋势不动，看的人会以为没修。
+    deltas = re.findall(r'<div class="delta"[^>]*>([^<]*)</div>', markup)
+    ok("C7c 三条都有「较上一次」", len(deltas) == 3, "delta=%s" % deltas)
+    ok("C7d 差值写法合法（±0 / +n / −n / —）",
+       all(re.fullmatch(r"±0|[+−]\d+|—", d.strip()) for d in deltas))
 
     stale = len(obs["freshness"]["stale"])
     got_fresh = text_of(dom, "kpi-fresh")

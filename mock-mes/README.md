@@ -46,14 +46,16 @@ sql/006_biz.sql            业务五表
 sql/007_biz_seed.sql       业务种子 60/80/300/40/120
 sql/008_gov.sql            治理四表 + 从元数据灌登记册
 sql/009_null_anomaly.sql   两条"库里形态的空值"（NULL 与空串不是一回事）
+sql/010_audit.sql          审计触发器（update 只记变化的列）+ 越权安全阀 gov.read_guarded()
 scripts/bootstrap.ps1      一条命令跑完 001~003，幂等
 scripts/export_registry.py 登记册 -> 与 source_schema 同构的 JSON
 scripts/query_readonly.py  只读取数 + 越权自证
 scripts/export_csv.py      可配字段集/列序/编码的 CSV 导出
+scripts/verify_audit.py    T7 验收九条断言（用合成探针工单，可反复跑）
 api/app.py                 分页接口（FastAPI，8021）
 ```
 
-**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `009`（空值补丁）。
+**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `009`（空值补丁）→ `010`（审计触发器）。
 `007` 会清空业务表重灌，跑完必须再跑 `009`，否则那两条 NULL 行没了。
 
 连接串在 `.env`（不入库）。

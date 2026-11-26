@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """换源验收（T10）：八条判据指到第二家客户 fde_client，逐个反例看它落在哪一档。
 
-做法：不改任何一条判据。反例都造在 `probe` schema 里——`create table ... (like public.md_device)`
+做法：反例都造在 `probe` schema 里——`create table ... (like public.md_device)`
 拿结构，再改一处；登记用的临时副本写在 data/mapping/source_schema，跑完删掉。
 客户真表一行不动，所以"拒跑"证明的是判据，不是我们手快。
+
+T10 时判据逻辑一条没改；唯一一次改判据是 S5 的量纲（T12）：从「每个值都小」改成
+「≥90% 的值支持缩放假设」。理由与双向反例见 verify 里的 e8（带脏值仍须拒跑）
+与 e9（只有脏值、量纲未变不许拒跑）——这两个是成对的，少一个就把另一个的自由度放开了。
 
 用法（在 fde-diagnosis-agent 目录）：
     python -X utf8 scripts/verify_switch.py
@@ -87,19 +91,23 @@ def probe_registry(case_key: str, table: str, extra_col: dict | None = None) -> 
     return p
 
 
-def scaled_csv(path: Path) -> int:
-    """把缺陷记录前 20 行的 conf_pct 除以 100，模拟"百分制改小数"——列名和类型一个字没变。"""
+def probe_csv(path: Path, divide: bool) -> int:
+    """缺陷记录前 20 行做成 CSV 探针：列名、类型、列序一个字没变。
+
+    divide=True  —— 把 conf_pct 除以 100，模拟"百分制改小数"；
+    divide=False —— 量纲一个字不动，只保留库里原有的 150/-10 两行脏值。
+    两件事合起来才是完整的证据：带脏值时**该拒还得拒**（否则一个 150 就能掩盖真实跳变），
+    没改量纲时**不许拒**（否则脏值被当成量纲证据，每次全量同步都误拦）。
+    时间一律按声明 format 归一，否则会先撞「日期格式改了」这个 breaking，把量纲的结论盖住。
+    """
     import psycopg
     from psycopg.rows import dict_row
 
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
-        # 两个前提必须清掉，否则量纲判据测不到：
-        #   1) conf_pct 的既有越界值（150/-10）缩放后 max=1.5，会顶掉"全部都很小"这个条件；
-        #   2) captured_at 按库的原样带秒带时区，会先撞声明 %Y-%m-%d %H:%M，判成"日期格式改了"。
         rows = conn.execute(
             'select rec_id, captured_at, equip_no, work_station, defect_name, conf_pct,'
             ' lot_no, judge, is_ok from public.biz_defect_record'
-            ' where conf_pct between 0 and 100 order by rec_id limit 20'
+            ' where rec_id >= 1 order by rec_id limit 20'
         ).fetchall()
     cols = list(rows[0].keys()) if rows else []
     with path.open("w", encoding="utf-8", newline="") as fh:
@@ -107,7 +115,7 @@ def scaled_csv(path: Path) -> int:
         w.writeheader()
         for r in rows:
             r = dict(r)
-            if r.get("conf_pct") is not None:
+            if divide and r.get("conf_pct") is not None:
                 r["conf_pct"] = round(float(r["conf_pct"]) / 100.0, 3)
             if r.get("captured_at") is not None:
                 r["captured_at"] = r["captured_at"].strftime("%Y-%m-%d %H:%M")
@@ -175,13 +183,26 @@ def main(argv: list[str]) -> int:
 
     print("== S5 量纲跳变（CSV 探针，列名/类型不变）")
     tmp = Path(tempfile.gettempdir()) / "probe_conf_scaled.csv"
-    n = scaled_csv(tmp)
-    print("  探针 %s：%d 行，conf_pct 已 ÷100" % (tmp, n))
+    n = probe_csv(tmp, divide=True)
+    print("  探针 %s：%d 行，conf_pct 已 ÷100（库里 150/-10 两行脏值原样带入）" % (tmp, n))
     code, out = run(["scripts/check_source_values.py", "--client=client_mes",
                      "--table=biz_defect_record", "--source=" + str(tmp), "--limit=20"])
-    chk("e8_量纲缩小100倍 exit", code, 3)
+    chk("e8_量纲缩小100倍(带脏值) exit", code, 3)
     chk("e8 含「量纲疑似缩小 100 倍」", "量纲疑似缩小 100 倍" in out, True)
-    results.append(("e8_量纲缩小100倍", 3, code))
+    chk("e8 含「中位数」", "中位数" in out, True)
+    results.append(("e8_量纲缩小(带脏值)", 3, code))
+    print("  " + "\n  ".join(l.strip() for l in out.strip().splitlines())[:300])
+
+    print("== S5 不误报：量纲没变，只有脏值")
+    tmp2 = Path(tempfile.gettempdir()) / "probe_conf_unscaled.csv"
+    n2 = probe_csv(tmp2, divide=False)
+    print("  探针 %s：%d 行，conf_pct 一个数没改（只带 150/-10 两行脏值）" % (tmp2, n2))
+    code, out = run(["scripts/check_source_values.py", "--client=client_mes",
+                     "--table=biz_defect_record", "--source=" + str(tmp2), "--limit=20"])
+    chk("e9_脏值但量纲未变 exit", code, 0)
+    chk("e9 不含「量纲疑似」", "量纲疑似" in out, False)
+    chk("e9 仍报「超出声明」", "超出声明" in out, True)
+    results.append(("e9_脏值但量纲未变", 0, code))
     print("  " + "\n  ".join(l.strip() for l in out.strip().splitlines())[:300])
 
     print("== 收尾")

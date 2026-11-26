@@ -98,6 +98,13 @@ def _finding(col, check, severity, message, samples=None) -> dict:
             "message": message, "samples": samples or []}
 
 
+def _median(nums: list) -> float:
+    xs = sorted(nums)
+    n = len(xs)
+    mid = n // 2
+    return xs[mid] if n % 2 else (xs[mid - 1] + xs[mid]) / 2.0
+
+
 def check_range(col: str, values: list, dom: dict) -> list:
     """只有声明了 range 才比数值。声明了 format 或 enum 的列不该走这里——它们是文本。"""
     if not dom.get("range"):
@@ -117,20 +124,34 @@ def check_range(col: str, values: list, dom: dict) -> list:
     nums = [n for n in (_num(v) for v in filled) if n is not None]
     if not nums:
         return out
-    mn, mx = min(nums), max(nums)
     if hi and lo is not None and hi > 0:
-        # 百分制→小数：声明 [0,100]，观测 max=0.91
-        if 0 <= mx <= hi / 100:
-            out.append(_finding(col, "range", BREAKING,
-                                f"量纲疑似缩小 100 倍（百分制→小数）：声明 [{lo},{hi}]，观测 "
-                                f"min={mn} max={mx}", [mn, mx]))
-            return out
-        if mn >= hi:
-            if mn >= hi * 10:
-                out.append(_finding(col, "range", BREAKING,
-                                    f"量纲疑似放大 100 倍：声明 [{lo},{hi}]，观测 min={mn} "
-                                    f"max={mx}", [mn, mx]))
-                return out
+        # 量纲是**整列现象**，不是单点现象。
+        # 旧写法「max ≤ hi/100 就拒跑」有个致命空洞：库里躺一个 150 的脏值，÷100 之后变成 1.5，
+        # 顶掉「全部都很小」，一次真实的百分制→小数切换就被这一个脏值掩盖成「只是超范围」。
+        # 反过来也不能把脏值当量纲证据，所以判据改成看**中位数**：
+        #   ÷100：声明区间内的中位数落在 (0, hi/100]（整列缩 100 倍，中位数也缩 100 倍）
+        #   ×100：全部值的中位数 ≥ hi*10
+        # 用中位数而不是极值，是因为"1 个脏值"在 9 行样本里就占 11%——按比例卡线，
+        # 小样本会被单点掀翻；中位数天然对单点不敏感，而对整列平移敏感，这才是量纲该有的性质。
+        # 样本少于 3 个也不加护栏：中位数在 n=1 时就等于该值本身，与旧写法同风险，不新增误判面。
+        # 判定不再 return：量纲拒跑的同时，越界值照常单独报出来，别让一种问题吞掉另一种。
+        in_range = [n for n in nums if lo <= n <= hi]
+        if in_range:
+            med = _median(in_range)
+            if 0 < med <= hi / 100:
+                out.append(_finding(
+                    col, "range", BREAKING,
+                    f"量纲疑似缩小 100 倍（百分制→小数）：声明 [{lo},{hi}]，"
+                    f"观测中位数 {med} ≤ {hi / 100}（区间内 {len(in_range)} 个值），"
+                    f"min={min(in_range)} max={max(in_range)}",
+                    [med]))
+        med = _median(nums)
+        if med >= hi * 10:
+            out.append(_finding(
+                col, "range", BREAKING,
+                f"量纲疑似放大 100 倍：声明 [{lo},{hi}]，观测中位数 {med} ≥ {hi * 10}，"
+                f"min={min(nums)} max={max(nums)}",
+                [med]))
         far = [n for n in nums if n < lo or n > hi]
         if far:
             out.append(_finding(col, "range", sev,

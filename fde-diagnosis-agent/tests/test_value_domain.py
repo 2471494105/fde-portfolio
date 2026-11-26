@@ -28,6 +28,37 @@ class TestRange(unittest.TestCase):
         self.assertEqual(f[0]["severity"], vd.BREAKING)
         self.assertIn("缩小 100 倍", f[0]["message"])
 
+    def test_dirty_value_does_not_mask_scale_change(self):
+        """T12 的核心：库里躺一个 150（÷100 后是 1.5）不许把真实量纲跳变洗成「只是超范围」。
+
+        旧写法按 max 判，1.5 > 1 就判不出来；现在按中位数，0.88 照样在 (0,1] 里。
+        """
+        vals = ["0.91", "0.88", "0.75", "0.9", "1.5", "-0.1", "0.92", "0.8", "0.81", "0.87"]
+        f = vd.check_range("conf_pct", vals, self.DOM)
+        self.assertEqual(f[0]["severity"], vd.BREAKING)
+        self.assertIn("缩小 100 倍", f[0]["message"])
+        # 量纲拒跑的同时，越界值仍单独报出来——一种问题不许吞掉另一种
+        self.assertEqual([x["severity"] for x in f[1:]], [vd.RED])
+
+    def test_dirty_value_alone_is_not_scale_evidence(self):
+        """成对的另一半：量纲没变、只有脏值，不许拒跑，否则每次同步都误拦。"""
+        vals = ["91", "88", "75", "90", "150", "-10", "92", "80", "81", "87"]
+        f = vd.check_range("conf_pct", vals, self.DOM)
+        self.assertNotIn(vd.BREAKING, {x["severity"] for x in f})
+        self.assertEqual(f[0]["severity"], vd.RED)
+        self.assertNotIn("量纲疑似", f[0]["message"])
+
+    def test_single_huge_value_is_not_magnify(self):
+        """一个 9999 不许把整列判成放大 100 倍：中位数 91 远不到 1000。"""
+        vals = ["91", "88", "75", "90", "9999", "92", "80", "81", "87", "86"]
+        f = vd.check_range("c", vals, self.DOM)
+        self.assertNotIn(vd.BREAKING, {x["severity"] for x in f})
+
+    def test_one_row_still_judged(self):
+        """n=1 不加护栏：中位数就是该值本身，与旧写法同风险面，不为好看而放宽。"""
+        f = vd.check_range("c", ["0.5"], self.DOM)
+        self.assertEqual(f[0]["severity"], vd.BREAKING)
+
     def test_magnify_is_breaking(self):
         f = vd.check_range("c", ["9100", "8800"], self.DOM)
         self.assertEqual(f[0]["severity"], vd.BREAKING)

@@ -7,6 +7,9 @@ tools 字段——图里所有分支都依赖 tool_calls，这种站直接不可
 用法：
     python scripts/probe_provider.py                      # 用 .env 里的配置
     python scripts/probe_provider.py <base_url> <model>   # 临时指定
+
+注意：默认 base_url 原写 https://minekuai.cn/v1，该地址 2026-11-26 返回 410 已退役，
+现为 https://ai-api.minekuai.cn/v1。默认值过期会让下次跑的人误以为「官方端点在报错」。
 """
 
 import json
@@ -64,7 +67,7 @@ TOOLS = [
 
 def main():
     load_env()
-    base = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("FDE_BASE_URL", "https://minekuai.cn/v1")
+    base = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("FDE_BASE_URL", "https://ai-api.minekuai.cn/v1")
     model = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("FDE_MODEL", "deepseek-v4.1-flash-1017")
     key = os.environ.get("FDE_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     if not key:

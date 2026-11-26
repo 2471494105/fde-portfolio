@@ -32,7 +32,7 @@ def load_env():
 
 def main():
     load_env()
-    base = os.environ.get("FDE_BASE_URL", "https://minekuai.cn/v1")
+    base = os.environ.get("FDE_BASE_URL", "https://ai-api.minekuai.cn/v1")
     model = os.environ.get("FDE_MODEL", "deepseek-v4.1-flash-1017")
     key = os.environ.get("FDE_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     c = OpenAI(api_key=key, base_url=base, timeout=60)

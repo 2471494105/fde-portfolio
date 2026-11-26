@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import traceback
@@ -27,7 +28,7 @@ if str(ROOT) not in sys.path:
 from app.ds import issues  # noqa: E402
 
 DSN = os.environ.get("FDE_CLIENT_DSN", "postgresql://postgres:postgres@localhost:5432/fde_client")
-COLS = ("issue_id", "sort_no", "short", "name", "check_id", "owner", "first_step", "evidence", "note")
+COLS = ("issue_id", "sort_no", "short", "name", "check_id", "owner", "scope", "first_step", "evidence", "note", "targets")
 
 
 def connect(dsn: str):
@@ -50,14 +51,26 @@ def main(argv: list[str]) -> int:
         if a.startswith("--dsn="):
             dsn = a.split("=", 1)[1]
 
-    src = {c["issue_id"]: {k: c.get(k) for k in COLS} for c in issues.CATALOG}
+    src = {}
+    for c in issues.CATALOG:
+        row = {k: c.get(k) for k in COLS}
+        row["targets"] = issues.targets_of(c["check_id"])
+        src[c["issue_id"]] = row
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             "create table if not exists public.gov_issue_catalog ("
             " issue_id text primary key, sort_no integer not null, short text not null,"
             " name text not null, check_id text not null, owner text, first_step text not null,"
-            " evidence text not null, note text, updated_at timestamptz not null default now())"
+            " evidence text not null, note text, scope text not null default 'client'," +
+            " targets jsonb not null default '[]'::jsonb," +
+            " updated_at timestamptz not null default now())"
         )
+        # 老表补列（T26 建的表只有九列）：scope / targets 是 T27 加的
+        for ddl in (
+            "alter table public.gov_issue_catalog add column if not exists scope text not null default 'client'",
+            "alter table public.gov_issue_catalog add column if not exists targets jsonb not null default '[]'::jsonb",
+        ):
+            cur.execute(ddl)
         have = load(cur)
         if check_only:
             drift = []
@@ -74,13 +87,16 @@ def main(argv: list[str]) -> int:
         for c in issues.CATALOG:
             cur.execute(
                 "insert into gov_issue_catalog (issue_id, sort_no, short, name, check_id, owner,"
-                " first_step, evidence, note) values (%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                " scope, first_step, evidence, note, targets)"
+                " values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)"
                 " on conflict (issue_id) do update set sort_no=excluded.sort_no, short=excluded.short,"
                 " name=excluded.name, check_id=excluded.check_id, owner=excluded.owner,"
-                " first_step=excluded.first_step, evidence=excluded.evidence, note=excluded.note,"
+                " scope=excluded.scope, first_step=excluded.first_step,"
+                " evidence=excluded.evidence, note=excluded.note, targets=excluded.targets,"
                 " updated_at=now()",
                 (c["issue_id"], c["sort_no"], c["short"], c["name"], c["check_id"],
-                 c.get("owner"), c["first_step"], c["evidence"], c.get("note")),
+                 c.get("owner"), c.get("scope") or "client", c["first_step"], c["evidence"],
+                 c.get("note"), json.dumps(issues.targets_of(c["check_id"]), ensure_ascii=False)),
             )
         if prune:
             gone = sorted(set(have) - set(src))

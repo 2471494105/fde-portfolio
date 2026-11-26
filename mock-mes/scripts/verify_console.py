@@ -70,7 +70,8 @@ def main():
     latest = {}
     for r in runs["recent"]:
         latest.setdefault(r["check_id"], r)
-    known = ["station_contract", "defect_fields", "status_policy"]
+    # T27 加了报警闭环（行类第 4 道）：环形与合计都跟着它走
+    known = ["station_contract", "defect_fields", "status_policy", "alarm_ack"]
     parts = [(cid, int(latest[cid]["red_count"]) if cid in latest else 0) for cid in known]
     total = sum(v for _, v in parts)
     # 趋势线按「跑过的判据」画：行类 3 道 + 契约/值域 2 道（T26 接进事件流后才有的）
@@ -128,14 +129,16 @@ def main():
     # 命中口径与页面一致：「静默」不取 alert_sweep 的 red_count（那是推送条数），
     # 取 runs.checks 里 silent 的条数；其余类别取 check_id 最近一次台账的 red_count
     silent_n = sum(1 for c in runs["checks"] if c.get("silent"))
+    # 只数客户库：外部自检（scope=external）不进分子也不进分母（T27 更正过口径）
+    client_cat = [c for c in cat["items"] if c.get("scope") != "external"]
     hit = 0
-    for c in cat["items"]:
+    for c in client_cat:
         if c["issue_id"] == "sweep_silent":
             hit += 1 if silent_n else 0
         elif c["check_id"] in latest and int(latest[c["check_id"]]["red_count"]) > 0:
             hit += 1
     got_cat = text_of(dom, "kpi-cat")
-    expect_txt = "%d/%d" % (hit, cat["total"])
+    expect_txt = "%d/%d" % (hit, len(client_cat))
     ok("C10b 问题类别 KPI = 命中/登记",
        (got_cat or "").replace(" ", "").startswith(expect_txt),
        "页面 %r，预期 %s" % (got_cat, expect_txt))
@@ -156,6 +159,21 @@ def main():
 
     index_dom, _ = render(BASE + "/app/index.html", "index")
     ok("C9 作业页有入口", 'href="/app/console.html"' in index_dom)
+
+    # 明细页（T27）：中控台的每条事件标题必须能点进去，且点进去真有那几行
+    links = re.findall(r'href="/problem\?alert=(\d+)"', body)
+    ok("C11 事件标题都是明细页链接", len(links) == len(alive),
+       "链接 %d 个，事件 %d 条" % (len(links), len(alive)))
+    if alive:
+        target = alive[0]
+        page_dom, page_err = render(BASE + "/problem?alert=%s" % target["alert_id"], "problem")
+        ok("C12 明细页能渲染出首步与改哪一栏",
+           "先做这一步" in page_dom and ("改哪一栏" in page_dom),
+           (page_err or "")[:80])
+        ok("C12b 明细页标题与事件同名", target["title"].split("：")[0] in page_dom)
+        ok("C12c 明细页行表有表头", "<thead>" in page_dom and "定位列" in page_dom)
+        # 目录里带「明细」列，且外部自检类标了外部而不是给一个点不进去的链接
+        ok("C12d 目录有明细列", '>明细</th>' in dom and "外部自检" in cat_body)
 
     print("\nRESULT: %s" % ("ALL PASS" if not fails else "FAIL %d 项：%s" % (len(fails), ", ".join(fails))))
     return 0 if not fails else 1

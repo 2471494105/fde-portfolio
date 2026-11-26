@@ -20,6 +20,7 @@ TITLES = {
     "station_contract": "工单/缺陷无法唯一归属工位",
     "status_policy": "看板状态与流程口径对不上",
     "defect_fields": "缺陷记录字段越界或空批次",
+    "alarm_ack": "报警挂着没人接、也没人销",
     "source_schema": "源端表结构与登记对不上",
     "source_values": "源端数值越界或量纲错位",
     "value_domain": "数值量纲或枚举值越界",
@@ -33,6 +34,7 @@ OWNERS = {
     "station_contract": "产线计划员",
     "status_policy": "车间主管",
     "defect_fields": "质量工程师",
+    "alarm_ack": "值班人",
     "source_values": "质量工程师",
     "source_schema": "数据管理员",
     "data_contract": "数据管理员",
@@ -47,13 +49,14 @@ UNITS = {
     "data_contract": "件",
     "source_values": "列",
     "status_policy": "条",
+    "alarm_ack": "条",
 }
 
 # 类别登记表是「客户怎么讲这件事」的唯一来源：事件里带过去，页面不再自己拼名字
 try:  # app.ds.alerts / 直接跑脚本两种入口
-    from .issues import category_for
+    from .issues import category_for, is_external
 except ImportError:  # pragma: no cover
-    from app.ds.issues import category_for
+    from app.ds.issues import category_for, is_external
 
 
 def issue_fields(check_id: str) -> dict:

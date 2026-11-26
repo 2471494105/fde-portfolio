@@ -58,6 +58,8 @@
   .catalog .name{color:var(--ink)}
   .catalog .muted{color:var(--ink-faint)}
   .catalog .step{color:var(--ink-dim)}
+  .ev-link{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
+  .ev-link:hover{color:#8fe9f2}
   .tag{display:inline-block;min-width:26px;text-align:center;padding:1px 6px;border-radius:3px;
     font:600 12px var(--mono);background:#1b2634;color:#7fb6d9;border:1px solid #2c4258}
   .tag.zero{background:#1d232b;color:#6b7b8c;border-color:#2a3540}
@@ -147,7 +149,7 @@
       <thead><tr>
         <th style="width:66px">类别</th><th>问题（客户的说法）</th>
         <th style="width:110px">责任方</th><th style="width:96px">今日样本</th>
-        <th style="width:36%">第一步（客户自己能做）</th>
+        <th style="width:36%">第一步（客户自己能做）</th><th style="width:60px">明细</th>
       </tr></thead>
       <tbody id="catalog"></tbody>
     </table>
@@ -196,6 +198,7 @@ const CHECK_NAME = {
   status_policy: "状态口径",
   data_contract: "契约/隔离区",
   source_values: "源端值域",
+  alarm_ack: "报警闭环",
 };
 const CHECK_COLOR = {
   station_contract: "#3fd0e0",
@@ -203,14 +206,15 @@ const CHECK_COLOR = {
   status_policy: "#5ad1a0",
   data_contract: "#9b8cf4",
   source_values: "#e08fb4",
+  alarm_ack: "#f0625e",
 };
 // KPI 备注用短名：卡片一行放不下「工单/缺陷归属」这种全称
 const CHECK_SHORT = {
   station_contract: "工单", defect_fields: "缺陷", status_policy: "状态",
-  data_contract: "契约", source_values: "值域",
+  data_contract: "契约", source_values: "值域", alarm_ack: "报警",
 };
-// 违约行 KPI 只算「行」这一种单位：契约(件)、值域(列) 混进来会让 367 变成 369
-const ROW_CHECKS = ["station_contract", "defect_fields", "status_policy"];
+// 违约行 KPI 只算「行」这一种单位：契约(件)、值域(列) 混进来会让 407 变成 409
+const ROW_CHECKS = ["station_contract", "defect_fields", "status_policy", "alarm_ack"];
 const fmt = (n) => (n === null || n === undefined ? "—" : String(n));
 
 async function getJSON(url) {
@@ -340,20 +344,39 @@ async function load() {
       if (s.n <= 0) return `<span class="tag zero">0</span>`;
       return `<span class="tag ${s.sev === "amber" ? "amber" : "red"}">${s.n}</span>`;
     };
-    const hit = catalog.filter((c) => (sampleOf(c).n || 0) > 0);
-    document.getElementById("kpi-cat").innerHTML = `${hit.length}<small> / ${catalog.length} 类</small>`;
+    // 命中只数客户库：外部自检（沙箱库 / 源端样本）红了不代表客户这台库有问题，
+    // 混进分子会让客户以为「我这有 5 类毛病」，其中 2 类是判据自己的靶子。
+    const clientCat = catalog.filter((c) => c.scope !== "external");
+    const extCat = catalog.filter((c) => c.scope === "external");
+    const hit = clientCat.filter((c) => (sampleOf(c).n || 0) > 0);
+    document.getElementById("kpi-cat").innerHTML = `${hit.length}<small> / ${clientCat.length} 类</small>`;
     document.getElementById("kpi-cat-note").textContent =
-      `登记 ${catalog.length} · 无样本 ${catalog.length - hit.length}`;
+      `客户库登记 ${clientCat.length} · 无样本 ${clientCat.length - hit.length} · 外部自检 ${extCat.length}`;
     document.getElementById("kpi-cat-card").className = "kpi" + (hit.length ? " red" : "");
     document.getElementById("cat-sum").textContent =
-      `登记 ${catalog.length} 类 · 今日命中 ${hit.length} 类 · 无样本 ${catalog.length - hit.length} 类`;
+      `客户库登记 ${clientCat.length} 类 · 今日命中 ${hit.length} 类 · 无样本 ${clientCat.length - hit.length} 类` +
+      ` · 外部自检 ${extCat.length} 类（不进事件流）`;
+    // 目录行 → 明细页：只有「这一类的活事件」才点得进去。没有活事件就不能点，
+    // 因为明细页答的是「这条事件点了哪几行」，凭空造一条只会让人以为库里真有。
+    const alertByIssue = {};
+    alive.forEach((a) => {
+      const k = a.detail && a.detail.issue;
+      if (k && !alertByIssue[k]) alertByIssue[k] = a.alert_id;
+    });
+    const detailCell = (c) => {
+      if (c.scope === "external") return `<span class="muted">外部自检</span>`;
+      const id = alertByIssue[c.issue_id];
+      if (!id) return `<span class="muted">—</span>`;
+      return `<a class="ev-link" href="/problem?alert=${id}">${sampleOf(c).n || 0} 行 →</a>`;
+    };
     document.getElementById("catalog").innerHTML = catalog.map((c) => `<tr>
       <td>${chip(c.short, "open")}</td>
-      <td><span class="name">${c.name}</span><br>
+      <td><span class="name">${c.name}</span>${c.scope === "external" ? ` <span class="tag zero">外部</span>` : ""}<br>
           <span class="muted">判据 ${c.check_id} · ${c.note || ""}</span></td>
       <td>${c.owner || "待指派"}</td>
       <td>${tagFor(c)}</td>
       <td class="step">${c.first_step}</td>
+      <td>${detailCell(c)}</td>
     </tr>`).join("");
 
     const newest = runs.recent[0];
@@ -405,7 +428,7 @@ async function load() {
       <td>${chip(a.severity === "red" ? "红" : "黄", a.severity)}</td>
       <td>${chip(a.state === "acked" ? "已认领" : "待处理", a.state)}</td>
       <td>${chip((a.detail && a.detail.issue_short) || "—", "open")}</td>
-      <td>${a.title}</td>
+      <td><a class="ev-link" href="/problem?alert=${a.alert_id}" title="看具体哪几行、该改哪一栏">${a.title}</a></td>
       <td>${a.owner || "待指派"}</td>
       <td class="mono">${a.seen_count}</td>
     </tr>`).join("");

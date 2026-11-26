@@ -19,9 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 
 try:  # uvicorn api.app:app
-    from . import obs
+    from . import obs, problems
 except ImportError:  # 直接 python api/app.py 的旧用法
     import obs  # type: ignore
+    import problems  # type: ignore
 
 DSN = os.environ.get(
     "FDE_CLIENT_RO_DSN",
@@ -31,7 +32,7 @@ DSN = os.environ.get(
 # 集合名 -> (表名, 排序键, 可搜索列)
 TABLES = {
     "devices": ("md_device", "equip_no", ("equip_no", "prod_line", "work_station", "lamp_type")),
-    "defect_records": ("biz_defect_record", "rec_id", ("equip_no", "defect_name", "lot_no", "judge")),
+    "defect_records": ("biz_defect_record", "rec_id", ("rec_id", "equip_no", "defect_name", "lot_no", "judge")),
     "work_orders": ("biz_work_order", "wo_no", ("wo_no", "equip_no", "station_no", "state", "stage_id")),
     "remediation_orders": (
         "gov_remediation_order",
@@ -43,6 +44,8 @@ TABLES = {
     "alerts": ("gov_alert", "last_seen", ("title", "check_id", "state", "owner", "severity", "kind")),
     # 常见问题目录：客户侧的类别清单（页面用它回答「这台库一共有多少种毛病」）
     "issue_catalog": ("gov_issue_catalog", "sort_no", ("issue_id", "name", "check_id", "owner")),
+    # 报警闭环那一类（判据 L）要能按 equip_no / 编号翻到原始行：明细页的「目标数据」跳这里
+    "alarms": ("biz_alarm", "alarm_id", ("alarm_id", "equip_no", "code", "level")),
 }
 
 # 台账类视图按时间倒序：翻到第一页就是最近的运行，而不是最老的
@@ -171,6 +174,21 @@ def list_rows(
             "keys": sorted(items[0].keys()) if items else [], "items": items}
 
 
+@app.get("/v1/problem/{alert_id}")
+def problem(alert_id: int, response: Response,
+            size: int = Query(50, ge=1, le=200), page: int = Query(1, ge=1)):
+    """一条事件 → 它点到的那几行。只按编号回查，不重算判据（口径在 problems.py）。"""
+    try:
+        res = problems.problem(DSN, alert_id, size=size, page=page)
+    except Exception as e:
+        response.status_code = 503
+        return {"status": "down", "reason": f"{type(e).__name__}: {e}"}
+    if not res:
+        response.status_code = 404
+        return {"detail": "no such alert: %s" % alert_id}
+    return res
+
+
 STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/app", StaticFiles(directory=str(STATIC), html=True), name="app")
 
@@ -181,3 +199,11 @@ def console():
     from fastapi.responses import FileResponse
 
     return FileResponse(STATIC / "console.html")
+
+
+@app.get("/problem", include_in_schema=False)
+def problem_page():
+    """明细页：从中控台上点一条事件进来，看到具体哪几行、值的原样、该改哪一栏。"""
+    from fastapi.responses import FileResponse
+
+    return FileResponse(STATIC / "problem.html")

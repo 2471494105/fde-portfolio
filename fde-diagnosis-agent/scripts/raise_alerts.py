@@ -86,6 +86,13 @@ def plan(rows: list[dict], orders: list[dict], now: datetime) -> tuple[list[dict
         # 扫描自己的 red_count 是「本次新增推送数」，不是违约行；拿它做红事件会自指造噪音
         if check_id == "alert_sweep":
             continue
+        # 外部自检（沙箱库 / 源端样本）：结果留在台账里当自检证据，但不进客户事件流。
+        # 上一轮把这两类硬接成客户事件（#6/#7），客户点进去会发现那条脏行不在自己库里；
+        # 这里顺手把已经开着的旧事件关掉，理由写清楚是口径问题、不是数据修好了。
+        if al.is_external(check_id):
+            closes.append({"dedup_key": f"{check_id}:red",
+                           "reason": "口径更正：外部自检（fde_sandbox / 源端样本）不计入客户库事件"})
+            continue
         runs = by_check.get(check_id) or []
         if not runs:
             continue
@@ -95,7 +102,8 @@ def plan(rows: list[dict], orders: list[dict], now: datetime) -> tuple[list[dict
         events.extend(out["events"])
         closes.extend(out["closes"])
 
-    last = {cid: as_run(rs[0]) for cid, rs in by_check.items() if rs}
+    last = {cid: as_run(rs[0]) for cid, rs in by_check.items()
+            if rs and not al.is_external(cid)}
     # 只对「已经跑过的判据」查静默：从没跑过的判据属于上线问题，不该混进数据问题里
     events.extend(al.silent_events(last, now, expected=list(last.keys()) or []))
     events.extend(al.overdue_events(orders, now.date()))

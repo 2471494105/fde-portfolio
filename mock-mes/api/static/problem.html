@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>问题明细 · fde_client</title>
+<style>
+  :root{
+    --bg:#0d1219; --panel:#151d27; --panel-2:#1b2531; --line:#26313e;
+    --ink:#dbe6f2; --ink-dim:#8fa1b5; --ink-faint:#5c6d80;
+    --cyan:#3fd0e0; --cyan-dim:#1d6b75;
+    --red:#f0625e; --amber:#f2b45c; --green:#5ad1a0;
+    --mono:"Cascadia Mono","Consolas","SFMono-Regular",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 "Segoe UI","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:baseline;justify-content:space-between;
+    padding:20px 28px 16px;border-bottom:1px solid var(--line)}
+  h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.4px}
+  h1 em{font-style:normal;color:var(--cyan)}
+  .sub{color:var(--ink-dim);font-size:12px;margin-top:6px}
+  .right{text-align:right;font-size:12px;color:var(--ink-faint)}
+  .right a{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
+  main{padding:20px 28px 34px;max-width:1440px;margin:0 auto}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 18px;margin-bottom:12px}
+  .panel h2{margin:0 0 4px;font-size:13px;font-weight:600;letter-spacing:.4px}
+  .panel .hint{font-size:11px;color:var(--ink-faint);margin-bottom:10px}
+  .head{display:grid;grid-template-columns:1fr auto;gap:8px 18px;align-items:start}
+  .title{font-size:17px;font-weight:600}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:12px;color:var(--ink-dim)}
+  .chip{display:inline-block;padding:1px 8px;border:1px solid var(--line);border-radius:3px;
+    background:var(--panel-2);color:var(--ink-dim);font-size:11px}
+  .chip.red{color:var(--red);border-color:#5a2a2a} .chip.amber{color:var(--amber);border-color:#5a4a2a}
+  .chip.cyan{color:var(--cyan);border-color:var(--cyan-dim)}
+  .step{background:var(--panel-2);border-left:3px solid var(--cyan);padding:10px 12px;
+    font-size:13px;margin-top:12px}
+  .step b{color:var(--cyan);font-weight:600}
+  .guide{margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:5px;background:var(--panel-2)}
+  .guide .ghead{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline}
+  .guide .gname{font-weight:600}
+  .guide .gname small{color:var(--ink-faint);font-weight:400;margin-left:6px}
+  .guide .ginfo{font-size:12px;color:var(--ink-dim);margin-top:6px}
+  .guide .gfix{font-size:12.5px;color:var(--ink);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+  .guide .gfix b{color:var(--amber);font-weight:600}
+  .guide a.jump{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim);font-size:12px}
+  table{width:100%;border-collapse:collapse;font:12px/1.5 var(--mono);font-variant-numeric:tabular-nums}
+  th{text-align:left;color:var(--ink-dim);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:5px 8px;border-bottom:1px solid #1e2833;vertical-align:top}
+  td.blank{color:var(--ink-faint);font-style:italic}
+  td a{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
+  .tw{overflow-x:auto}
+  .foot{font-size:11px;color:var(--ink-faint);margin-top:10px}
+  .empty{padding:22px;color:var(--ink-dim);text-align:center;border:1px dashed var(--line);border-radius:6px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>问题明细 <em>· 这一条事件到底点了哪几行</em></h1>
+    <div class="sub">只按判据台账里的编号回查，不重算判据；空值照原样显示</div>
+  </div>
+  <div class="right">
+    <a href="/console">← 回中控台</a><br>
+    <span id="stamp">—</span>
+  </div>
+</header>
+<main>
+  <div id="content"><div class="empty">读取中…</div></div>
+</main>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const isBlank = (v) => v === null || v === undefined || String(v).trim() === "";
+
+function meta(r){
+  const sev = r.alert.severity;
+  const bits = [
+    `<span class="chip ${sev === 'red' ? 'red' : 'amber'}">${sev === 'red' ? '红' : '黄'}</span>`,
+    r.alert.issue_short ? `<span class="chip cyan">${esc(r.alert.issue_short)}</span>` : "",
+    `<span class="chip">#${r.alert.alert_id}</span>`,
+    `<span class="chip">${r.alert.state === 'open' ? '未处理' : '已关'}</span>`,
+    `<span>责任方 ${esc(r.alert.owner || '待指派')}</span>`,
+    `<span>${r.alert.seen_count} 轮 · 最近 ${esc((r.alert.last_seen || "").slice(5, 16))}</span>`,
+    r.run ? `<span>台账 run ${r.run.run_id}（${esc(r.run.dataset)}）</span>` : "",
+  ];
+  return bits.filter(Boolean).join("");
+}
+
+function tableHtml(g, key){
+  if (!g.shown) {
+    return `<div class="empty">判据这轮没有给出属于 ${esc(g.table)} 的编号</div>`;
+  }
+  const head = g.cols.map(c => `<th>${esc(c)}</th>`).join("") + `<th>目标数据</th>`;
+  const body = g.rows.map(row => {
+    const tds = g.cols.map(c => isBlank(row[c])
+      ? `<td class="blank">空</td>`
+      : `<td>${esc(row[c])}</td>`).join("");
+    const k = row[g.key];
+    const href = g.collection ? `/v1/${g.collection}?q=${encodeURIComponent(k)}&size=5` : g.page_url;
+    const link = href ? `<td><a href="${href}" target="_blank" rel="noopener">打开 #${esc(k)}</a></td>` : `<td class="blank">—</td>`;
+    return `<tr>${tds}${link}</tr>`;
+  }).join("");
+  return `<div class="tw"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function groupHtml(g){
+  return `<div class="guide">
+    <div class="ghead">
+      <span class="gname">${esc(g.label)}<small>${esc(g.table)} · 定位列 ${esc(g.key)}</small></span>
+      <span class="chip">这轮 ${g.matched} 行</span>
+      ${g.matched > g.shown ? `<span class="chip">本页 ${g.shown} 行</span>` : ""}
+      ${g.page_url ? `<a class="jump" href="${g.page_url}" target="_blank" rel="noopener">看原页面 →</a>` : ""}
+    </div>
+    <div class="gfix"><b>改哪一栏：</b>${esc(g.fix || "未登记")}</div>
+    ${tableHtml(g, g.key)}
+  </div>`;
+}
+
+function render(r){
+  const a = r.alert, i = r.issue;
+  $("#content").innerHTML = `
+    <div class="panel">
+      <div class="head">
+        <div>
+          <div class="title">${esc(a.title)}</div>
+          <div class="meta">${meta(r)}</div>
+          ${a.issue_name ? `<div class="meta"><span>类别：${esc(a.issue_short)} · ${esc(a.issue_name)}</span></div>` : ""}
+        </div>
+      </div>
+      <div class="step"><b>先做这一步：</b>${esc(a.first_step || i.first_step || "未登记首步")}</div>
+      ${i.evidence ? `<div class="foot">判据怎么判的：${esc(i.evidence)}</div>` : ""}
+      ${i.note ? `<div class="foot">备注：${esc(i.note)}</div>` : ""}
+    </div>
+    <div class="panel">
+      <h2>问题数据 → 目标数据（${r.groups.length} 张表）</h2>
+      <div class="hint">编号来自台账 run ${r.run ? r.run.run_id : "—"} 的 ${r.ids_total} 个；表格里是库里原样的值，空就是空。</div>
+      ${r.groups.length ? r.groups.map(groupHtml).join("") : `<div class="empty">这一类还没登记目标表（外部自检或非行级问题）</div>`}
+      <div class="foot">${esc(r.hint)}</div>
+    </div>`;
+}
+
+async function main(){
+  const id = parseInt(new URLSearchParams(location.search).get("alert") || "0", 10);
+  if (!id) {
+    $("#content").innerHTML = `<div class="empty">缺少事件编号。请从 <a href="/console">中控台</a> 点一条事件进来。</div>`;
+    return;
+  }
+  try {
+    const res = await fetch(`/v1/problem/${id}`, {cache: "no-store"});
+    if (res.status === 404) {
+      $("#content").innerHTML = `<div class="empty">事件 #${id} 不存在（可能已被清理）。<a href="/console">回中控台</a></div>`;
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    render(await res.json());
+    $("#stamp").textContent = "取数 " + new Date().toLocaleTimeString("zh-CN", {hour12: false});
+  } catch (e) {
+    $("#content").innerHTML = `<div class="empty">取数失败：${esc(e.message)}（先确认 8021 还在跑）</div>`;
+  }
+}
+main();
+</script>
+</body>
+</html>

@@ -433,6 +433,29 @@ venv\Scripts\python.exe -X utf8 scripts\verify_issues.py
 
 
 
+### 问题数据指向目标数据：点进一条事件看具体行（T27）
+
+上一版中控台能说出「40 行没有闭环」，但客户问不了下一句：**哪 40 行、长什么样、改哪一栏**。这一轮把三问答上：事件标题变链接 → `/problem?alert=<编号>`，一屏给出行表、原样值、改哪一栏。
+
+- **只按编号回查，不重算判据**：编号在 `gov_check_run.details.ids`，事件只存 `run_id` 指针；编号 → 目标表读 `gov_issue_catalog.targets`（Python 源 `app/ds/issues.py`，`seed_issues.py` 同步）；行 → 片段由 `mock-mes/api/problems.py` 按主键取。
+- **新判据 L 报警闭环**（`scripts/check_alarm_ack.py`）：`biz_alarm` 40 行 `acked_by` 与 `cleared_at` 同时为空——前三类都在说「填得对不对」，这一类说的是「没人接、没人销」。两列分开记（`acked_missing` / `cleared_missing`），编号 `alarm:<id>`。
+- **口径更正**：`data_contract`（跑 `fde_sandbox`）与 `source_values`（跑 `client_a` 的 CSV）**撤出客户事件流**（`scope=external`），历史 #6/#7 关闭理由写「口径更正」；目录 KPI 改为**客户库 3 / 6 类**，外部 3 类单列。上一轮把它们接成客户事件，客户点进去会发现那行不在自己库里——这是我的口径错，不是数据修好了。
+
+```powershell
+# 判据 L（红了 exit 1，是正常的）
+venv\Scripts\python.exe -X utf8 scripts\check_alarm_ack.py
+venv\Scripts\python.exe -X utf8 scripts\check_alarm_ack.py --no-record
+
+# 目录同步（scope/targets 也在这张表里）
+venv\Scripts\python.exe -X utf8 scripts\seed_issues.py
+
+# 验收：P0–P5（外部不进事件流 / 行数=编号数 / 抽样对账 / 指引可取到 / 空值照原样 / 404）
+venv\Scripts\python.exe -X utf8 scripts\verify_problem.py
+```
+
+实测（2026-11-27 00:4x）：事件 3 条（红 3）、违约行 362+5+0+**40 = 407**、台账 `run_id=69`（报警）/`70`（自检）；明细页 #1 拿到 60 工单 + 302 缺陷、#2 五条（`conf_pct` 150 / −10、`captured_at` 2027-01-01、`lot_no` 空）、#9 四十条报警两列全空；`verify_problem.py` P0–P5 ALL PASS，`verify_console` C1–C12d ALL PASS。截图 `mock-mes/out/ui/console-problem-1280.png`、`problem-alarm-1280.png`、`problem-defect-1280.png`；口径与三问在 `docs/20261127_27_问题数据指向目标数据.md`（`DOC-69`）。
+
+
 ## 目录
 
 ```
@@ -448,6 +471,7 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
               check_status_policy（A–H）/ check_station_contract（I/J）/ raise_remediation / verify_station_governance
               raise_alerts / patrol / demo_closeout / verify_alerts / verify_patrol / verify_demo_closeout
               seed_issues / collect_issues / verify_issues（常见问题目录与接线）
+              check_alarm_ack / verify_problem（报警闭环判据、事件→目标行明细链）
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
@@ -456,8 +480,8 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
-             常见问题目录与接线（DOC-68）
-             00_文档索引.md 是全部 69 篇（`DOC-01`–`DOC-68` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）
+             00_文档索引.md 是全部 70 篇（`DOC-01`–`DOC-69` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -509,3 +533,8 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
     口径判据全绿、没有逾期整改单、判据都在跑；`check_db_floor`（库约束 vs 设计，2 条不符）跑在 sandbox 且会插脏数据，
     属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）仍只在 KPI，
     因为 `fde-diagnosis-agent` 没有与 `mock-mes/api/obs.py` 同一份「表-时间列」映射，搬过来就是第二套口径（`DOC-68` 第七节）
+14. **明细页只截前 50 行，没有翻页按钮**：`/problem?alert=N&size=200` 能看到更多，但 362 行那种要自己调 `size`；
+   报警类**没有作业页**（`/v1/alarms` 只有只读 JSON），改数据仍在客户侧 MES；`/app/` 三页也不能按编号定位到某一行，
+   所以明细页给的是「打开 #键 → `/v1/<集合>?q=<键>`」，不是「跳过去高亮」。
+   另外 `verify_problem.py` 会故意打一次 404（验未知事件），接口错误计数里会留一条 `/v1/problem/999999`——
+   要干净演示就重启 8021（接口指标是内存态，重启即清零，既有设计）。

@@ -57,7 +57,7 @@ def main() -> int:
     code, out = run("seed_issues.py", "--check")
     ok("I1 目录表与 app/ds/issues.py 一致", code == 0, out.strip()[-200:])
     n = q("select count(*) from gov_issue_catalog")[0][0]
-    ok("I1b 登记 8 类", n == len(issues.CATALOG) == 8, f"表内 {n}，源 {len(issues.CATALOG)}")
+    ok("I1b 登记 9 类", n == len(issues.CATALOG) == 9, f"表内 {n}，源 {len(issues.CATALOG)}")
 
     # I1c 每个类别都有判据与标题登记（否则事件里会出现没有名字的类别）
     missing = [c["check_id"] for c in issues.CATALOG
@@ -108,12 +108,15 @@ def main() -> int:
     latest: dict[str, int] = {}
     for cid, red in q("select check_id, red_count from gov_check_run order by ran_at desc"):
         latest.setdefault(cid, red)
-    row_total = sum(latest.get(c, 0) for c in ("station_contract", "defect_fields", "status_policy"))
-    expected = 362 + 5 + 0
-    ok("I4 行类合计仍是 362+5+0", row_total == expected, f"{row_total} ≠ {expected}")
+    # T27 加了报警闭环（40 行，仍是「行」单位）：行类合计 362+5+0+40
+    row_total = sum(latest.get(c, 0) for c in ("station_contract", "defect_fields", "status_policy", "alarm_ack"))
+    expected = 362 + 5 + 0 + 40
+    ok("I4 行类合计 362+5+0+40", row_total == expected, f"{row_total} ≠ {expected}")
     html = (ROOT.parent / "mock-mes" / "api" / "static" / "console.html").read_text(encoding="utf-8")
-    ok("I4b 页面环形图只取行类判据", re.search(r'ROW_CHECKS\s*=\s*\[[^\]]*station_contract', html) is not None,
-       "ROW_CHECKS 没定义")
+    ok("I4b 页面环形图只取行类判据（含报警）",
+       re.search(r'ROW_CHECKS\s*=\s*\[[^\]]*station_contract', html) is not None
+       and re.search(r'ROW_CHECKS\s*=\s*\[[^\]]*alarm_ack', html) is not None,
+       "ROW_CHECKS 少了一道行类判据")
 
     # I5 无样本不造事件
     live_checks = {a[1] for a in alive}

@@ -18,8 +18,11 @@
   E 不适用声明（T14）        —— `unsupported_checks` 的 id 必须在 `checks` 登记表里，
                                 而且真跑一遍入口：声明不适用的必须 `ran=False`，
                                 没声明的必须 `ran=True`（「被静默跳过」也要报）
+  F 入口绕过（T15）          —— AST 扫全仓库：实现只许从 `run_check` 进去
+  G 字段面覆盖（T17）        —— priority / 班组必须二选一：折法，或带理由地声明不可用
+  H counterpart（T18）       —— 页面上标红的行与判据说红的行，按工单号必须是同一批
 
-判据 B 需要连库；`--skip-db` 只跑 A/C/D/E。连不上库时状态是 `skipped`，**不是绿**。
+判据 B 与 H 的动态那项需要连库；`--skip-db` 只跑 A/C/D/E/F/G 与 H 的静态三项。连不上库时状态是 `skipped`，**不是绿**。
 B 的观测面默认是 `fde_rag.work_orders`（本家库）；换客户时用 `--dsn=` 与 `--table=`
 把它指到客户库，否则「查的是自己家的词、说的是客户家的事」。
 
@@ -44,6 +47,7 @@ if str(ROOT) not in sys.path:
 from app.ds import status_policy as sp  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
+CLIENT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_client"
 SCHEMA = ROOT / "data" / "schema.sql"
 
 
@@ -203,6 +207,35 @@ def check_entry_bypass(policy: dict) -> dict:
     return {"status": "fail" if detail else "ok", "detail": detail}
 
 
+def check_counterpart(policy: dict, rows: list[dict] | None) -> dict:
+    """H：counterpart 必须能执行——页面上标红的行，与判据说红的行，得是同一批工单。
+
+    静态三项（文件/入口存在、JS 的词与客户登记逐字一致、期望值里没有自造词）总要跑；
+    动态那项要真数据：同一批行喂两侧，按工单号比集合。没有行时如实标 skipped，
+    不能把「没对账」写成「对上了」。
+    """
+    from app.ds import counterpart as cp
+
+    detail = cp.counterpart_problems(policy, rows=rows)
+    return {
+        "status": "fail" if detail else "ok",
+        "rows": len(rows or []),
+        "dynamic": "ran" if rows else "skipped",
+        "note": [] if rows else ["动态对账没跑（没有行可喂）——静态三项已过，但「两侧同名」未验"],
+        "detail": detail,
+    }
+
+
+def load_wo_rows(dsn: str = CLIENT_DSN, table: str = "public.biz_work_order") -> list[dict]:
+    """H 要的是工单行（wo_no / state / stage_id / closed_at），不是词表：按工单号对账才说得清。"""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT wo_no, state, stage_id, closed_at FROM {table}")
+        return [dict(r) for r in cur.fetchall()]
+
+
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
@@ -219,6 +252,13 @@ def main(argv: list) -> int:
             table = a.split("=", 1)[1]
 
     policy = sp.load()
+    rows = None
+    if not skip_db:
+        try:
+            rows = load_wo_rows()
+        except Exception as e:
+            print(f"  (H 的工单行取不到：{type(e).__name__}：{e})", file=sys.stderr)
+            rows = None
     checks = {
         "A_schema_index_drift": check_schema_drift(policy),
         "B_unregistered_db_states": {"status": "skipped", "detail": ["--skip-db"]}
@@ -228,6 +268,7 @@ def main(argv: list) -> int:
         "E_unsupported_checks": check_unsupported(policy),
         "F_check_entry_bypass": check_entry_bypass(policy),
         "G_field_fold_coverage": check_field_fold(policy),
+        "H_counterpart_matches_page": check_counterpart(policy, rows),
     }
     ok = all(c["status"] in ("ok", "skipped") for c in checks.values()) and any(
         c["status"] == "ok" for c in checks.values()
@@ -240,6 +281,8 @@ def main(argv: list) -> int:
 
     for k, v in checks.items():
         print(f"[{v['status']:7s}] {k}")
+        for d in v.get("note") or []:
+            print(f"          · {d}")
         for d in v.get("detail") or []:
             print(f"          - {d}")
 

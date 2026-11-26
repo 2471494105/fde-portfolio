@@ -1,5 +1,5 @@
 {
-  "version": "v4",
+  "version": "v5",
   "updated": "2026-11-26",
   "default_client": "client_a",
   "why": "状态集是契约的一个版本，不是字典。OPC UA FiniteStateMachineType 规定子类型不得增删 States/Transitions，所以换客户 = 换一版口径，必须登记、必须能拒跑。",
@@ -142,7 +142,19 @@
         "已取消"
       ],
       "enforced_where": "app/ds/checks.py::work_order_state_stage_conflict（唯一入口 run_check，先过 check_applies）",
-      "counterpart": "mock-mes/api/static/index.html 的 work_orders.flag（行内红标「关单未关板」）"
+      "counterpart": {
+        "file": "mock-mes/api/static/flag.js",
+        "entries": ["rowFlag", "counts", "judge"],
+        "words_client": "client_a",
+        "expectations_in": ["mock-mes/scripts/verify_ui.py"],
+        "expectation_func": "expect_wo",
+        "allowed_tags": ["关单未关板", "关板未关单"],
+        "compares": "red",
+        "extra_rules": [
+          "关板未关单（看板已关但关单时间为空）：页面判橙，Python 侧没有对应判据——登记为已知差异，不是悄悄漏判"
+        ],
+        "note": "页面与判据是同一规则的两个独立实现，对账方式：同一批行喂两侧，按工单号比集合而不是比条数（条数相等可能是一换一）。"
+      }
     },
     "status_vocabulary_coverage": {
       "what": "库里出现的状态词必须都在闭环或已知未闭环里；冒出一个不认识的词 → 红。它只问「这个词我认识吗」，与版面/看板无关，所以对每一家客户都适用。",
@@ -150,7 +162,10 @@
         "state"
       ],
       "enforced_where": "app/ds/checks.py::status_vocabulary_coverage（同一入口）",
-      "counterpart": "scripts/check_status_policy.py 的 B 判据（同一口径，B 连库取数、这里吃喂进来的 rows）"
+      "counterpart": {
+        "why_text_only": "对照物是同仓的 scripts/check_status_policy.py 的 B 判据：同一条口径的两个取数路径（B 连库、实现吃喂进来的 rows），没有第二套代码可比，所以不参与可执行对账。",
+        "same_repo": "scripts/check_status_policy.py 的 B 判据（连库取数），本实现吃喂进来的 rows"
+      }
     }
   },
   "change_log": [
@@ -173,6 +188,11 @@
       "version": "v4",
       "date": "2026-11-26",
       "what": "T16+T17：看板关闭词 stage_board_closed 与「哪些闭环词算关单」closed_order_labels 显式登记（缺了抛 CheckNotConfigured，不许推）；新增 judged_fields（priority / maintenance_team_id）与 field_fold、unsupported_columns_why，要求每个登记客户对这两个字段二选一：折法，或者带理由地声明不可用。"
+    },
+    {
+      "version": "v5",
+      "date": "2026-11-26",
+      "what": "T18：counterpart 从一句文本变成可执行对账（file / entries / words_client / expectations_in / extra_rules）。页面与新抽出的 mock-mes/api/static/flag.js 共用一份 JS 实现，判据 H 拿它做「同一批工单、两侧同名」的对账；页面对「关板未关单」的判定登记为 extra_rules（Python 侧没有对应判据，是已知差异而非漏判）。第一次跑就逮到页面把「已取消」漏算：页面红 10、判据 19——词表对齐后两侧都是 19，且工单号集合相同。"
     }
   ]
 }

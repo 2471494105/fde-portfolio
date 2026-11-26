@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ds import status_policy as sp  # noqa: E402
+from app.ds import counterpart as cp_mod  # noqa: E402
 
 SCHEMA = ROOT / "data" / "schema.sql"
 
@@ -396,6 +397,58 @@ class FieldFoldTest(unittest.TestCase):
         }
         self.assertTrue(any("'state'" in p and "judged_fields" in p
                             for p in sp.field_fold_problems(patched)))
+
+
+class CounterpartTest(unittest.TestCase):
+    """T18：counterpart 不再是文本。页面标红的行与判据说红的行，必须是同一批工单。
+
+    比条数没有意义：19 对 19 可能是一换一。所以判据 H 比的是工单号集合。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.policy = sp.load()
+        cls.root = cp_mod.REPO_ROOT
+
+    def test_phase_one_page_and_check_agree_on_ids(self):
+        rows = [
+            {"wo_no": "W1", "state": "已完成", "stage_id": "进行中", "closed_at": None},
+            {"wo_no": "W2", "state": "已取消", "stage_id": "进行中", "closed_at": None},
+            {"wo_no": "W3", "state": "已取消", "stage_id": "已关闭", "closed_at": "2026-01-01"},
+        ]
+        if not cp_mod._node():
+            self.skipTest("node 不在 PATH：动态对账跑不了（判据 H 会把这条当成 fail，而不是绿）")
+        self.assertEqual(cp_mod.counterpart_problems(self.policy, rows=rows, root=self.root), [])
+
+    def test_word_drift_between_page_and_policy_is_reported(self):
+        """页面写「已完成」、判据写「已完成+已取消」：这是 T18 第一次跑就逮到的那条漂移。"""
+        spec = sp.checks_registry(self.policy)["work_order_state_stage_conflict"]
+        patched = {
+            **self.policy,
+            "checks": {**self.policy["checks"],
+                       "work_order_state_stage_conflict": {**spec,
+                                                          "closed_order_labels": ["已完成"]}},
+        }
+        probs = cp_mod.counterpart_problems(patched, rows=None, root=self.root)
+        self.assertTrue(any("各写一份词" in p for p in probs), probs)
+
+    def test_text_counterpart_is_reported(self):
+        """纯文本 counterpart 不执行——T18 之前它就是这个样子。"""
+        spec = sp.checks_registry(self.policy)["work_order_state_stage_conflict"]
+        patched = {
+            **self.policy,
+            "checks": {**self.policy["checks"],
+                       "work_order_state_stage_conflict": {**spec,
+                                                          "counterpart": "index.html 的 work_orders.flag"}},
+        }
+        self.assertTrue(any("纯文本" in p for p in cp_mod.counterpart_problems(patched, rows=None,
+                                                                              root=self.root)))
+
+    def test_missing_counterpart_file_is_reported(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            probs = cp_mod.counterpart_problems(self.policy, rows=None, root=d)
+        self.assertTrue(any("文件不存在" in p for p in probs), probs)
 
 
 class EntryBypassTest(unittest.TestCase):

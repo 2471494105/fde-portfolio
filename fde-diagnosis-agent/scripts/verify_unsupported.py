@@ -39,7 +39,7 @@ def load_rows(dsn: str = DSN) -> list[dict]:
     from psycopg.rows import dict_row
 
     with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
-        cur.execute("SELECT wo_no, state, stage_id FROM public.biz_work_order ORDER BY wo_no")
+        cur.execute("SELECT wo_no, state, stage_id, closed_at FROM public.biz_work_order ORDER BY wo_no")
         return [dict(r) for r in cur.fetchall()]
 
 
@@ -265,6 +265,62 @@ def main() -> int:
             vals == set(a_fold[f]), note=f"差集 {vals - set(a_fold[f])}")
     chk("T17 折法是恒等（不偷偷改语义）",
         all(a_fold[f][v] == v for f, vals in observed.items() for v in vals))
+
+    print("== T18 counterpart 不再是文本：页面标红的行必须是判据说红的那批工单")
+    from app.ds import counterpart as cpt
+
+    js, why = cpt._run_js(cpt.REPO_ROOT / "mock-mes/api/static/flag.js", rows)
+    py = ck.run_check(CHECK, rows=rows, name="client_a", policy=policy)
+    py_ids = {x.split("：")[0] for x in py["problems"]}
+    js_ids = set(js["judge"]["red"])
+    print(f"  页面 red {len(js_ids)} / amber {len(js['judge']['amber'])}；判据 red {len(py_ids)}")
+    chk("T18 两侧红数相同（19）", len(js_ids) == len(py_ids) == 19, f"页面 {len(js_ids)} 判据 {len(py_ids)}")
+    chk("T18 两侧工单号集合相同", js_ids == py_ids,
+        note=f"页面多 {sorted(js_ids - py_ids)[:4]}，判据多 {sorted(py_ids - js_ids)[:4]}")
+    chk("T18 现有策略 H 为空", cpt.counterpart_problems(policy, rows=rows) == [],
+        note=str(cpt.counterpart_problems(policy, rows=rows))[:200])
+    amber = js["judge"]["amber"]
+    print(f"  页面 amber {len(amber)} 张「关板未关单」——登记为 extra_rules，Python 侧没有对应判据")
+    chk("T18 已登记的差异在真数据上确实存在（6 张）", len(amber) == 6, f"实得 {len(amber)}")
+    chk("T18 登记过的差异不算问题（H 仍为空）",
+        cpt.counterpart_problems(policy, rows=rows) == [])
+
+    spec = sp.checks_registry(policy)[CHECK]
+    drifted = {**policy, "checks": {**policy["checks"],
+                                    CHECK: {**spec, "closed_order_labels": ["已完成"]}}}
+    msg = cpt.counterpart_problems(drifted, rows=None)
+    for m in msg:
+        print("    · " + m)
+    chk("T18 词表漂移被报（页只认已完成、判据认两个）", any("各写一份词" in m for m in msg))
+
+    # 条件漂移要用临时副本：真文件不能改，改了就不是反例而是事故
+    import shutil, tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="t18_"))
+    (tmp / "mock-mes/api/static").mkdir(parents=True)
+    (tmp / "mock-mes/scripts").mkdir(parents=True)
+    src = (cpt.REPO_ROOT / "mock-mes/api/static/flag.js").read_text(encoding="utf-8")
+    mutated = src.replace("W.boardClosed.indexOf(r.stage_id) < 0", "W.boardClosed.indexOf(r.stage_id) >= 0")
+    assert mutated != src, "T18 反例：条件没被改到，反例就假了"
+    (tmp / "mock-mes/api/static/flag.js").write_text(mutated, encoding="utf-8")
+    shutil.copy2(cpt.REPO_ROOT / "mock-mes/scripts/verify_ui.py", tmp / "mock-mes/scripts/verify_ui.py")
+    msg2 = cpt.counterpart_problems(policy, rows=rows, root=tmp)
+    for m in msg2:
+        print("    · " + m)
+    chk("T18 条件漂移被动态对账抓到", any("对不上同一批工单" in m for m in msg2),
+        note=str(msg2)[:200])
+    shutil.rmtree(tmp, ignore_errors=True)
+
+    plain = {**policy, "checks": {**policy["checks"], CHECK: {**spec, "counterpart": "index.html 的 flag"}}}
+    chk("T18 回到纯文本要报", any("纯文本" in m for m in cpt.counterpart_problems(plain, rows=None)))
+
+    orig_node = cpt._node
+    cpt._node = lambda: None
+    try:
+        msg3 = cpt.counterpart_problems(policy, rows=rows)
+    finally:
+        cpt._node = orig_node
+    print("    · " + (msg3[0] if msg3 else "（没报，说明 node 缺失被静默当成通过）"))
+    chk("T18 node 缺失要报，不能当通过", any("跑不了就是没验" in m for m in msg3))
 
     print("\nRESULT:", "ALL PASS" if ok else "HAS FAIL")
     return 0 if ok else 1

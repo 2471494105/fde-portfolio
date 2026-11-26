@@ -161,6 +161,8 @@
     </div>
   </footer>
 </main>
+<!-- 判定只有一份实现：行标、KPI 计数都从这里来，判据 H 拿同一份做对账 -->
+<script src="flag.js"></script>
 <script>
 const VIEWS = {
   devices: {
@@ -206,17 +208,7 @@ const VIEWS = {
     legend: '<span><i class="r"></i>关单了看板没关</span><span><i class="a"></i>看板关了没关单</span>',
     size: 20,
     widths: [128, 78, 90, 172, 172, 74, 74, 60, 72, 118],
-    flag: (r) => {
-      // 两套状态并存，谁也不是权威，只能判"事实与状态对不上"，两个方向分开报：
-      // 红 = 业务说关单了（已完成）但看板还挂在别处；橙 = 看板已关闭却没有关单时间。
-      if (r.state === "已完成" && r.stage_id !== "已关闭") {
-        return {cls:"row-red", tags:[["关单未关板","tag-red"]]};
-      }
-      if (r.stage_id === "已关闭" && !r.closed_at) {
-        return {cls:"row-amber", tags:[["关板未关单","tag-amber"]]};
-      }
-      return {cls:"", tags:[]};
-    }
+    flag: (r) => MesFlag.rowFlag(r)
   }
 };
 
@@ -317,11 +309,9 @@ async function refreshKpi(){
   if (cur !== "work_orders") { el.style.display = "none"; return; }
   try {
     const d = await fetch("/v1/work_orders?size=500").then((r) => r.json());
-    let red = 0, amber = 0;
-    d.items.forEach((r) => {
-      if (r.state === "已完成" && r.stage_id !== "已关闭") red++;
-      else if (r.stage_id === "已关闭" && !r.closed_at) amber++;
-    });
+    // 与行标同一份实现：KPI 与表格不许各判各的
+    const c = MesFlag.counts(d.items);
+    const red = c.red, amber = c.amber;
     el.style.display = "";
     el.className = red ? "kpi" : "kpi amber";
     el.innerHTML = "两套状态对不上 <b>" + (red + amber) + "</b> / " + d.total +

@@ -81,7 +81,10 @@ def expect_defect(r):
 
 
 def expect_wo(r):
-    if r["state"] == "已完成" and r["stage_id"] != "已关闭":
+    # 关单词要认「已完成」和「已取消」两个：取消的单也是关了的单（理由见
+    # fde-diagnosis-agent 的 checks spec：已合并不算，取消算）。只认「已完成」会让
+    # 页面少标 9 行——这正是判据 H 第一次跑出来的差。
+    if r["state"] in ("已完成", "已取消") and r["stage_id"] != "已关闭":
         return "row-red", ["关单未关板"]
     if r["stage_id"] == "已关闭" and not r["closed_at"]:
         return "row-amber", ["关板未关单"]

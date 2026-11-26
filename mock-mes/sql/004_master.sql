@@ -19,7 +19,8 @@ COMMENT ON TABLE  md_line IS '产线主数据';
 COMMENT ON COLUMN md_line.line_no IS '产线编码，业务表引用它';
 
 CREATE TABLE IF NOT EXISTS md_station (
-  station_no   text PRIMARY KEY,               -- 产线A-01
+  station_no   text PRIMARY KEY,               -- 产线A-01（客户对外用的名字）
+  station_id   text NOT NULL UNIQUE,           -- S-A01（内部稳定键，契约要求明细侧提交它）
   line_no      text NOT NULL REFERENCES md_line(line_no),
   station_name text NOT NULL,
   seq          smallint NOT NULL CHECK (seq > 0),

@@ -27,6 +27,11 @@ TABLES = {
     "devices": ("md_device", "equip_no", ("equip_no", "prod_line", "work_station", "lamp_type")),
     "defect_records": ("biz_defect_record", "rec_id", ("equip_no", "defect_name", "lot_no", "judge")),
     "work_orders": ("biz_work_order", "wo_no", ("wo_no", "equip_no", "station_no", "state", "stage_id")),
+    "remediation_orders": (
+        "gov_remediation_order",
+        "rm_no",
+        ("rm_no", "contract_id", "table_name", "field_name", "owner", "state"),
+    ),
 }
 
 app = FastAPI(title="Mock MES Read API", version="2.0", description="第三条取数路：分页接口 + 客户端")

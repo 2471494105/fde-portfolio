@@ -10,8 +10,9 @@ INSERT INTO md_line (line_no, line_name, workshop) VALUES
   ('产线C', 'C 线（检测包装）', '二车间'),
   ('产线D', 'D 线（返修）',     '二车间');
 
-INSERT INTO md_station (station_no, line_no, station_name, seq)
-SELECT l.line_no || '-' || lpad(s::text, 2, '0'),
+INSERT INTO md_station (station_id, station_no, line_no, station_name, seq)
+SELECT 'S-' || right(l.line_no, 1) || lpad(s::text, 2, '0'),
+       l.line_no || '-' || lpad(s::text, 2, '0'),
        l.line_no,
        l.line_no || '第' || s || '工位',
        s

@@ -23,9 +23,10 @@ BASE = "http://127.0.0.1:8021"
 EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 TMP = tempfile.gettempdir()
 NOW = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+NOW_DATE = NOW[:10]
 
 # 三个视图各自"有几列"（数据列 + 标记列），列宽改动时这里必须一起改
-COLS = {"devices": 9, "defect_records": 10, "work_orders": 10}
+COLS = {"devices": 9, "defect_records": 10, "work_orders": 10, "remediation_orders": 10}
 
 
 def get(path):
@@ -95,10 +96,21 @@ def expect_none(r):
     return "", []
 
 
+def expect_rm(r):
+    """整改单：closed 绿；未关闭且过期红；未关闭未过期橙。判据 J 的口径。"""
+    if r.get("state") == "closed":
+        return "row-green", ["已关闭"]
+    due = r.get("due_on")
+    if due and str(due) < NOW_DATE:
+        return "row-red", ["逾期"]
+    return "row-amber", ["未关闭"]
+
+
 CASES = [
     ("devices", "/app/#devices", "/v1/devices?page=1&size=20", expect_none),
     ("defect_records", "/app/#defect_records", "/v1/defect_records?page=1&size=20", expect_defect),
     ("work_orders", "/app/#work_orders", "/v1/work_orders?page=1&size=20", expect_wo),
+    ("remediation_orders", "/app/#remediation_orders", "/v1/remediation_orders?page=1&size=20", expect_rm),
     ("devices-p3", "/app/?page=3#devices", "/v1/devices?page=3&size=20", expect_none),
     ("wo-p2", "/app/?page=2#work_orders", "/v1/work_orders?page=2&size=20", expect_wo),
     ("wo-p3", "/app/?page=3#work_orders", "/v1/work_orders?page=3&size=20", expect_wo),
@@ -148,9 +160,9 @@ def main():
         chk(tag + " 控制台报错", len([l for l in err.splitlines()
                                       if "CONSOLE" in l or "Uncaught" in l]), 0)
 
-    h, _ = render(BASE + "/app/#work_orders", "kpi")
-    print("侧栏计数:", text(h, "num-devices"), text(h, "num-defect_records"), text(h, "num-work_orders"))
-    print("KPI:", text(h, "kpi"))
+    h, _ = render(BASE + "/app/#remediation_orders", "kpi")
+    print("侧栏计数:", text(h, "num-devices"), text(h, "num-defect_records"), text(h, "num-work_orders"), text(h, "num-remediation_orders"))
+    print("KPI:", text(h, "kpi"), "（整改单页）")
     m = (re.search(r'<div[^>]*id="banner"[^>]*class="([^"]*)"', h)
          or re.search(r'<div[^>]*class="([^"]*)"[^>]*id="banner"', h))
     chk("banner 未出现", (m.group(1) if m else "?").find("show"), -1)

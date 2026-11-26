@@ -64,30 +64,33 @@ python scripts\verify_change_flow.py                              # 15 项检查
 
 `f3` 是唯一一种**我们想改也改不进去**的变更：库里早有 `conf_pct=150/-10`，加 `CHECK (0..100)` 会被 PG 当场拒。
 先洗数据还是先放宽声明是业务要拿主意的事——判据能做的是把它拦在结构变更这一刻。
-## 客户端三页（同一进程里的只读视图）
+## 客户端四页（同一进程里的只读视图）
 
 ```powershell
 .\api\run.ps1            # uvicorn api.app:app --port 8021
 # 浏览器打开 http://127.0.0.1:8021/app   （不要双击 index.html，file:// 下拉不到接口）
-python -X utf8 scripts\verify_ui.py   # 8 组渲染对账，全 PASS
+python -X utf8 scripts\verify_ui.py   # 9 组渲染对账，全 PASS
 ```
 
-三页和接口是同一个进程：页面上每一个数字，都是 `ro_reader` 从这个库里读出来的，没有第二份假数据。
+四页和接口是同一个进程：页面上每一个数字，都是 `ro_reader` 从这个库里读出来的，没有第二份假数据。
 
 | 页 | URL | 条数 | 这一页要让你看见什么 |
 |---|---|---|---|
 | 设备台账 | `/app/#devices` | 48 | 主数据是干净的；`install_dt` 到页面只剩 `2023-01-05`，原始 `2023/01/05` 的写法在库这一层已经丢了 |
 | 缺陷记录 | `/app/#defect_records` | 302 | 脏行必须露出来：`conf_pct` 越界（红）、`captured_at` 是未来（橙）、`lot_no` 空串或 NULL（灰，两种"空"分色显示） |
 | 维修工单 | `/app/#work_orders` | 60 | 两套状态并存，谁也不是权威：红=关单了看板没关（19 张，`已完成` 10 + `已取消` 9），橙=看板关了没关单（6 张），顶部 KPI 直接报 `25 / 60` |
+| 数据整改单 | `/app/#remediation_orders` | 2 | 判据红的落点：`RM-20261126-01`（工单 60 行）、`RM-20261126-02`（缺陷 302 行），责任方「产线计划员」、到期 2026-12-03；KPI `未关闭 2 / 2（逾期 0 · 违约 362 行）`。绿=已关闭 / 橙=未关闭 / 红=逾期 |
 
 翻页与搜索可以直接写进 URL，录屏和复述都靠它：
 `/app/?page=2#work_orders`、`/app/?q=CX-14#devices`（命中 9 台）。
 
 **口径说明**：工单页判红/橙**不靠"state→stage_id 映射表"**。库里的种子是状态×阶段交叉出来的，任何一对一映射都会误判一片；能判的只有"事实跟状态对不上"这两个方向。判定只有一份实现：`api/static/flag.js`（`rowFlag` 行标 / `counts` KPI 计数 / `judge` 按工单号列表），行标与 KPI 都调它，词收在 `MES_WORDS`；`scripts/verify_ui.py` 里是同一条规则的独立实现——**两边对不对得上不再是靠人看**：`fde-diagnosis-agent` 的判据 H 会把同一批工单喂给两侧，按工单号比集合（不比条数，条数相等可能是一换一）。
 
-**验收口径**：`scripts/verify_ui.py` 不用截图判对错——截图只能证明"看起来像"。它拿 Edge 无头渲染后的 DOM，把每行底色、标记、页脚区间、页码、上一页/下一页禁用态逐项与 `/v1/*` 的返回体比对，同时收 stderr 里的 CONSOLE 报错。目前 8 组（三页首页 + 末页 + 第 2 页 + 搜索页）全 PASS，控制台 0 报错。
+**整改单页的口径**：`state` 只有 `open` / `closed` 两种，**关闭不是点按钮**——`fde-diagnosis-agent` 的 `scripts/raise_remediation.py --close` 会复跑判据，违规归零才写 `closed` + 关闭证据；还剩 60 / 302 行时它直接拒绝。页面按同一套语义着色，数据全来自 `gov_remediation_order`，没有前端自算。
 
-截图证据：`out/ui/*.png`（1280 与 1024 两档各三张）。
+**验收口径**：`scripts/verify_ui.py` 不用截图判对错——截图只能证明"看起来像"。它拿 Edge 无头渲染后的 DOM，把每行底色、标记、页脚区间、页码、上一页/下一页禁用态逐项与 `/v1/*` 的返回体比对，同时收 stderr 里的 CONSOLE 报错。目前 9 组（四页首页 + 末页 + 第 2 页 + 搜索页）全 PASS，控制台 0 报错，侧栏计数 `48 302 60 2`。
+
+截图证据：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单各一套）。
 
 ## 目录
 
@@ -102,6 +105,8 @@ sql/007_biz_seed.sql       业务种子 60/80/300/40/120
 sql/008_gov.sql            治理四表 + 从元数据灌登记册
 sql/009_null_anomaly.sql   两条"库里形态的空值"（NULL 与空串不是一回事）
 sql/010_audit.sql          审计触发器（update 只记变化的列）+ 越权安全阀 gov.read_guarded()
+sql/011_station_id_upgrade.sql  工位稳定键 station_id（存量库升级，幂等；新装由 004/005/006 直接建）
+sql/012_remediation.sql    数据整改单 gov_remediation_order（同契约同表只许一张 open）
 scripts/bootstrap.ps1      一条命令跑完 001~003，幂等
 scripts/export_registry.py 登记册 -> 与 source_schema 同构的 JSON
 scripts/query_readonly.py  只读取数 + 越权自证
@@ -111,12 +116,12 @@ scripts/simulate_change.py 按变更单执行/回滚 DDL，只认 approved
 scripts/inject_faults.py   三种故障注入（结构先动 / 登记先动 / 值域收紧）
 scripts/verify_change_flow.py T8 验收十五项检查，自带预清理
 api/app.py                 分页接口（FastAPI，8021）+ 静态挂载 /app
-api/static/index.html      客户端三页（单文件 HTML + CSS，无框架）
+api/static/index.html      客户端四页（单文件 HTML + CSS，无框架）
 api/static/flag.js         红/橙判定唯一的一份实现（行标与 KPI 共用；判据 H 拿它对账）
-scripts/verify_ui.py       三页渲染对账（DOM vs 接口，8 组检查）
+scripts/verify_ui.py       四页渲染对账（DOM vs 接口，9 组检查）
 ```
 
-**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `009`（空值补丁）→ `010`（审计触发器）。跑故障注入或变更模拟前先 `pg_dump` 一份；改坏了按这个顺序重灌，40 秒左右。
+**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `011`（工位稳定键，存量库升级；新装由 004/005/006 直接建，跑到这里也是空操作）→ `012`（整改单表）→ `009`（空值补丁）→ `010`（审计触发器）。跑故障注入或变更模拟前先 `pg_dump` 一份；改坏了按这个顺序重灌，40 秒左右。
 `007` 会清空业务表重灌，跑完必须再跑 `009`，否则那两条 NULL 行没了。
 
 连接串在 `.env`（不入库）。

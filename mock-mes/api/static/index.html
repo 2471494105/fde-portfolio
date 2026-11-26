@@ -86,6 +86,8 @@
   .tag-red{background:#f7d7d3;color:var(--red)}
   .tag-amber{background:#f6e3c2;color:var(--amber)}
   .tag-gray{background:#e3e6ea;color:var(--gray)}
+  .tag-green{background:#d8ecdd;color:#1f7a45}
+  .row-green td{background:#f0f8f2}
   footer{display:flex;align-items:center;gap:10px;padding:10px 20px;border-top:1px solid var(--line);
          font-size:12px;color:var(--ink-2);background:#fff}
   .pager{margin-left:auto;display:flex;align-items:center;gap:6px}
@@ -116,6 +118,7 @@
     <button data-view="devices">设备台账<span class="num" id="num-devices">·</span></button>
     <button data-view="defect_records">缺陷记录<span class="num" id="num-defect_records">·</span></button>
     <button data-view="work_orders">维修工单<span class="num" id="num-work_orders">·</span></button>
+    <button data-view="remediation_orders">数据整改单<span class="num" id="num-remediation_orders">·</span></button>
   </nav>
   <div class="side-foot">
     账号 ro_reader<br>
@@ -209,6 +212,24 @@ const VIEWS = {
     size: 20,
     widths: [128, 78, 90, 172, 172, 74, 74, 60, 72, 118],
     flag: (r) => MesFlag.rowFlag(r)
+  },
+  // 判据红出来的东西落到这张表：谁负责、什么时候到期、修完没有。
+  // 「关闭」不是点按钮，是复跑判据违规归零后由脚本写 closed（纸面不能关闭数据问题）。
+  remediation_orders: {
+    title: "数据整改单",
+    sub: "governance · 缺口有人认、有到期日；复跑违规归零才算关闭",
+    cols: ["rm_no","contract_id","table_name","field_name","violation_count","owner","due_on","state","close_evidence"],
+    labels: {rm_no:"单号",contract_id:"契约",table_name:"表",field_name:"字段",
+             violation_count:"违约行",owner:"责任方",due_on:"到期",state:"状态",close_evidence:"关闭证据"},
+    legend: '<span><i class="r"></i>逾期未修</span><span><i class="a"></i>未关闭</span><span><i class="g" style="background:#f0f8f2"></i>已关闭</span>',
+    size: 20,
+    widths: [150, 150, 170, 84, 66, 92, 96, 72, 320],
+    flag: (r) => {
+      if (r.state === "closed") return {cls:"row-green", tags:[["已关闭","tag-green"]]};
+      const today = nowText().slice(0, 10);
+      if (r.due_on && String(r.due_on) < today) return {cls:"row-red", tags:[["逾期","tag-red"]]};
+      return {cls:"row-amber", tags:[["未关闭","tag-amber"]]};
+    }
   }
 };
 
@@ -306,6 +327,20 @@ async function load(){
 
 async function refreshKpi(){
   const el = $("kpi");
+  if (cur === "remediation_orders") {
+    try {
+      const d = await fetch("/v1/remediation_orders?size=500").then((r) => r.json());
+      const open = d.items.filter((r) => r.state !== "closed");
+      const today = nowText().slice(0, 10);
+      const late = open.filter((r) => r.due_on && String(r.due_on) < today);
+      el.style.display = "";
+      el.className = late.length ? "kpi" : "kpi amber";
+      el.innerHTML = "未关闭 <b>" + open.length + "</b> / " + d.total +
+                     "（逾期 " + late.length + " · 违约 " +
+                     open.reduce((a, r) => a + Number(r.violation_count || 0), 0) + " 行）";
+    } catch (e) { el.style.display = "none"; }
+    return;
+  }
   if (cur !== "work_orders") { el.style.display = "none"; return; }
   try {
     const d = await fetch("/v1/work_orders?size=500").then((r) => r.json());

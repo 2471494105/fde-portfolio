@@ -1,0 +1,85 @@
+{
+  "version": "v1",
+  "updated": "2026-11-26",
+  "why": "工位是明细表与主数据之间唯一没有稳定键的那条线：工单写「1号工位」，主数据写「产线A-01」，缺陷表同一列还混进「4号线」。后端可以「用设备反推」把 60 条接上，但实测 40/60 与设备台账矛盾——那不是清洗，那是替客户改事实。所以本登记表只声明契约：明细必须提交 station_id 或（产线 + 工位号），后端只查字典，不推导、不猜、不兜底；给不出来的判红退回产线补。",
+  "station_key": {
+    "master_table": "public.md_station",
+    "id_column": "station_id",
+    "id_pattern": "^S-[A-D][0-9]{2}$",
+    "business_code_column": "station_no",
+    "line_column": "line_no",
+    "seq_column": "seq",
+    "expected_rows": 16,
+    "source_of_truth": "sql/004_master.sql（新建）+ sql/011_station_id_upgrade.sql（存量库升级，幂等）",
+    "why": "id 是内部稳定键：工位改名、产线调整都不动外键；对外交互仍用客户自己的名字（station_no），两边靠字典对齐，不靠文本相似度。"
+  },
+  "contracts": [
+    {
+      "id": "wo_station_identity",
+      "table": "public.biz_work_order",
+      "key_column": "wo_no",
+      "field": "station_id",
+      "alternatives": [
+        "prod_line",
+        "station_no"
+      ],
+      "parse_rule": "已给 station_id 且能在 md_station 找到 → 通过；否则必须同时给 prod_line 与工位文本，取文本里第一段数字当 seq，用 (line_no, seq) 唯一匹配。匹配 0 条或多条都判红。不按设备台账反推，不查别名表。",
+      "owner": "产线计划员",
+      "due": "2026-12-03",
+      "demo_hint": "补 1 行的 prod_line（如产线A）→ 该行转绿，其余仍红；判断依据是字典，不是设备表。"
+    },
+    {
+      "id": "defect_station_identity",
+      "table": "public.biz_defect_record",
+      "key_column": "rec_id",
+      "field": "station_id",
+      "alternatives": [
+        "prod_line",
+        "work_station"
+      ],
+      "parse_rule": "与工单同一条规则：station_id 优先，其次 (prod_line, 工位文本里的数字) 查字典。work_station 里「4号线」这类写产线的值没有工位数字 → 判红，不猜它是 A 还是 B。",
+      "owner": "产线计划员",
+      "due": "2026-12-03",
+      "demo_hint": "缺陷表 302 行里还有 1 条 NULL、1 条空串、1 条「4号线」，都属于同一张契约的违约，不单独立判据。"
+    }
+  ],
+  "field_gaps": [
+    {
+      "id": "gap_wo_station_line",
+      "contract": "wo_station_identity",
+      "missing": "工单既没有 station_id，也没有 prod_line——「1号工位」在 A/B/C/D 四条产线上都成立",
+      "owner": "产线计划员",
+      "raised": "2026-11-26",
+      "due": "2026-12-03",
+      "evidence_note": "受影响行数由判据现场数（当前 60/60），样例单号随整改单生成"
+    },
+    {
+      "id": "gap_defect_station_line",
+      "contract": "defect_station_identity",
+      "missing": "缺陷记录没有 station_id 与 prod_line；work_station 一列混两种口径（工位号 / 产线名）",
+      "owner": "产线计划员",
+      "raised": "2026-11-26",
+      "due": "2026-12-03",
+      "evidence_note": "受影响行数由判据现场数，样例记录号随整改单生成"
+    }
+  ],
+  "gap_rules": {
+    "red_when": [
+      "缺口没有责任方",
+      "缺口没有到期日",
+      "到期日已过且违约行仍 > 0"
+    ],
+    "warn_when": [
+      "有责任方、有到期日、到期日未到、违约行 > 0"
+    ],
+    "closed_when": "违约行 = 0（产线补齐即自动闭合，不需要人签字说修好了）",
+    "why": "认领缺口不是容忍：它有责任人、有期限、有证据，到期自动转红。例外必须可追，否则「暂时」会变成永久。"
+  },
+  "change_log": [
+    {
+      "version": "v1",
+      "date": "2026-11-26",
+      "change": "首版：工位稳定键 S-A01…S-D04 + 两张明细表的工位契约 + 两条认领缺口（到期 2026-12-03）"
+    }
+  ]
+}

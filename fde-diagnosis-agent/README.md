@@ -276,6 +276,26 @@ venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py --dsn=postgresql:
 
 `verify_unsupported.py` 判据同样是 `RESULT: ALL PASS`。三条硬证据：同一批 60 行，`client_a` 适用 → `ran=True`、红 19 条；`client_b` 声明不适用 → `ran=False`、`checked=0`；**只把声明去掉 → 立刻红 19 条**（「不适用」挡的就是每天 19 条假红）。再往后是 H 的九条：真数据两侧 red 19 = 19 且工单号集合相同、页面 6 张橙登记为差异、spec 词改回单值两条静层报、`indexOf < 0` 改 `>= 0` 动层报并列出两侧各多的号、counterpart 改回纯文本报、摘掉 node 报「跑不了就是没验」。再往后四组：真仓库入口绕过 0 命中、走 `run_check` 不误报、影子文件 `rogue.py` 被抓 2 条；看板词改成 `["进行中"]` 红 19→15、清空抛错；字段面撤掉两条声明各报一条、真库 `distinct` 与折法键集合相等。代价与未决见 `docs/20261126_16_不适用声明要能证伪.md`（`DOC-58`）与 `docs/20261126_17_判据的边界.md`（`DOC-59`）。
 
+### 工位契约、缺口认领、整改单（I / J）
+
+前三层都在答「这个值我认不认识」；这一层答「**这个行交不出工位，谁负责补**」。工单写「1号工位」、主数据写「产线A-01」，60 张单对不上 60 张。最省事的接法是拿 `md_device.work_station` 反推，实测只对 **20/60**、**40/60 与设备台账矛盾**（WO-0002 写 2 号工位，它那台 CX-102 却在产线A-01）——所以**后端不做推导**：`md_station` 给稳定键 `station_id`（`S-A01`…`S-D04`），明细侧按契约提交 `station_id` 或（`prod_line` + 工位文本），后端只查字典。文本不是工位写法（如「4号线」）、产线与业务码说反、(line,seq) 查不到或查到多个——全判红，不猜、不折、不给默认值。
+
+判据 **I**（`scripts/check_station_contract.py`）报违约行与单号，并先查契约自己：`md_station` 有没有 `station_id` 列、id 合不合 `S-[A-D]\d\d`、有没有重复、是不是登记过的 16 行。判据 **J** 读 `data/mapping/data_contract.json` 的 `field_gaps`：没主没期或过期仍违约 → 红；已认领未过期 → 黄（不判死，但必须出现在输出里）；违约归零 → 自动闭合。到期自动转红——「暂时」不会变永久，是因为判据不认这个词。
+
+判据红了要有一张能追的纸：`gov_remediation_order`（`mock-mes/sql/012_remediation.sql`）+ `scripts/raise_remediation.py`。同一契约同一张表只允许一张 open，重复跑是更新不是新建；`--close` **复跑归零才允许关闭**，剩 60 / 302 行时直接拒绝，关闭时把「复跑时间 + 违规 0」写成证据。`scripts/verify_station_governance.py` 七段自证：补 1 行 → 59 且解析 `S-A01`；probe 三行小表走完开单→拒绝→补全→关闭；到期反例；真库回原样。
+
+```powershell
+# 工位契约（I）与缺口认领（J）：60 / 302 行违约 + 两条缺口黄；红就 exit 1
+venv\Scripts\python.exe -X utf8 scripts\check_station_contract.py
+venv\Scripts\python.exe -X utf8 scripts\check_station_contract.py --today=2026-12-10   # 到期反例：黄转红
+
+# 整改单：--raise 开/更新，--close 只认归零，--list 看单子
+venv\Scripts\python.exe -X utf8 scripts\raise_remediation.py --list
+venv\Scripts\python.exe -X utf8 scripts\verify_station_governance.py                 # 七段 ALL OK
+```
+
+证据与拒绝掉的那条路在 `docs/20261126_20_不兜底.md`（`DOC-62`）。
+
 ## 目录
 
 ```
@@ -288,14 +308,15 @@ data/        schema.sql、seed_generate.py、manual_seed.py、verify_seed.sql
 eval/        trajectories.py（26 条，含 3 条多轮）、run_eval.py、report_eval.json
 mock_qms/    FastAPI 模拟 QMS（刻意复现"HTTP 200 但业务码在响应体"）
 scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_multi_turn / smoke_web_session
+              check_status_policy（A–H）/ check_station_contract（I/J）/ raise_remediation / verify_station_governance
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
              数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）、
              量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）、不适用声明要能证伪（DOC-58）、
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
-             数据治理线 · 一页（DOC-61，现场材料）
-             00_文档索引.md 是全部 62 篇（`DOC-01`–`DOC-61` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）
+             00_文档索引.md 是全部 63 篇（`DOC-01`–`DOC-62` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

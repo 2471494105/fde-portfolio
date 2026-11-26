@@ -11,6 +11,8 @@
 CREATE TABLE IF NOT EXISTS biz_work_order (
   wo_no              text PRIMARY KEY,             -- WO-2026-0001
   station_no         text NOT NULL,                -- 2号工位（现场口径，与 md_station 的产线A-01 不同）
+  station_id         text,                         -- 契约字段：工位稳定键，产线填；空 = 未按契约提交
+  prod_line          text,                         -- 契约字段：与 station_no 合用可解析出 station_id
   equip_no           text NOT NULL,
   opened_at          timestamptz NOT NULL,
   closed_at          timestamptz,
@@ -42,6 +44,8 @@ CREATE TABLE IF NOT EXISTS biz_defect_record (
   captured_at timestamptz NOT NULL,
   equip_no    text NOT NULL,
   work_station text,
+  station_id  text,                                -- 契约字段：工位稳定键，产线填；空 = 未按契约提交
+  prod_line   text,                                -- 契约字段：与 work_station 合用可解析出 station_id
   defect_name text NOT NULL,                       -- 存名字不存码：真实系统常见，口径问题
   conf_pct    numeric,                             -- 百分制；故意不设 0-100
   lot_no      text,                                -- 允许空

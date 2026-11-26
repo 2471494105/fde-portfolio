@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -42,30 +43,47 @@ def mapping_consumed(client: str, table: str) -> list:
     return [cfg.get("from", target) for target, cfg in fields.items()]
 
 
-def observe(reg: dict, source: str | None, db_table: str | None) -> tuple[dict, str]:
+def resolve_target(reg: dict, db_table: str | None) -> tuple[str, str]:
+    """登记里的 source_path 可能长这样：`postgresql://.../fde_client (public.md_device)`。
+
+    括号里才是 schema 和表名；前面的连接串只说明"这份登记是连哪个库读出来的"。
+    """
+    raw = db_table or reg["source_path"]
+    m = re.search(r"\(([^)]+)\)", raw)
+    if m:
+        raw = m.group(1).strip()
+    if "." in raw:
+        schema, table = raw.split(".", 1)
+        return schema, table
+    return "public", raw
+
+
+def observe(reg: dict, source: str | None, db_table: str | None, dsn: str | None = None) -> tuple[dict, str]:
     via = "db" if db_table else (reg.get("observed_via") or "csv_header")
     if via == "csv_header":
         src = Path(source) if source else ROOT / reg["source_path"]
         return ss.observe_csv_header(src), f"csv_header({src.name})"
-    if via == "db":
+    if via in ("db", "db_metadata"):
+        # db_metadata 与 db 是同一条路：都问 information_schema。分开命名只是把信号来源记清楚。
         import psycopg
-        target = db_table or reg["source_path"]
-        with psycopg.connect(DEFAULT_DSN) as conn, conn.cursor() as cur:
+        schema, target = resolve_target(reg, db_table)
+        with psycopg.connect(dsn or DEFAULT_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position",
-                (target,),
+                "WHERE table_schema = %s AND table_name = %s ORDER BY ordinal_position",
+                (schema, target),
             )
             rows = cur.fetchall()
         if not rows:
-            raise RuntimeError(f"库里没有表 {target}（先建表再观测）")
-        return ss.parse_information_schema(rows), f"information_schema({target})"
+            raise RuntimeError(f"库里没有表 {schema}.{target}（先建表再观测）")
+        return ss.parse_information_schema(rows), f"information_schema({schema}.{target})"
     raise RuntimeError(f"不认识的 observed_via：{via}")
 
 
-def check_one(client: str, table: str, source: str | None, db_table: str | None) -> dict:
+def check_one(client: str, table: str, source: str | None, db_table: str | None,
+              dsn: str | None = None) -> dict:
     reg = ss.load(client, table)
-    observed, via_label = observe(reg, source, db_table)
+    observed, via_label = observe(reg, source, db_table, dsn)
     diffres = ss.diff(reg, observed)
     diffres["observed"] = observed
     breaks = ss.breaking(diffres, reg)
@@ -92,6 +110,7 @@ def main(argv: list) -> int:
     source = ""
     db_table = ""
     json_out = ""
+    dsn = ""
     for a in argv:
         if a.startswith("--client="):
             client = a.split("=", 1)[1]
@@ -103,6 +122,8 @@ def main(argv: list) -> int:
             db_table = a.split("=", 1)[1]
         elif a.startswith("--json="):
             json_out = a.split("=", 1)[1]
+        elif a.startswith("--dsn="):
+            dsn = a.split("=", 1)[1]
 
     reg_dir = ss.REGISTRY_DIR
     # 文件名是 <client>_<table>.json，而 client 名里本身带下划线（client_a），
@@ -115,7 +136,7 @@ def main(argv: list) -> int:
 
     results, worst = [], 0
     for t in tables:
-        r = check_one(client, t, source or None, db_table or None)
+        r = check_one(client, t, source or None, db_table or None, dsn or None)
         results.append(r)
         worst = max(worst, r["exit"])
         d = r["s1_drift"]

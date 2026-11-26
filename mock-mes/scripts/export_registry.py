@@ -10,8 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import sys
 from datetime import date
 from pathlib import Path
+
+AGENT_REGISTRY = Path(__file__).resolve().parents[2] / "fde-diagnosis-agent" / "data" / "mapping" / "source_schema"
 
 import psycopg
 from psycopg.rows import dict_row
@@ -90,6 +94,8 @@ def main() -> int:
     ap.add_argument("--dsn", default=DEFAULT_DSN)
     ap.add_argument("--tables", nargs="*", default=list(LABELS))
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "out" / "registry"))
+    ap.add_argument("--sync-to", default=str(AGENT_REGISTRY),
+                    help="顺手同步给判据读的那份副本；传空串则不复制")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -107,6 +113,17 @@ def main() -> int:
             written.append((table, len(payload["columns"]), path))
     for table, ncol, path in written:
         print(f"[ok] {table}: {ncol} 列 -> {path}")
+
+    # 判据读的是 agent 目录下那份副本。只写自己目录、不同步，副本就会一直停在旧版本，
+    # 于是"登记册改了、判据还红"—— 这种不一致不是判据的错，是导出这一步漏了。
+    if args.sync_to:
+        dest = Path(args.sync_to)
+        if dest.exists():
+            for _, _, path in written:
+                shutil.copy2(path, dest / path.name)
+            print(f"[sync] {len(written)} 份 -> {dest}")
+        else:
+            print(f"[warn] 目标目录不存在，跳过同步：{dest}", file=sys.stderr)
     return 0 if written else 2
 
 

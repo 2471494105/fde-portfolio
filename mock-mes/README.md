@@ -34,6 +34,36 @@ powershell -File api\run.ps1
 三条路给出的日期文本不一样，这是设计结果不是 bug：库直连 `2026-11-01 08:00:00+08:00`，
 本仓导出的 CSV 同形，客户原始 CSV 是 `2026/11/01 08:00`。
 
+## 改结构的正确姿势：变更单 → 登记册 → 快照
+
+```powershell
+python scripts\simulate_change.py --req CR-2026-0001 --action apply    # 改结构 + 补登记册
+python scripts\export_registry.py                                     # 重导快照，顺手同步给判据
+python scripts\simulate_change.py --req CR-2026-0001 --action revert   # 回滚
+```
+
+**三处必须一起动**，少一处判据立刻报红（这不是判据的错）：
+
+| 处 | 谁在改 | 判据看不看得到 |
+|---|---|---|
+| 库里的列 | `simulate_change.py` 的 DDL | 看得到（信息模式） |
+| `gov.field_registry` | `simulate_change.py` 的登记 | 看不到，只是底账 |
+| `data/mapping/source_schema/*.json` 快照 | `export_registry.py` | **判据读的就是这一份** |
+
+只改了前两处、没重导快照，`check_source_schema` 照样报 `S1 新增列`——这是本项目最有说服力的一条现象：
+**"我们改了、判据还说没改"，根因是副本没换，不是判据失灵。**
+
+## 故障注入（跑判据的靶子）
+
+```powershell
+python scripts\inject_faults.py --fault f1 --action apply|revert   # 结构先动、登记落后
+python scripts\inject_faults.py --fault f2 --action apply|revert   # 登记先动、结构没动（动的是快照）
+python scripts\inject_faults.py --fault f3 --action apply|revert   # 值域收紧、存量违约
+python scripts\verify_change_flow.py                              # 15 项检查，自动预清理，可重复跑
+```
+
+`f3` 是唯一一种**我们想改也改不进去**的变更：库里早有 `conf_pct=150/-10`，加 `CHECK (0..100)` 会被 PG 当场拒。
+先洗数据还是先放宽声明是业务要拿主意的事——判据能做的是把它拦在结构变更这一刻。
 ## 目录
 
 ```
@@ -52,10 +82,13 @@ scripts/export_registry.py 登记册 -> 与 source_schema 同构的 JSON
 scripts/query_readonly.py  只读取数 + 越权自证
 scripts/export_csv.py      可配字段集/列序/编码的 CSV 导出
 scripts/verify_audit.py    T7 验收九条断言（用合成探针工单，可反复跑）
+scripts/simulate_change.py 按变更单执行/回滚 DDL，只认 approved
+scripts/inject_faults.py   三种故障注入（结构先动 / 登记先动 / 值域收紧）
+scripts/verify_change_flow.py T8 验收十五项检查，自带预清理
 api/app.py                 分页接口（FastAPI，8021）
 ```
 
-**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `009`（空值补丁）→ `010`（审计触发器）。
+**执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `009`（空值补丁）→ `010`（审计触发器）。跑故障注入或变更模拟前先 `pg_dump` 一份；改坏了按这个顺序重灌，40 秒左右。
 `007` 会清空业务表重灌，跑完必须再跑 `009`，否则那两条 NULL 行没了。
 
 连接串在 `.env`（不入库）。

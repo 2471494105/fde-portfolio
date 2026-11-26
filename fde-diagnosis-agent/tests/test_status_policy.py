@@ -298,5 +298,53 @@ class UnsupportedCheckTest(unittest.TestCase):
             self.ck.run_check("ghost_check", rows=[], policy=patched)
 
 
+class EntryBypassTest(unittest.TestCase):
+    """T15：只许从 `run_check` 调实现——这条要用扫描守住，不能停在约定。
+
+    E 判据只看得见走入口的调用；绕过入口直调实现，E 就是瞎的。所以「只许走入口」
+    要么能被扫出来，要么它只是一句口号。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from app.ds import checks as ck
+        cls.ck = ck
+        cls.root = Path(__file__).resolve().parents[1]
+
+    def test_real_repo_has_no_bypass(self):
+        self.assertEqual(self.ck.bypass_problems(self.root), [])
+
+    def _tmp_with(self, body: str) -> str:
+        import tempfile
+        td = tempfile.mkdtemp()
+        d = Path(td) / "app" / "ds"
+        d.mkdir(parents=True)
+        (Path(td) / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (d / "__init__.py").write_text("", encoding="utf-8")
+        (d / "mod.py").write_text(body, encoding="utf-8")
+        return td
+
+    def test_going_through_entry_is_not_flagged(self):
+        td = self._tmp_with("from app.ds import checks as ck\n"
+                            "def go(rows):\n"
+                            "    return ck.run_check('status_vocabulary_coverage', rows=rows)\n")
+        self.assertEqual(self.ck.bypass_problems(td), [])
+
+    def test_direct_import_and_call_are_flagged(self):
+        td = self._tmp_with("from app.ds.checks import status_vocabulary_coverage\n"
+                            "def go(rows, spec, ctx):\n"
+                            "    return status_vocabulary_coverage(rows, spec, ctx)\n")
+        hits = self.ck.bypass_problems(td)
+        self.assertGreaterEqual(len(hits), 2)
+        self.assertTrue(all("mod.py" in h for h in hits))
+
+    def test_runners_access_is_flagged(self):
+        td = self._tmp_with("from app.ds import checks as ck\n"
+                           "def go(cid):\n"
+                           "    return ck._RUNNERS[cid]\n")
+        hits = self.ck.bypass_problems(td)
+        self.assertTrue(any("_RUNNERS" in h for h in hits), hits)
+
+
 if __name__ == "__main__":
     unittest.main()

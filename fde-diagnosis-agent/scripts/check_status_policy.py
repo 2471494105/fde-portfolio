@@ -185,6 +185,18 @@ def check_unsupported(policy: dict) -> dict:
     }
 
 
+def check_entry_bypass(policy: dict) -> dict:
+    """F：实现只许从 `run_check` 进去（AST 扫全仓库）。
+
+    E 判据验的是「入口在不适用的客户身上没跑」；有人绕过入口直调实现，E 就瞎了。
+    所以「只许走入口」不能停在约定上，得能扫出来。
+    """
+    from app.ds import checks as ck
+
+    detail = ck.bypass_problems(ROOT)
+    return {"status": "fail" if detail else "ok", "detail": detail}
+
+
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
@@ -208,6 +220,7 @@ def main(argv: list) -> int:
         "C_unregistered_client_refuses": check_unregistered_refuses(policy),
         "D_fold_completeness": check_fold(policy),
         "E_unsupported_checks": check_unsupported(policy),
+        "F_check_entry_bypass": check_entry_bypass(policy),
     }
     ok = all(c["status"] in ("ok", "skipped") for c in checks.values()) and any(
         c["status"] == "ok" for c in checks.values()

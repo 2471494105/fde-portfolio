@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""T14 验收：声明「这条判据对你不适用」，要能被机器证明真的没跑。
+"""T14/T15 验收：判据的「不适用」要被证明，判据的实现要被守住入口。
+
+T14 把「声明不适用」做成可证伪：`run_check` 返回 `ran`，声明不适用的客户必须没跑。
+T15 再补一个漏洞：E 判据只看得见走入口的调用。有人绕过入口直调实现，E 就是瞎的——
+所以「只许走入口」不能停在约定上，得能扫出来（F 判据，AST 扫全仓库）。
 
 为什么值得单独一个脚本：`unsupported_checks` 原来只是一句话（而且 id 与散文混在一个字符串里）。
 一句话能骗过所有人——写得漂亮、评审点头、代码照跑。这里把它拆成三个可证的动作：
@@ -154,6 +158,34 @@ def main() -> int:
     print("  " + "\n  ".join(l for l in (r.stdout or "").strip().splitlines()))
     chk("T14-6 E ok 且 exit 0", r.returncode == 0 and "E_unsupported_checks" in r.stdout
         and "[ok     ] E_unsupported_checks" in r.stdout)
+
+    print("== T15 绕过入口的扫描：正常仓库 0 命中，注入影子文件必须被抓")
+    import tempfile
+    import textwrap
+
+    real_scan = ck.bypass_problems(ROOT)
+    chk("T15 全仓库没有绕过（0 命中）", real_scan == [], f"实得 {len(real_scan)} 条")
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td) / "app" / "ds"
+        d.mkdir(parents=True)
+        (Path(td) / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (d / "__init__.py").write_text("", encoding="utf-8")
+        (d / "clean.py").write_text(
+            "from app.ds import checks as ck\n"
+            "def go(rows):\n"
+            "    return ck.run_check('status_vocabulary_coverage', rows=rows)\n",
+            encoding="utf-8")
+        chk("T15 走入口的写法不误报", ck.bypass_problems(td) == [])
+        (d / "rogue.py").write_text(textwrap.dedent("""
+            from app.ds.checks import status_vocabulary_coverage
+            def go(rows, spec, ctx):
+                return status_vocabulary_coverage(rows, spec, ctx)
+        """), encoding="utf-8")
+        hits = ck.bypass_problems(td)
+        for h in hits:
+            print("    · " + h)
+        chk("T15 直接 import + 调用都被抓", len(hits) >= 2, f"实得 {len(hits)} 条")
+        chk("T15 指到影子文件", any("rogue.py" in h for h in hits))
 
     print("\nRESULT:", "ALL PASS" if ok else "HAS FAIL")
     return 0 if ok else 1

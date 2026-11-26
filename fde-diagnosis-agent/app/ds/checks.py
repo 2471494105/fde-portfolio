@@ -76,6 +76,57 @@ def runners() -> set[str]:
     return set(_RUNNERS)
 
 
+_SKIP_DIRS = {".git", "__pycache__", "venv", ".venv", "out", "node_modules", ".pytest_cache"}
+
+
+def bypass_problems(root=None) -> list[str]:
+    """F 判据：实现只许从 `run_check` 进去。返回「文件:行: 说明」，空列表表示没有绕过。
+
+    为什么必须扫而不是靠约定：E 判据验的是「入口在不适用的客户身上没跑」。一旦有人绕过入口
+    直接调实现（`from app.ds.checks import status_vocabulary_coverage`），E 看不见任何异常，
+    仍然是绿的——**判据的证明力被一个 import 就绕过去了**。
+
+    扫三类：
+      1. `from app.ds.checks import <实现名>` —— 把实现从入口里掏出来；
+      2. 直接调用实现名 —— 没有 `check_applies()` 把关；
+      3. 访问 `_RUNNERS` —— 自己按 id 取实现，等价于绕过。
+    """
+    import ast
+    from pathlib import Path
+
+    base = Path(root) if root else Path(__file__).resolve().parents[2]
+    me = Path(__file__).resolve()
+    impl_names = {fn.__name__ for fn in _RUNNERS.values()}
+    out: list[str] = []
+
+    for path in sorted(base.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        if path.resolve() == me:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as e:
+            out.append(f"{path.relative_to(base)}：解析失败（{e}）——扫不了不等于没绕过")
+            continue
+        rel = path.relative_to(base)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in impl_names:
+                        out.append(f"{rel}:{node.lineno}：import 判据实现 {alias.name}——"
+                                   "绕过 run_check，也绕过 check_applies()")
+            elif isinstance(node, ast.Call):
+                f = node.func
+                if isinstance(f, ast.Name) and f.id in impl_names:
+                    out.append(f"{rel}:{node.lineno}：直接调用 {f.id}()——没有入口把关")
+                if isinstance(f, ast.Attribute) and f.attr == "_RUNNERS":
+                    out.append(f"{rel}:{node.lineno}：访问 _RUNNERS——按 id 自己取实现等于绕过入口")
+            elif isinstance(node, ast.Attribute) and node.attr == "_RUNNERS":
+                out.append(f"{rel}:{node.lineno}：访问 _RUNNERS——按 id 自己取实现等于绕过入口")
+    return out
+
+
 def run_check(check_id: str, rows: list[dict] | None = None, name: str | None = None,
               policy: dict | None = None) -> dict:
     """唯一的执行入口。返回里 `ran` 表示实现到底有没有被调用。"""

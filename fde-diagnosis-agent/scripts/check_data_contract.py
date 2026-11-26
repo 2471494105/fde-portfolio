@@ -28,6 +28,13 @@ import psycopg
 from psycopg.rows import dict_row
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# 「闭环」词表不再手抄：读 data/mapping/status_policy.json。索引谓词那份字面量
+# 由 scripts/check_status_policy.py 盯漂移（可索引表达式不能读 JSON）。
+from app.ds.status_policy import closed_states, sql_in_list  # noqa: E402
+
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 
 ASSERTIONS = [
@@ -144,8 +151,8 @@ ASSERTIONS = [
     {
         "id": "A3", "kind": "A", "owner": "工单",
         "desc": "同一幂等键同时只能有一张未关闭的单（pg 上由唯一索引保证）",
-        "sql": """SELECT idempotency_key, count(*) AS n FROM {work_orders}
-                  WHERE status NOT IN ('已完成','已合并','已取消')
+        "sql": f"""SELECT idempotency_key, count(*) AS n FROM {{work_orders}}
+                  WHERE status NOT IN ({sql_in_list(closed_states())})
                   GROUP BY 1 HAVING count(*) > 1""",
     },
     {

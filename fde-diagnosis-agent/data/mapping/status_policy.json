@@ -1,0 +1,29 @@
+{
+  "version": "v1",
+  "updated": "2026-11-26",
+  "default_client": "client_a",
+  "why": "状态集是契约的一个版本，不是字典。OPC UA FiniteStateMachineType 规定子类型不得增删 States/Transitions，所以换客户 = 换一版口径，必须登记、必须能拒跑。",
+  "clients": {
+    "client_a": {
+      "display_name": "本项目沙箱客户 client_a（三词终态）",
+      "registered": true,
+      "closed_states": ["已完成", "已合并", "已取消"],
+      "known_open_states": ["待处理", "处理中"],
+      "severity_map": {"low": "low", "medium": "medium", "high": "high"},
+      "priority_dropped": null,
+      "unsupported_columns": [],
+      "source_of_truth": "mock_qms/reset.py + data/schema.sql 的 work_orders_open_key 部分唯一索引（同一口径，2026-11-26 起改为读本表；索引谓词因不可参数化仍留字面量，由 scripts/check_status_policy.py 盯漂移）"
+    },
+    "client_b_odoo": {
+      "display_name": "Odoo maintenance.request（样本客户，未登记）",
+      "registered": false,
+      "closed_states": null,
+      "known_open_states": ["state:confirm", "stage_id:*"],
+      "severity_map": {"0": "low", "1": "low", "2": "medium", "3": "high"},
+      "priority_dropped": "0",
+      "unsupported_columns": ["maintenance_team_id"],
+      "source_of_truth": "Odoo maintenance.request：闭环看 state + stage_id 看板阶段，与本项目三词无对应（07_外部样本/odoo-maintenance-model.py）",
+      "note": "未登记闭环口径 → 保护集/删除一律拒跑。按我们的三词去判，Odoo 工单 100% 未闭环，保护集只增不减，删除功能等于没有，且不报错。"
+    }
+  }
+}

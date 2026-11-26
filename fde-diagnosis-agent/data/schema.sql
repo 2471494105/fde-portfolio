@@ -131,6 +131,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS work_orders_open_key
     ON work_orders (idempotency_key)
     WHERE status NOT IN ('已完成', '已合并', '已取消');
 
+-- 口径登记（2026-11-26）：这三个词是 data/mapping/status_policy.json 里
+-- client_a 的 closed_states，不是本文件自己说了算。
+-- 这一处**不能**改成读 JSON：部分索引的谓词必须是不可变表达式，读表的函数
+-- 不满足 immutable，PG 会拒绝建索引。所以字面量留在这里，由
+-- scripts/check_status_policy.py 的 A 判据盯着它别和登记漂开——
+-- 漂开的后果是索引按旧词判闭环，而保护集按新词判，两者不一致且不报错。
+
 -- ---------- 设备手册片段（与项目一 IQC 文档库分离） ----------
 -- 项目一 doc_chunks 装的是 IQC 检验标准/安全规范，不含设备参数，
 -- 所以设备诊断手册单独建表，避免污染已交付的知识库。

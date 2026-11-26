@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.ds.delete_sync import ABSENT_CONFIRM, MIN_SNAPSHOT_RATIO, plan_deletes  # noqa: E402
+from app.ds.status_policy import closed_states, policy_summary  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 SQL = ROOT / "data" / "sandbox" / "delete_sync.sql"
@@ -31,7 +32,8 @@ SQL = ROOT / "data" / "sandbox" / "delete_sync.sql"
 # 「未闭环」的口径必须和 mock_qms/reset.py 逐字一致：那边用它算「谁还占着幂等键」，
 # 这里用它算「谁不能被删」。同一件事不能有两套定义，否则一处宽一处严，
 # 会出现「建单能建、设备却被删掉」这种自相矛盾的现场。
-OPEN_STATUS_EXCLUDE = ("已完成", "已合并", "已取消")
+# 2026-11-26 起这层「一致」不再靠人抄：两边都从 data/mapping/status_policy.json 取。
+OPEN_STATUS_EXCLUDE = tuple(closed_states())
 
 # 夹具工单：造出「一台有未闭环工单、一台只有已闭环工单」两种样本。
 # 保护集本身不再由常量决定，而是从 work_orders 反查——
@@ -149,6 +151,8 @@ def policy():
         "absent_confirm": ABSENT_CONFIRM,
         "min_snapshot_ratio": MIN_SNAPSHOT_RATIO,
         "open_status_exclude": list(OPEN_STATUS_EXCLUDE),
+        # 口径来自哪、是哪一版：报告里能读到版本，才能回答「这份绿按哪版口径判的」。
+        "status_policy": policy_summary(),
     }
 
 

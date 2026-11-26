@@ -47,6 +47,15 @@ from psycopg.rows import dict_row
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
 BACKUP_DIR = Path(__file__).resolve().parent / "backups"
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# 「未闭环」的口径不再手抄：读 data/mapping/status_policy.json。
+# 未登记就抛 PolicyNotRegistered —— 拒跑，不猜。猜法的后果是保护集只增不减，
+# 而报表上看起来一切正常。
+from app.ds.status_policy import PolicyNotRegistered, open_predicate  # noqa: E402
+
 
 def _count(cur) -> int:
     cur.execute("SELECT count(*) AS n FROM work_orders")
@@ -55,10 +64,12 @@ def _count(cur) -> int:
 
 def _open_rows(cur) -> list:
     """列出"还占着幂等键"的行——它们是下一次建单会被 dedup 掉的原因。"""
+    where, params = open_predicate("status")
     cur.execute(
         "SELECT order_id, device_id, root_cause_code, status "
-        "FROM work_orders WHERE status NOT IN ('已完成', '已合并', '已取消') "
-        "ORDER BY created_at"
+        f"FROM work_orders WHERE {where} "
+        "ORDER BY created_at",
+        params,
     )
     return cur.fetchall()
 
@@ -103,6 +114,13 @@ def main(argv: list) -> int:
     dry = "--dry" in argv
     try:
         r = reset_work_orders(dry=dry)
+    except PolicyNotRegistered as e:
+        # 口径未登记：不是「清空失败」，是「这套口径不允许对本客户执行任何判定」。
+        # 单独一个退出码，免得和数据库连接失败混成同一种红。
+        print(f"拒绝执行：{e}", file=sys.stderr)
+        print("先补 data/mapping/status_policy.json 的闭环口径登记，再跑。",
+              file=sys.stderr)
+        return 3
     except Exception:
         print("reset 失败，本次评测的起点无法确定：", file=sys.stderr)
         traceback.print_exc()

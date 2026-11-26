@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import dict_row, tuple_row
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -92,14 +92,62 @@ def reset(conn):
     conn.commit()
 
 
+# 参与内容指纹的业务列。改这里 = 改「什么算内容变了」的定义（契约第八节）。
+# 写全而不是只写 device_id|line：station、camera_model 这些改了同样影响下游判断，
+# 漏掉它们的结果是「型号换了我们还在用旧的答」。表里将来加业务列而这里没跟，
+# hash_columns_check() 会当场报出来。
+CONTENT_COLS = (
+    "device_id", "line", "station", "camera_model", "lens_model",
+    "light_model", "install_date", "maintenance_cycle_days",
+)
+# 天然会变的系统/审计列，不进指纹：进了会让每轮都判成「内容变了」，退化成全量重灌
+HASH_EXCLUDE = {"_src", "_loaded_at", "_ingested_at", "created_at", "updated_at"}
+
+
+def table_columns(conn, table="stg_devices"):
+    """表里现有列名（按定义顺序）。"""
+    with conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "ORDER BY ordinal_position", (table,))
+        return [r[0] for r in cur.fetchall()]
+
+
+def hash_columns_check(cols):
+    """表里的业务列有没有漏进指纹。
+
+    这是本项目最隐蔽的一类失效：漏一列不报错、不变红，只是那一列永远不改。
+    所以不靠人记——每次跑都拿表结构和 CONTENT_COLS 对一遍，漏了就写进 JSON
+    由巡检判红。查列与判漏刻意拆成两个函数：判断逻辑要能在不连库的情况下测。
+    """
+    business = [c for c in cols if c not in HASH_EXCLUDE]
+    return {
+        "cols": list(CONTENT_COLS),
+        "business": business,
+        "missing": [c for c in business if c not in CONTENT_COLS],
+        "excluded": [c for c in cols if c in HASH_EXCLUDE],
+    }
+
+
+def resync_cols(row):
+    """这一条要回灌哪些列：只有快照真的给了的列才算。
+
+    把「快照没给」当成「值为空」会一次清掉本地数据——这是数据接入里最经典的
+    误删来源，比漏更新危险得多。所以这里按 key 是否存在判断，不看值。
+    """
+    return [k for k in CONTENT_COLS if k in row and k != "device_id"]
+
+
 def row_hash(row):
     """内容指纹：由我方对「会影响下游判断的列」算，不依赖上游给 hash。
 
     为什么自己算：让上游给指纹，等于把「什么算变了」的定义交出去；客户换一个源，
     口径就跟着换。自己算的好处是同一套判定在任何源上都成立，代价是列清单要人维护：
     新增一列语义字段却忘了纳进来，就会**内容变了却判没变**（静默不更新）。
+    这条代价不交给记忆保管——见 `hash_columns_check()`，每次跑都对一遍表结构。
     """
-    parts = [str(row.get(k) if row.get(k) is not None else "") for k in ("device_id", "line")]
+    parts = [str(row.get(k) if row.get(k) is not None else "") for k in CONTENT_COLS]
     return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -196,8 +244,12 @@ def apply(conn, result, snapshot=None):
                          "updated_at = now() WHERE device_id = %s",
                          (d.get("content_hash"), did))
             if row:
-                conn.execute("UPDATE stg_devices SET line = %s WHERE device_id = %s",
-                             (row["line"], did))
+                # 只回灌快照真的给了的列（见 resync_cols 的说明）
+                cols = resync_cols(row)
+                if cols:
+                    sets = ", ".join(f"{c} = %s" for c in cols)
+                    conn.execute(f"UPDATE stg_devices SET {sets} WHERE device_id = %s",
+                                 [row[c] for c in cols] + [did])
         elif a == "mark_absent":
             conn.execute("UPDATE stg_device_state SET absent_count = %s, updated_at = now() "
                          "WHERE device_id = %s", (n, did))
@@ -320,6 +372,10 @@ def main(argv=None) -> int:
             "FROM stg_device_state WHERE device_id = ANY(%s) ORDER BY device_id",
             (protected_source,)).fetchall()
 
+        # 指纹列清单必须每次对一遍表结构：漏列的后果是「内容变了却判没变」，没有症状。
+        # 必须在连接关掉之前取——with 一退出 conn 就关了。
+        hash_cols = hash_columns_check(table_columns(conn))
+
     print()
     print(f"{'步骤':<46} {'动作':<28} {'新增':>4} 活跃台数")
     print("-" * 100)
@@ -359,10 +415,19 @@ def main(argv=None) -> int:
     print("第 [10]-[12] 是三个方向：内容变了要重灌（真的覆盖本地行）、没变就不重灌、"
           "新增由装载插入而决策层不决策。")
 
+    miss = hash_cols["missing"]
+    hint = f"内容指纹列    {', '.join(hash_cols['cols'])}" \
+           f"（表内业务列 {len(hash_cols['business'])} 个，未纳入 {len(miss)} 个）"
+    if miss:
+        hint += f" ⚠ 未纳入：{', '.join(miss)}——这些列变了不会触发重灌"
+    print(hint)
+
     if json_out:
         payload = {
             "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "db": DSN.rsplit("/", 1)[-1],
+            # 指纹口径随产物走：读报告的人能看出「这次判内容变，是拿哪几列比的」
+            "content_hash_cols": hash_cols,
             "steps": [{"name": lab, "aborted": res["aborted"], "added": res.get("added", 0),
                        "actions": acts, "live": live} for lab, res, acts, live in log],
             "live_devices": log[-1][3],

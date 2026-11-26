@@ -116,6 +116,11 @@ def main() -> int:
         guards = d.get("guards") or []
         if len(guards) < 6:
             issues.append("删除同步的护栏少了（应有 6 条）")
+    # 指纹漏一列 = 那一列变了永远不重灌，且没有任何症状。表结构漂移只有这里能兜住
+    if d.get("status") == "ok":
+        hc = d.get("content_hash_cols") or {}
+        if hc.get("missing"):
+            issues.append(f"内容指纹没纳入 {'/'.join(hc['missing'])}（这些列变了不会触发重灌）")
     if q is None:
         # 表不存在和连不上库在 quarantine_report 里是同一个返回值（None），
         # 但两种都不能当成「隔离区是空的」——读不到不等于没有

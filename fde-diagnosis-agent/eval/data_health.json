@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:57:44",
+ "checked_at": "2026-11-26 12:08:53",
  "contract": {
-  "checked_at": "2026-11-26 11:57:44",
+  "checked_at": "2026-11-26 12:08:53",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:57:44",
+  "checked_at": "2026-11-26 12:08:52",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:57:44",
+  "checked_at": "2026-11-26 12:08:53",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,8 +166,35 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:57:44",
+  "checked_at": "2026-11-26 12:08:52",
   "db": "fde_sandbox",
+  "content_hash_cols": {
+   "cols": [
+    "device_id",
+    "line",
+    "station",
+    "camera_model",
+    "lens_model",
+    "light_model",
+    "install_date",
+    "maintenance_cycle_days"
+   ],
+   "business": [
+    "device_id",
+    "line",
+    "station",
+    "camera_model",
+    "lens_model",
+    "light_model",
+    "install_date",
+    "maintenance_cycle_days"
+   ],
+   "missing": [],
+   "excluded": [
+    "_src",
+    "_loaded_at"
+   ]
+  },
   "steps": [
    {
     "name": "[1] 首轮全量 5 台（无水可删）",

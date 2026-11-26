@@ -4,9 +4,14 @@
 删少了过期数据一直在回答。
 """
 
+import sys
 import unittest
+from pathlib import Path
 
 from app.ds.delete_sync import content_changed, plan_deletes
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import check_ds_delete as cdd  # noqa: E402
 
 
 def _acts(result):
@@ -135,6 +140,42 @@ class PlanDeletesTest(unittest.TestCase):
         self.assertTrue(content_changed("h1", "h2"))
         self.assertFalse(content_changed("h1", "h1"))
         self.assertFalse(content_changed(None, "h2"))  # 上游没给指纹时不判「改了」
+
+
+class HashColumnsTest(unittest.TestCase):
+    """指纹的列清单会随表结构漂移。漏一列不报错、不变红，只是那一列永远不改。"""
+
+    def test_all_business_cols_covered(self):
+        """表里 8 个业务列必须全部进指纹：漏一个就是那一列改了不重灌。"""
+        cols = ["device_id", "line", "station", "camera_model", "lens_model",
+                "light_model", "install_date", "maintenance_cycle_days",
+                "_src", "_loaded_at"]
+        r = cdd.hash_columns_check(cols)
+        self.assertEqual(r["missing"], [])
+        self.assertEqual(r["excluded"], ["_src", "_loaded_at"])
+
+    def test_new_business_col_is_reported(self):
+        r = cdd.hash_columns_check(["device_id", "line", "model", "_src"])
+        self.assertEqual(r["missing"], ["model"])
+
+    def test_system_cols_do_not_trigger(self):
+        """系统列天然会变，进了指纹每轮都判「变了」，等于退化成全量重灌。"""
+        r = cdd.hash_columns_check(["device_id", "line", "station", "camera_model",
+                                    "lens_model", "light_model", "install_date",
+                                    "maintenance_cycle_days", "_loaded_at", "created_at"])
+        self.assertEqual(r["missing"], [])
+
+    def test_row_hash_ignores_system_cols(self):
+        a = cdd.row_hash({"device_id": "A", "line": "1", "_src": "x"})
+        b = cdd.row_hash({"device_id": "A", "line": "1", "_src": "y"})
+        self.assertEqual(a, b)
+
+    def test_resync_only_touches_given_cols(self):
+        """快照没给的列绝不能用空值覆盖——那是误删本地数据。"""
+        self.assertEqual(cdd.resync_cols({"device_id": "A", "line": "1"}), ["line"])
+        self.assertEqual(cdd.resync_cols({"device_id": "A", "line": "1", "station": "宁波"}),
+                         ["line", "station"])
+        self.assertEqual(cdd.resync_cols({"device_id": "A"}), [])
 
 
 if __name__ == "__main__":

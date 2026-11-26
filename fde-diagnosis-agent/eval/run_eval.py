@@ -187,6 +187,91 @@ FORBID_REGEX_MAX = 12
 REQUIRED_AXES = ("model", "code_hash", "cases_hash", "seed_hash")
 
 
+FACT_FIELDS = ("line", "station", "camera_model", "lens_model", "light_model",
+               "install_date", "maintenance_cycle_days")
+
+
+def _norm_val(v):
+    """把 jsonb 取出来的值和 claim 里的值压成同一个口径再比。
+
+    直接 != 会栽在两处：jsonb 里的数字是 int、claim 里可能是 "30"；
+    install_date 在 facts 里是 "2025-03-12"，模型可能写成 "2025-03-12 00:00"。
+    所以只做三件事：None→空串、去首尾空白、统一成字符串。
+    不去小数点、不补零——"逐字相等"这条判据就该逐字，宽到"看起来一样"就不叫回指。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v).strip()
+
+
+def _fact_audit(state):
+    """L4 回指：结论里的设备事实，能不能指回 facts 里那一条当前行。
+
+    三条要求一起判，缺一条就不叫"可回指"：
+      1) 有 id —— claim 能对上一条 ref；
+      2) 当时有效 —— ref 的 valid_to 必须是空（关了的历史行不能支撑"现在"）；
+      3) 值相等 —— claim 的值与 ref 的值逐字一致。
+    只判 1 会放过"指到一条早关掉的历史行"；只判 3 会放过"值对但没出处"。
+
+    方向是"从 claim 出发"，不是"每个 ref 都要被用上"：
+    工具可能把 7 个属性全给回来，而这一轮的结论只用了 line——
+    那是模型按题面取舍，不是缺陷。判据只问"说出口的有没有出处"。
+    """
+    refs = [r for r in (state.get("fact_refs") or []) if isinstance(r, dict)]
+    doc = state.get("final") or {}
+    if isinstance(doc, str):
+        try:
+            doc = json.loads(doc)
+        except Exception:
+            doc = {}
+    claims = doc.get("claims") if isinstance(doc, dict) else []
+    if not isinstance(claims, list):
+        claims = []
+
+    entities = {str(r.get("entity_id") or "") for r in refs} - {""}
+    problems, checked = [], 0
+    for i, c in enumerate(claims):
+        if not isinstance(c, dict):
+            continue
+        ref = str(c.get("ref") or "")
+        if "#" not in ref:
+            continue
+        head, field = ref.split("#", 1)
+        field = field.strip()
+        # 只判设备档案的字段。误判率、工单号、手册条款不归事实层管，
+        # 把它们算进来等于用 L4 的判据去判 L3/L2 的事，红得不明不白。
+        if not head.strip().startswith("query_device_profile") or field not in FACT_FIELDS:
+            continue
+        checked += 1
+        entity = ""
+        for e in entities:
+            if e and e in head:
+                entity = e
+                break
+        cands = [r for r in refs
+                 if str(r.get("fact_key") or "") == field
+                 and (not entity or str(r.get("entity_id") or "") == entity)]
+        if not cands:
+            problems.append(f"claim[{i}] {ref} 在事实层找不到对应行")
+            continue
+        # 多轮里同一 (entity, key) 会在多个 turn 各留一条，取最近一轮：
+        # 早先那条可能已被新版本关闭（valid_to 非空），拿它判「现在」会误红。
+        # 反过来，最近那条真的已关闭时——结论引用了过期事实，该红。
+        cands.sort(key=lambda x: int(x.get("turn") or 0), reverse=True)
+        r = cands[0]
+        if not r.get("fact_id"):
+            problems.append(f"claim[{i}] {ref} 的回指缺 fact_id")
+        elif r.get("valid_to"):
+            problems.append(f"claim[{i}] {ref} 指到已关闭行 #{r.get('fact_id')}"
+                            f"（valid_to={r.get('valid_to')}）")
+        elif _norm_val(c.get("value")) != _norm_val(r.get("value")):
+            problems.append(f"claim[{i}] {ref} 值不等：claim={c.get('value')!r} "
+                            f"fact={r.get('value')!r}")
+    return problems, checked
+
+
 def _missing_axes(meta):
     """报告缺哪几根轴。空列表 = 四轴齐全，这份报告可以声称与旧报告横比。
 
@@ -388,6 +473,10 @@ def judge(traj, state):
     # blocked 里的其余值（没写出处、数出来程序认不出）标灰放行——
     # 它们区分不了"我算的"和"我编的"，判死等于把合法的派生分析一起杀掉。
     misquoted = state.get("misquoted", [])
+    # L4 回指在 semantic_ok 里算一项，所以必须在这之前算出来。
+    # 放在下面（_fail 附近）算，就只能进报告、进不了通过率，
+    # 结果是"判据红了、正确率仍 100%"——那正是这个项目一直在清的那种假绿。
+    fact_problems, fact_checked = _fact_audit(state)
     # 溯源达标 = 没有伪引用（引了字段、但字段撑不住这个数）。
     # ref 写 null 不算不达标：那是"没有出处的数字"，标灰放行即可，
     # 拿它判失败会让"模型诚实标注"反而变成减分项。
@@ -637,6 +726,9 @@ def judge(traj, state):
         and not forbid_hit
         and steps_ok
         and not misquoted
+        # 设备事实指不回 facts 行，和"引的数撑不住"同样是结论层的问题：
+        # 结论读起来是对的，但事后没法回答"依据哪条记录"。
+        and not fact_problems
         and not fc_fail
         and deduped_ok
         and intent_ok
@@ -769,6 +861,24 @@ def judge(traj, state):
     if misquoted:
         _fail("cite_wrong", "model", f"引用写错({','.join(misquoted)})",
               misquoted=[m[:80] for m in misquoted[:5]])
+    # L4：设备事实的回指。和 cite_wrong 分开两条，因为坏的不是同一样东西——
+    # cite_wrong 是"引的数撑不住"，这条是"设备事实指不回 facts 里的那一行"。
+    # 混成一条，修的时候会不知道该改引用格式还是改事实层。
+    if fact_problems:
+        _fail("fact_unref", "model",
+              f"设备事实无法回指({len(fact_problems)}/{fact_checked})",
+              detail=fact_problems[:3])
+    # 「查了档案却没产出回指」不进失败清单：这不是模型或数据的判定结果，
+    # 是工具侧有没有接上的状态。判成 fail 会把环境问题记到模型头上，
+    # 而且 refs 为空时 checked 必为 0，"这条结论没回指"根本无从谈起。
+    # 所以它单独走一个字段，汇总时打出来，让人看得见。
+    #
+    # 只算**查到了**的那几次：CX-106 这类「查无此设备」的调用本来就没有行可回指，
+    # 把它算成「工具侧没接上」是假报（第一次全量里就这么误报了一条）。
+    prof_ok = [e for e in (state.get("evidence") or [])
+               if isinstance(e, dict) and e.get("tool") == "query_device_profile"
+               and "device_not_found" not in str(e.get("result") or "")]
+    fact_refs_missing = bool(prof_ok and not (state.get("fact_refs") or []))
     if parse_fail_n:
         # 归因写 uncertain 而不是 model：判据自己没读懂，判不出模型对不对。
         # owner 三档里没有 evaluator（判据不该给自己的错开脱），所以这一档
@@ -832,6 +942,12 @@ def judge(traj, state):
         "cite_floor": cite_floor,
         "unsourced_max": unsourced_max,
         "req_miss": req_miss,
+        # L4 回指：本轮被核过的设备事实条数，和工具给出的回指条数。
+        # 两个数分开记——checked 是"结论里说了几条设备事实"，
+        # refs_n 是"事实层交回了几条可核的"。前者因题面而异，后者应恒等于 7/台。
+        "fact_checked": fact_checked,
+        "fact_refs_n": len(state.get("fact_refs") or []),
+        "fact_refs_missing": fact_refs_missing,
         "steps_ok": steps_ok,
         "blocked": blocked,
         "misquoted": misquoted,
@@ -1360,6 +1476,25 @@ def main():
     else:
         print("派生值重算    未运行   （本次没有「ref 为空但给算式」的引用；0/0 不代表合格）")
     print(f"引用写错      {misquote_n}/{n}   （伪引用，计入失败）")
+    # L4 这一行和上面几行不是同一回事：
+    # 引用那几行问「这个数字有没有出处」，这一行问「这条设备事实指不回 facts 里的那一行」。
+    # 两者都可能是 0，但 0/0 的含义不同——没被核过（本轮就没有带设备事实的 claim）
+    # 和核过全对，必须分开显示，否则读者会把"没查"当成"查了没事"。
+    f_checked = sum(int(r.get("fact_checked") or 0) for r in results)
+    f_refs = sum(int(r.get("fact_refs_n") or 0) for r in results)
+    f_bad = sum(1 for r in results
+                if any((c or {}).get("code") == "fact_unref"
+                       for c in (r.get("failure") or [])))
+    f_missing = sum(1 for r in results if r.get("fact_refs_missing"))
+    if f_checked:
+        print(f"设备事实回指  {f_checked - f_bad}/{f_checked} 条   "
+              f"（本轮回指清单共 {f_refs} 条；核的是「结论里的设备事实指不回 facts 行」）")
+    else:
+        print(f"设备事实回指  未核   （本轮没有带设备档案字段的 claim；"
+              f"回指清单 {f_refs} 条，0 条被结论用到）")
+    if f_missing:
+        print(f"回指缺失      {f_missing}/{n}   "
+              f"（查了档案却没产出回指：工具侧没接上，不记在模型头上）")
     # "引用歧义"是"引用写错"的子集：同一工具按多种参数各调过、ref 又没写参数指纹，
     # 判据不知道它指哪一次。仍计入失败，单独一行是为了让读报告的人先看到"该补指纹"，
     # 而不是"模型算错了"——两种修法完全不同（改 prompt vs 改引用格式）。

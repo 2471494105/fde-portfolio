@@ -8,8 +8,18 @@
 
 from datetime import datetime, timedelta
 
+from app.ds.facts import FACT_KEYS
 from app.tools.db import connect
 from app.tools.hints import HINT
+
+# 事实层的租户。设备档案的每个属性都从 `facts.device_fact_current` 里找回自己的
+# 那一行，把 `id` 带回去——这是 L4 回指的唯一入口。
+#
+# 为什么不是"查不到就算了"：`devices` 是源端口径的当前值，`facts` 是我方口径的
+# 历史。两者在当前维度必须逐键一致（`check_facts` 第 [6] 步每轮验）。所以查不到
+# 只可能是两类事：事实层没同步这台设备，或者租户写错了。两种都该露出来
+# （`fact_missing`），不能静默返回一个没有 id 的档案。
+FACTS_TENANT = "client_a"
 
 GROUP_EXPR = {
     "hour": "date_trunc('hour', ts)",
@@ -63,6 +73,33 @@ def query_device_profile(device_id: str) -> dict:
         cur.execute("""SELECT count(*) AS n, max(ts) AS m
                        FROM defect_logs WHERE device_id = %s""", (device_id,))
         agg = cur.fetchone()
+        # 每个属性在事实层的那一行。一次查全，别在返回时逐键再查一遍。
+        #
+        # 查的是表而不是视图 device_fact_current：视图就是
+        # `SELECT ... FROM facts.device_fact WHERE valid_to IS NULL`（data/facts.sql
+        # 第 50–54 行），两者同义，但视图不带 valid_to 列——而回指判据要能回答
+        # 「这条记录在结论时刻还有效吗」，答案就是 valid_to 是不是 NULL。
+        # 只拿 id 不拿 valid_to，「当时有效」只能靠"它来自 current 视图"这句话，
+        # 判据就退化成"信工具自己的声明"。视图口径若变了，这里要同步。
+        cur.execute("""SELECT fact_key, id, valid_from, valid_to, value
+                       FROM facts.device_fact
+                       WHERE tenant = %s AND entity_id = %s AND valid_to IS NULL""",
+                    (FACTS_TENANT, device_id))
+        fact_rows = {r["fact_key"]: r for r in cur.fetchall()}
+    # 回指清单：调用方（nodes → state.fact_refs → eval）靠它回答
+    # 「这条结论依据的是哪条事实、什么时候生效」。
+    # value 一并带上：判据要能逐字比对 claim 里的值，只给 id 不够——
+    # id 可能指向一条已经关闭的历史行，也可能指向另一个值。
+    fact_refs = [
+        {"fact_key": k, "fact_id": fact_rows[k]["id"],
+         "valid_from": _fmt(fact_rows[k]["valid_from"]),
+         # 非 None = 这条记录在工具调用时已经关闭，不能用来回指「现在」的事实。
+         # 正常情况下这里是空的（查询条件就是 valid_to IS NULL）；
+         # 字段留着是为了让判据能验，而不是让判据相信。
+         "valid_to": _fmt(fact_rows[k]["valid_to"]),
+         "value": fact_rows[k]["value"]}
+        for k in FACT_KEYS if k in fact_rows
+    ]
     return {
         "device_id": row["device_id"],
         "state": "found",
@@ -75,6 +112,10 @@ def query_device_profile(device_id: str) -> dict:
         "maintenance_cycle_days": row["maintenance_cycle_days"],
         "log_count": agg["n"],
         "latest_log_at": _fmt(agg["m"]),
+        "fact_refs": fact_refs,
+        # 事实层没覆盖的键。非空 = 这台设备的部分属性没有历史，
+        # 那些属性的结论不可能被回指——露出来，别让人以为都盖住了。
+        "fact_missing": [k for k in FACT_KEYS if k not in fact_rows],
     }
 
 

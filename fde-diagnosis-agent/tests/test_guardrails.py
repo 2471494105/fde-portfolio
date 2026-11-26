@@ -4049,5 +4049,106 @@ class CiteTextTest(unittest.TestCase):
                          "工单 [WO-20261105-001] 处理中")
 
 
+class FactRefAuditTest(unittest.TestCase):
+    """L4 回指：结论里的设备事实，能不能指回 facts 里那一条当前行。
+
+    三条判据各自钉一条正例 + 一条反例，理由是它们坏起来不是同一个样子：
+      有 id    —— 指不到（没出处）
+      当时有效 —— 指到一条早关掉的历史行（指错了版本）
+      值相等   —— 指到了，但那行的值不是结论里说的（指错了行）
+
+    只验一条都不够：
+      只验"有 id"会放过指错版本的；
+      只验"值对"会放过没有出处的（模型自己写对也可以）；
+      只验"当时有效"会放过写了 id 却没用的。
+    """
+
+    TRAJ = {
+        "id": "F", "type": "陷阱", "expect_tools": ["query_device_profile"],
+        "forbid_tools": [], "expect_group_by": [], "final_keywords": ["x"],
+        "expect_ask": False, "steps_range": (0, 8),
+    }
+
+    def _judge(self, refs, claims, **kw):
+        st = {
+            "tool_names": ["query_device_profile"],
+            "final_text": "x",
+            "final": {"conclusion": "x", "claims": claims, "advice": []},
+            "steps": 1, "blocked": [], "misquoted": [], "cite_stats": {},
+            "evidence": [], "fact_refs": refs, "intent": "lookup",
+            "intent_conf": 0.9, "stop_reason": "enough", "check_retry": 0,
+        }
+        st.update(kw)
+        return run_eval.judge(dict(self.TRAJ), st)
+
+    def _ref(self, **kw):
+        r = {"entity_id": "CX-101", "fact_key": "line", "fact_id": 11,
+             "valid_from": "2026-01-01 00:00:00", "valid_to": None,
+             "value": "1号线B"}
+        r.update(kw)
+        return r
+
+    def _claim(self, **kw):
+        c = {"text": "CX-101 在 1号线B", "value": "1号线B", "unit": "",
+             "ref": "query_device_profile#line"}
+        c.update(kw)
+        return c
+
+    def _codes(self, r):
+        return [f["code"] for f in r["failure"]]
+
+    def test_supported_claim_passes(self):
+        r = self._judge([self._ref()], [self._claim()])
+        self.assertTrue(r["semantic_ok"], r["failure"])
+        self.assertEqual(r["fact_checked"], 1)
+        self.assertEqual(r["fact_refs_n"], 1)
+        self.assertNotIn("fact_unref", self._codes(r))
+
+    def test_missing_fact_id_fails(self):
+        r = self._judge([self._ref(fact_id=None)], [self._claim()])
+        self.assertFalse(r["semantic_ok"])
+        self.assertIn("fact_unref", self._codes(r))
+
+    def test_closed_row_fails(self):
+        r = self._judge([self._ref(valid_to="2026-06-01 00:00:00")], [self._claim()])
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "fact_unref"][0]
+        self.assertIn("关闭", str(item["basis"]["detail"]))
+
+    def test_value_mismatch_fails(self):
+        r = self._judge([self._ref()], [self._claim(value="3号线")])
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "fact_unref"][0]
+        self.assertIn("值不等", str(item["basis"]["detail"]))
+
+    def test_numeric_value_compares_by_text(self):
+        # jsonb 里 30 是 int、claim 里可能写成 "30"：口径压成文本再比，
+        # 否则每次真实运行都会因为 int/str 假红一次。
+        r = self._judge(
+            [self._ref(fact_key="maintenance_cycle_days", value=30)],
+            [self._claim(value="30",
+                         ref="query_device_profile#maintenance_cycle_days")])
+        self.assertTrue(r["semantic_ok"], r["failure"])
+
+    def test_missing_refs_is_flagged_not_failed(self):
+        # 查了档案却没回指清单 = 工具侧没接上。它不是模型的错，
+        # 所以只标字段、不判失败；但字段必须亮，不能当"都正常"。
+        r = self._judge([], [], evidence=[
+            {"tool": "query_device_profile", "args": {"device_id": "CX-101"},
+             "result": '{"device_id": "CX-101", "state": "found"}'}])
+        self.assertTrue(r["semantic_ok"])
+        self.assertTrue(r["fact_refs_missing"])
+        self.assertNotIn("fact_unref", self._codes(r))
+
+    def test_device_not_found_is_not_a_missing_ref(self):
+        # CX-106 这类查无此设备的调用本来就没有行可回指。
+        # 算成"工具侧没接上"是假报——第一次全量里就这么误报了一条。
+        r = self._judge([], [], evidence=[
+            {"tool": "query_device_profile", "args": {"device_id": "CX-106"},
+             "result": '{"error": "x", "state": "device_not_found"}'}])
+        self.assertTrue(r["semantic_ok"])
+        self.assertFalse(r["fact_refs_missing"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

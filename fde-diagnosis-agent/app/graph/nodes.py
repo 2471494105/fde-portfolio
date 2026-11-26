@@ -1485,6 +1485,10 @@ def _has_write_intent(state):
 def act(state):
     last = state["messages"][-1]
     out_msgs, evidence, names = [], [], []
+    # 只装**本轮新增**：State 里 fact_refs 是累积字段（_add_list），
+    # 节点返回的这段会被追加到已有清单。返回 `list(state.get(...))` 会让
+    # 每一轮把前面所有轮的回指再复制一份，第 5 轮时清单里 4 份重复。
+    fact_refs = []
     # 计数从"已有条数"续，不从 1 重数：evidence 在 state 里是累加的，
     # act 每次只返回本轮增量，按增量列表长度算，第二轮又会冒出证据 1、2、3。
     # 这个号现在只当 evidence 的稳定 id 用（trace / 报告里对得上哪一条），
@@ -1635,12 +1639,31 @@ def act(state):
                          "truncated": cut, "ev_no": ev_no,
                          "turn": int(state.get("turn") or 1)})
         names.append(name)
+        # 回指清单从**完整返回**里取，不从 evidence 取：
+        # evidence 存的是 _payload 压过的 slim，fact_refs 这种嵌套字段
+        # 一旦被裁掉，判据会把「压没了」误判成「没回指」。两者同源（同一个 res），
+        # 但一个是给人看的文本、一个是给校验用的结构，不该互相借。
+        if isinstance(res, dict) and isinstance(res.get("fact_refs"), list):
+            did = str(res.get("device_id") or args.get("device_id") or "")
+            for ref in res["fact_refs"]:
+                fact_refs.append({
+                    "entity_id": did,
+                    "fact_key": ref.get("fact_key"),
+                    "fact_id": ref.get("fact_id"),
+                    "valid_from": ref.get("valid_from"),
+                    "valid_to": ref.get("valid_to"),
+                    "value": ref.get("value"),
+                    # 判据要在多轮里挑「最近一轮」那条：同一台设备查过三次，
+                    # 只有最后那次的值与被关闭状态能代表"现在"。
+                    "turn": int(state.get("turn") or 1),
+                })
 
     return {
         "messages": out_msgs,
         "evidence": evidence,
         # 一轮里 act 可能跑多批，这里合并而不是覆盖，否则只留最后一批
         "tool_names": list(state.get("tool_names") or []) + names,
+        "fact_refs": fact_refs,
         "steps": state.get("steps", 0) + len(last["tool_calls"]),
     }
 
@@ -3056,6 +3079,10 @@ def lookup(state):
     """
     ids = (state.get("device_ids") or [])[:3]
     blocks, evidence, names, steps, claims = [], [], [], 0, []
+    # lookup 也走设备档案，所以也攒回指。不攒的话「CX-101 在 1号线B」这类
+    # 只读查询的答案和诊断结论的回指能力不一致——同一份数据，两种可信度。
+    # 同样只装本轮新增（累积字段由 _add_list 合并）。
+    fact_refs = []
     # 工单号单独收一份。用户问「上次那个工单处理了吗」时，答案就在单号与状态里，
     # 而 conclusion 原先是「按设备档案与最近 7 天的误判统计列出如下」——
     # 一句元描述，既没提工单也没提单号，读的人（和判据）都拿不到答案。
@@ -3078,6 +3105,17 @@ def lookup(state):
                          "result": prof, "turn": turn, "ev_no": prof_no})
         names.append("query_device_profile")
         steps += 1
+        if isinstance(prof, dict) and isinstance(prof.get("fact_refs"), list):
+            for ref in prof["fact_refs"]:
+                fact_refs.append({
+                    "entity_id": str(prof.get("device_id") or d),
+                    "fact_key": ref.get("fact_key"),
+                    "fact_id": ref.get("fact_id"),
+                    "valid_from": ref.get("valid_from"),
+                    "valid_to": ref.get("valid_to"),
+                    "value": ref.get("value"),
+                    "turn": turn,
+                })
         if isinstance(prof, dict) and "error" in prof:
             known = prof.get("known_devices") or []
             blocks.append(f"### {d}\n\n未查到这台设备。当前库里有：{', '.join(known)}")
@@ -3170,6 +3208,7 @@ def lookup(state):
     return {"final": doc,
             "final_text": body + tail,
             "evidence": evidence, "tool_names": names, "steps": steps,
+            "fact_refs": fact_refs,
             "unknown": unknown}
 
 

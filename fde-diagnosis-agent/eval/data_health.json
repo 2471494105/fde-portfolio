@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 14:39:52",
+ "checked_at": "2026-11-26 15:22:12",
  "contract": {
-  "checked_at": "2026-11-26 14:39:52",
+  "checked_at": "2026-11-26 15:22:12",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 14:39:52",
+  "checked_at": "2026-11-26 15:22:11",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 14:39:52",
+  "checked_at": "2026-11-26 15:22:12",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -248,7 +248,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 14:39:52",
+  "checked_at": "2026-11-26 15:22:11",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -472,7 +472,7 @@
   "status": "ok"
  },
  "facts": {
-  "checked_at": "2026-11-26 14:39:52",
+  "checked_at": "2026-11-26 15:22:12",
   "host_db": {
    "facts": "fde_rag",
    "current": "fde_sandbox"
@@ -569,23 +569,28 @@
     "plan_issues": []
    }
   ],
+  "source_coverage": {
+   "devices": 5,
+   "expected": 35,
+   "missing": []
+  },
   "versioning": {
    "entity_id": "CX-101",
    "fact_key": "line",
    "chain": [
     {
-     "id": 1324,
+     "id": 1608,
      "value": "3号线",
-     "valid_from": "2026-11-26 14:39:52",
-     "valid_to": "2026-11-26 14:39:52",
+     "valid_from": "2026-11-26 15:22:12",
+     "valid_to": "2026-11-26 15:22:12",
      "supersedes": null
     },
     {
-     "id": 1355,
+     "id": 1639,
      "value": "1号线B",
-     "valid_from": "2026-11-26 14:39:52",
+     "valid_from": "2026-11-26 15:22:12",
      "valid_to": null,
-     "supersedes": 1324
+     "supersedes": 1608
     }
    ],
    "old_closed": true,
@@ -610,11 +615,11 @@
   },
   "isolation": {
    "prod_tenant": "client_a",
-   "prod_rows_before": 35,
-   "prod_rows_after": 35,
+   "prod_rows_before": 43,
+   "prod_rows_after": 43,
    "unchanged": true,
    "prod_first_valid_from": "2026-11-26 14:15:35",
-   "prod_last_valid_from": "2026-11-26 14:15:35",
+   "prod_last_valid_from": "2026-11-26 14:43:15",
    "selftest_tenant": "fcheck",
    "selftest_rows_cleared_at_start": 44,
    "selftest_cross_tenant_refs": 0,
@@ -676,10 +681,10 @@
   },
   "coverage": {
    "tenant": "client_a",
-   "rows": 35,
+   "rows": 43,
    "first_valid_from": "2026-11-26 14:15:35",
-   "last_valid_from": "2026-11-26 14:15:35",
-   "span_hours": 0.0,
+   "last_valid_from": "2026-11-26 14:43:15",
+   "span_hours": 0.5,
    "ingested_batches": 1
   },
   "totals": {

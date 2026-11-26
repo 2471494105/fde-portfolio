@@ -21,7 +21,7 @@ from typing import Annotated, TypedDict
 #
 # 现在兜底交给 _add_list（它接受 None）；state_ver 只负责"这条会话是哪一版 schema、
 # 迁移过没有"，是可观测性，不是防线。两者分工别搞反。
-STATE_VER = 4
+STATE_VER = 5
 
 
 def _add_list(a, b):
@@ -141,6 +141,20 @@ class State(TypedDict, total=False):
     # 累积字段
     messages: Annotated[list, _add_list]
     evidence: Annotated[list, _add_list]
+    # 设备事实的回指清单：每项 {"entity_id", "fact_key", "fact_id", "valid_from",
+    # "valid_to", "value", "turn"}。它是 L1（事实层）和结论之间的那根线——
+    # 结论里说「CX-101 在 1号线B」，没有它就只能说「我们查过」。
+    #
+    # **为什么是累积而不是每轮重写**（第一版写成每轮清空，被实测推翻）：
+    # W1 是多轮用例，第 2 轮建单时引用第 1 轮查到的设备档案。每轮清空 →
+    # 第 2 轮判「这条 claim 找不到对应行」，把一次合法的跨轮引用判成
+    # 模型没写出处。而 evidence 本来就跨轮保留（它是整段会话「查过什么」），
+    # fact_refs 跟着它才不会自相矛盾：一边说"隔壁证据还在"，一边说"依据没了"。
+    #
+    # 栽赃（引 A 台的记录支撑 B 台结论）不靠清空来防，靠 ref 的 entity_id 与
+    # value 双重比对；每项带 turn，判据取**最近一轮**那条，因此旧轮的值被新版本
+    # 取代后会判「指到已关闭行」——结论用了过期事实，本来就该红。
+    fact_refs: Annotated[list, _add_list]
 
     # 本轮字段（每轮重写）
     tool_names: list

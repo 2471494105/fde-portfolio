@@ -218,6 +218,17 @@ def facts_issues(f):
         if d.get("extra_in_keys"):
             out.append(f"FACT_KEYS 有 {len(d['extra_in_keys'])} 个键在 stg_devices 里不存在："
                        f"{'、'.join(d['extra_in_keys'])}（清单已过期）")
+
+    # 源端覆盖：devices 里有值的每个属性，facts 当前视图里都必须有行。
+    # 缺一个键，那条属性就永远回指不了——而 eval 那一层只会看到"这条 claim
+    # 找不到对应的 facts 行"，把它记成模型没写出处。缺口在数据层，就该在这一层红。
+    cov = f.get("source_coverage") or {}
+    if not cov:
+        out.append("事实层没核对源端覆盖（devices 少一台设备或少一个属性时，"
+                   "对应的结论不可能被回指，这件事未被证明）")
+    elif cov.get("missing"):
+        out.append(f"源端有值的 {len(cov['missing'])} 个属性在 facts 当前视图里没有行："
+                   f"{'、'.join(cov['missing'][:8])}（这些属性说出来就回指不了）")
     return out
 
 

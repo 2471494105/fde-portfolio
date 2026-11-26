@@ -272,6 +272,34 @@ def uniqueness_probe(prod, tenant=SELFTEST_TENANT):
     return {"rejected": False, "constraint": None}
 
 
+def source_coverage(prod, tenant=PROD_TENANT):
+    """源端 devices 里每个**有值**的属性，在 facts 当前视图里有没有对应那一行。
+
+    为什么这条判据必须存在：L4 的回指要求结论里的设备事实指得回 facts 里的行。
+    若 facts 少一台设备、或少一个属性，那条结论**根本不可能**被回指——
+    而 eval 那一层只会看到「这条 claim 找不到对应行」，把它算成模型的错。
+    缺口在数据层，就该在数据层红，不能让报告读的人去猜。
+
+    devices 里的空值不算缺口：`rows_to_facts` 会跳过 None 与空白串，
+    这类键本来就不该有历史（P1-5 的口径）。只有"有值却没有行"才是缺口。
+    """
+    rows = prod.execute(
+        "SELECT device_id, " + ", ".join(FACT_KEYS) + " FROM devices").fetchall()
+    have = {(r["entity_id"], r["fact_key"]) for r in prod.execute(
+        "SELECT entity_id, fact_key FROM facts.device_fact_current "
+        "WHERE tenant = %s", (tenant,)).fetchall()}
+    expected, missing = 0, []
+    for d in rows:
+        for k in FACT_KEYS:
+            v = d[k]
+            if v is None or str(v).strip() == "":
+                continue
+            expected += 1
+            if (d["device_id"], k) not in have:
+                missing.append(f"{d['device_id']}.{k}")
+    return {"devices": len(rows), "expected": expected, "missing": missing}
+
+
 def consistency(prod, sbx, tenant=SELFTEST_TENANT):
     """facts_current 与 stg_devices 在「当前值」上必须逐键一致。
 
@@ -348,6 +376,7 @@ def version_chain(prod, entity_id, fact_key, tenant=SELFTEST_TENANT):
 def main(argv=None) -> int:
     json_out = ""
     seed_prod = False
+    seed_from = "fixture"
     mark_fixture = False
     purge_fixture = False
     for arg in (argv if argv is not None else sys.argv[1:]):
@@ -355,6 +384,8 @@ def main(argv=None) -> int:
             json_out = arg.split("=", 1)[1]
         elif arg == "--seed-prod":
             seed_prod = True
+        elif arg.startswith("--seed-from="):
+            seed_from = arg.split("=", 1)[1]
         elif arg == "--mark-fixture":
             mark_fixture = True
         elif arg == "--purge-fixture":
@@ -373,11 +404,24 @@ def main(argv=None) -> int:
             # source 用 fixture_seed 而不是 initial_load：这 35 行来自夹具，不是客户数据。
             # 打上这个标签，将来真实客户数据接入时才能一条语句把它们清干净
             # （--purge-fixture），而不是混在真实历史里分不出来。
-            load_devices(sbx, BASE)
-            plan = sync(prod, sbx, tenant=PROD_TENANT, source=FIXTURE_SOURCE)
-            print(f"生产租户 {PROD_TENANT} 初始化：开 {len(plan['opens'])} 条、"
+            #
+            # --seed-from=devices ：改成从主库 `devices` 取，而不是夹具 BASE。
+            # L4 的回指要求 facts 与 devices 逐键一致——拿夹具导出来的行去回指
+            # 真实设备档案，指过去的值和 devices 里的不一样，判据会当场挂。
+            # 来源是 devices 时 source 记 initial_load（它是真实首导，不是夹具）。
+            if seed_from == "devices":
+                rows = [dict(r) for r in prod.execute(
+                    "SELECT device_id, " + ", ".join(FACT_KEYS) +
+                    " FROM devices ORDER BY device_id").fetchall()]
+                src = "initial_load"
+            else:
+                rows = BASE
+                src = FIXTURE_SOURCE
+            load_devices(sbx, rows)
+            plan = sync(prod, sbx, tenant=PROD_TENANT, source=src)
+            print(f"生产租户 {PROD_TENANT} 初始化（来源 {seed_from}）：开 {len(plan['opens'])} 条、"
                   f"关 {len(plan['closes'])} 条，现有 {count_rows(prod, PROD_TENANT)} 行"
-                  f"（source={FIXTURE_SOURCE}）")
+                  f"（source={src}）")
             return 0
 
         if mark_fixture:
@@ -640,6 +684,9 @@ def main(argv=None) -> int:
                            if cover["f"] and cover["l"] else 0.0),
             "ingested_batches": cover["batches"],
         }
+        # 算在 with 块里面：devices 和 facts 同在 fde_rag，同一条连接就能查。
+        # 放到 print 之后算会踩 "the connection is closed"——块一结束连接就关。
+        sc = source_coverage(prod, PROD_TENANT)
 
     print()
     print(f"{'步骤':<52} {'关闭':>4} {'新增':>4} {'不变':>4} {'总行':>5} {'当前':>5}")
@@ -682,6 +729,10 @@ def main(argv=None) -> int:
     print(f"生产覆盖     {coverage['tenant']} {coverage['rows']} 行，跨度 "
           f"{coverage['span_hours']} 小时，{coverage['ingested_batches']} 个入库批次"
           f"（单轮只看证据，跨轮判据在 data_health）")
+    print(f"源端覆盖     devices {sc['devices']} 台应有 {sc['expected']} 个属性，"
+          f"facts 当前缺 {len(sc['missing'])} 个"
+          f"{'（' + '、'.join(sc['missing'][:8]) + '）' if sc['missing'] else ''}"
+          f"（缺的键不可能被回指，L4 判据会把它算成模型的错）")
     print(f"沙箱重置后   facts {surv['facts_before']} → {surv['facts_after']} 行"
           f"（沙箱清空后 {surv['sandbox_rows_after_truncate']} 行，已恢复 {surv['restored_rows']} 台）")
     print(f"生产租户     {isolation['prod_tenant']} {isolation['prod_rows_before']} → "
@@ -758,6 +809,10 @@ def main(argv=None) -> int:
         issues.append(
             f"FACT_KEYS 有 {len(schema_ev['extra_in_keys'])} 个键在 stg_devices 里不存在"
             f"：{'、'.join(schema_ev['extra_in_keys'])}（清单已过期）")
+    if sc["missing"]:
+        issues.append(
+            f"devices 里有值的 {len(sc['missing'])} 个属性在 facts 当前视图里没有行："
+            f"{'、'.join(sc['missing'][:8])}（这些属性说出来就回指不了）")
     if len(chain) != 2:
         issues.append(f"CX-101.line 版本链 {len(chain)} 行（改一次应恰好 2 行）")
     elif chain[0]["valid_to"] is None or chain[1]["supersedes"] != chain[0]["id"]:
@@ -779,6 +834,7 @@ def main(argv=None) -> int:
                          f"{SELFTEST_TENANT}，生产 {PROD_TENANT} 只计数不清"),
             },
             "steps": log,
+            "source_coverage": sc,
             "versioning": {
                 "entity_id": "CX-101", "fact_key": "line", "chain": chain,
                 "old_closed": chain[0]["valid_to"] is not None if chain else False,

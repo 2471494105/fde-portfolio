@@ -82,7 +82,7 @@ python -X utf8 scripts\verify_obs.py   # 可观测性六段（连库/指标/新�
 | 维修工单 | `/app/#work_orders` | 60 | 两套状态并存，谁也不是权威：红=关单了看板没关（19 张，`已完成` 10 + `已取消` 9），橙=看板关了没关单（6 张），顶部 KPI 直接报 `25 / 60` |
 | 数据整改单 | `/app/#remediation_orders` | 2 | 判据红的落点：`RM-20261126-01`（工单 60 行）、`RM-20261126-02`（缺陷 302 行），责任方「产线计划员」、到期 2026-12-03；KPI `未关闭 2 / 2（逾期 0 · 违约 362 行）`。绿=已关闭 / 橙=未关闭 / 红=逾期 |
 | 判据运行 | `/app/#check_runs` | 2 | **判据自己有没有在工作**：`gov_check_run` 台账逐次一行（结果 / 红数 / 耗时 / 观测面），KPI 一行报 `运行 4 次 · 最近 1.1 分钟前 · p95 170.6 ms · 4xx/5xx 31（静默判据 0 · 陈旧表 4 · 未来时间 1）`。绿=ok / 黄=warn / 红=fail / 灰=error |
-| 数据中控台 | `/console` | 2 条事件 | 深色大屏，**同一进程的第二张皮**：事件流（红 / 待处理 / 轮次 / 责任方）、违约行环形（362 / 5 / 0，98.6% 集中在工位归属）、各判据红行趋势（三条，不伪造「合计」）。第三张卡报「事件扫描 0 分钟前」——**扫描超 24 h 或从未跑，卡片转红并弹横幅说明跑哪条命令恢复**。只读、无关闭按钮；认领与关闭走 `raise_alerts.py --ack/--close` |
+| 数据中控台 | `/console` | 4 条事件 | 深色大屏，**同一进程的第二张皮**：**常见问题目录**（登记 8 类 / 今日命中 4 类，每类带判据、责任方、今日样本、第一步）、事件流（级别 / 类别 / 状态 / 轮次 / 责任方）、违约行环形（362 / 5 / 0，98.6% 集中在工位归属，**只算行类判据**）、各判据红行趋势（五条，不伪造「合计」）。第三张卡报「事件扫描 0 分钟前」——**扫描超 24 h 或从未跑，卡片转红并弹横幅说明跑哪条命令恢复**。只读、无关闭按钮；认领与关闭走 `raise_alerts.py --ack/--close` |
 
 翻页与搜索可以直接写进 URL，录屏和复述都靠它：
 `/app/?page=2#work_orders`、`/app/?q=CX-14#devices`（命中 9 台）。
@@ -95,9 +95,9 @@ python -X utf8 scripts\verify_obs.py   # 可观测性六段（连库/指标/新�
 
 **可观测性三个入口**：`GET /healthz`（真连库 `select 1`，失败 503，不是进程活着就算健康）、`GET /v1/obs/summary`（接口指标 + 新鲜度 + 判据台账一次取全，页面首屏只打这一枪）、`GET /v1/obs/{api,freshness,runs}`（各自单独取）。中间件给每个响应加 `X-Resp-Ms`，并跳过 `/v1/obs*` 自身——读指标不能污染指标。`/v1/obs/api` 另给 `errors_by_path`（不只报错误总数，还要答出哪条接口在坏），并跳过浏览器自己来要的 `/favicon.ico`（它的 404 不是接口故障）。`scripts/verify_obs.py` 的 O1–O6 分段证明：连库 / 计数在涨 / 读指标不进样本 / p95 有值 / 工单表被标陈旧（7497.7 h）/ 缺陷表被标**未来时间**（-849.3 h）/ 主数据无时间列不误报 / 30 小时没跑判静默 / `--no-record` 不写台账。口径写在 `docs/20261126_21_可观测性.md`（`DOC-63`）。
 
-**中控台的口径**：事件不是「每次运行一条」，而是「同一件事只留一条活着」（`dedup_key` + `seen_count`）；同一批红再跑不推、变绿只写「复跑归零」、外发失败写进 `detail.delivery` 且不当作已推。页面只读，不重算判据：未处理事件来自 `/v1/alerts`，违约行与趋势来自 `/v1/obs/runs`，p95/新鲜度来自 `/v1/obs/summary`。趋势线纵轴从 0 起，所以 1 行的变化图上只有约 0.1 px——**不拉伸纵轴**（那会把噪音画成悬崖），改在数字右侧写「较上一次」`−1 / ±0 / +n`。验收 `scripts/verify_console.py` C1–C9 + C7c/C7d 全 PASS（含「无任何外网资源」——断网现场也能开），`scripts/verify_alerts.py` A1–A7 全 `[ok]`（在 `fde-diagnosis-agent` 下跑）。口径写在 `docs/20261126_23_中控台与推送.md`（`DOC-65`），「补一行→367 变 366→复原」的彩排见 `docs/20261127_25_收口演示.md`（`DOC-67`）。
+**中控台的口径**：事件不是「每次运行一条」，而是「同一件事只留一条活着」（`dedup_key` + `seen_count`）；同一批红再跑不推、变绿只写「复跑归零」、外发失败写进 `detail.delivery` 且不当作已推。页面只读，不重算判据：未处理事件来自 `/v1/alerts`，违约行与趋势来自 `/v1/obs/runs`，p95/新鲜度来自 `/v1/obs/summary`。趋势线纵轴从 0 起，所以 1 行的变化图上只有约 0.1 px——**不拉伸纵轴**（那会把噪音画成悬崖），改在数字右侧写「较上一次」`−1 / ±0 / +n`。常见问题目录的口径（登记 8 类 ≠ 8 个问题、`red_count` 三种单位、值域黄不写成红、静默样本不取推送数）见 `fde-diagnosis-agent/docs/20261127_26_常见问题目录.md`（`DOC-68`）；页面 `4 / 8 类` 与事件「类别」列都来自 `gov_issue_catalog` 与事件 `detail`，页面不自己拼名字。验收 `scripts/verify_console.py` C1–C10e 全 PASS（含「无任何外网资源」——断网现场也能开），`scripts/verify_alerts.py` A1–A7 全 `[ok]`（在 `fde-diagnosis-agent` 下跑）。口径写在 `docs/20261126_23_中控台与推送.md`（`DOC-65`），「补一行→367 变 366→复原」的彩排见 `docs/20261127_25_收口演示.md`（`DOC-67`）。
 
-**截图证据**：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单/判据运行各一套，另有 `console-1280/1024.png` 与彩排瞬间的 `console-fix-visible-1280.png`：合计 366、工单 361、趋势 `−1`、事件 #1「已认领」）。
+**截图证据**：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单/判据运行各一套，另有 `console-catalog-1280.png`（4 / 8 类、目录 8 行、事件流 4 条带类别、趋势 5 条）与 `console-catalog-1024.png`，以及彩排瞬间的 `console-fix-visible-1280.png`：合计 366、工单 361、趋势 `−1`、事件 #1「已认领」）。
 
 ## 目录
 
@@ -116,6 +116,7 @@ sql/011_station_id_upgrade.sql  工位稳定键 station_id（存量库升级，�
 sql/012_remediation.sql    数据整改单 gov_remediation_order（同契约同表只许一张 open）
 sql/013_observability.sql 判据运行台账 gov_check_run（判据跑没跑、跑了多久、红多少）
 sql/014_alerts.sql         中控台事件表 gov_alert（dedup_key / seen_count / open-acked-closed 三态）
+sql/015_issue_catalog.sql  常见问题目录 gov_issue_catalog（8 类：客户的说法 / 判据 / 责任方 / 首步 / 口径）
 scripts/bootstrap.ps1      一条命令跑完 001~003，幂等
 scripts/export_registry.py 登记册 -> 与 source_schema 同构的 JSON
 scripts/query_readonly.py  只读取数 + 越权自证
@@ -130,7 +131,7 @@ api/static/console.html    数据中控台（深色，只读；与作业页同�
 api/obs.py                 可观测性：接口指标环形缓冲 + 数据新鲜度 + 判据运行台账
 api/static/flag.js         红/橙判定唯一的一份实现（行标与 KPI 共用；判据 H 拿它对账）
 scripts/verify_ui.py       五页渲染对账（DOM vs 接口，10 组检查）
-scripts/verify_console.py  中控台渲染对账（C1–C9 + C7c/C7d：五组数字 + 环形 + 趋势「较上一次」+ 无外链）
+scripts/verify_console.py  中控台渲染对账（C1–C10e：五组数字 + 环形 + 趋势「较上一次」+ 目录行数与命中数 + 事件类别列 + 违约行不混单位 + 无外链）
 scripts/verify_obs.py      可观测性六段验收（O1–O6）
 ```
 

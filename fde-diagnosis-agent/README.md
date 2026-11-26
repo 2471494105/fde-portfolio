@@ -408,6 +408,30 @@ venv\Scripts\python.exe -X utf8 scripts\verify_demo_closeout.py
 
 实测：`362 → 361 → 362`，`missing=['wo_station_identity#WO-2026-0001']`，指纹两侧同为 `df7c564b4185077b`；页面 367 → **366**（工单 361，趋势 `−1`，事件 #1「已认领」）；`verify_demo_closeout.py` V1–V6 ALL PASS；反例 `--line=产线Z` → `exit 2` 且不写库。代价写清：每次彩排留两行台账（361/362）、`seen_count` +1。证据与「那一行是假设不是真相」的口径在 `docs/20261127_25_收口演示.md`（`DOC-67`）。
 
+### 常见问题目录：让客户数得出「有多少种毛病」（T26）
+
+上一版中控台只有两条事件，看着像「只做了两件事」。原因不是判据少——契约断言、隔离区、源端值域三处早就在红/黄，只是**没落台账的判据在中控台上等于不存在**。这一轮补两件事：
+
+- **登记客户侧 8 类问题**（归属 / 字段 / 隔离区 / 值域 / 结构 / 口径 / 逾期 / 静默）：`app/ds/issues.py` 是唯一源，`scripts/seed_issues.py` 同步进 `gov_issue_catalog`，页面报「登记 8 类 · 今日命中 4 类」，两个数分开念；
+- **把已有判据接进事件流**：`scripts/collect_issues.py` 子进程跑 `check_data_contract.py` / `check_source_values.py` 的 `--json`，只搬运作台账，不做第二套判定。
+
+三处口径写死（错一处客户就会问）：`red_count` 三种单位（行 / 件 / 列，标题按单位换字）、值域判 `warn` → 事件必须是黄、静默的样本不许取 `alert_sweep.red_count`（那是推送条数）。
+
+```powershell
+# 目录（改 Python 后同步；--check 只比对）
+venv\Scripts\python.exe -X utf8 scripts\seed_issues.py
+venv\Scripts\python.exe -X utf8 scripts\seed_issues.py --check
+
+# 接线（--no-record 只看不写；exit 1 = 有红或有黄）
+venv\Scripts\python.exe -X utf8 scripts\collect_issues.py
+
+# 验收：I1–I5（目录一致 / dry 不写库 / 只多两行且契约数=隔离区行数 / 事件带类别 / 0 样本不建事件）
+venv\Scripts\python.exe -X utf8 scripts\verify_issues.py
+```
+
+实测：`data_contract fail 1 件`（隔离区 `ts_in_future` 1 条）+ `source_values warn 1 列`（`conf_pct` 150 / −10），台账 `run_id=46/47`；事件 4 条（红 3 / 黄 1），页面 `4 / 8 类`、目录 8 行、事件流带「类别」列、趋势 5 条；`verify_issues.py` I1–I5 ALL PASS，`verify_console` C1–C10e ALL PASS。截图 `mock-mes/out/ui/console-catalog-1280.png` / `-1024.png`；口径与「剩下 4 类怎么说」在 `docs/20261127_26_常见问题目录.md`（`DOC-68`）。
+
+
 
 ## 目录
 
@@ -423,6 +447,7 @@ mock_qms/    FastAPI 模拟 QMS（刻意复现"HTTP 200 但业务码在响应体
 scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_multi_turn / smoke_web_session
               check_status_policy（A–H）/ check_station_contract（I/J）/ raise_remediation / verify_station_governance
               raise_alerts / patrol / demo_closeout / verify_alerts / verify_patrol / verify_demo_closeout
+              seed_issues / collect_issues / verify_issues（常见问题目录与接线）
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
@@ -430,8 +455,9 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）、不适用声明要能证伪（DOC-58）、
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
-             中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）
-             00_文档索引.md 是全部 68 篇（`DOC-01`–`DOC-67` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
+             常见问题目录与接线（DOC-68）
+             00_文档索引.md 是全部 69 篇（`DOC-01`–`DOC-68` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -479,3 +505,7 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 12. **收口演示会留痕**：`demo_closeout.py` 每次彩排写两行台账（361 / 362），事件 `seen_count` +1。
     数字会动是它的目的，但「362」这个基线每彩排一次都要重新解释一遍；不想留痕就 `--no-record`，
     代价是页面不跟着动（`DOC-67` 第五节）
+13. **常见问题目录是「登记 8 类、今天命中 4 类」，不是 8 类全覆盖**：结构漂移今天没有样本（页面写「未跑」）、
+    口径判据全绿、没有逾期整改单、判据都在跑；`check_db_floor`（库约束 vs 设计，2 条不符）跑在 sandbox 且会插脏数据，
+    属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）仍只在 KPI，
+    因为 `fde-diagnosis-agent` 没有与 `mock-mes/api/obs.py` 同一份「表-时间列」映射，搬过来就是第二套口径（`DOC-68` 第七节）

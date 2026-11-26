@@ -23,7 +23,7 @@
   .right{text-align:right;font-size:12px;color:var(--ink-faint)}
   .right a{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
   main{padding:22px 28px 30px;max-width:1440px;margin:0 auto}
-  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+  .kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:12px}
   .kpi{background:var(--panel);border:1px solid var(--line);border-radius:6px;
     padding:14px 16px 13px;position:relative;overflow:hidden}
   .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan)}
@@ -52,6 +52,17 @@
   .spark .now.zero{color:var(--green)}
     .spark .delta{font:500 11px var(--mono);color:#5c6d80;text-align:right}
   .events{margin-top:12px}
+  .catalog{margin-top:12px}
+  .catalog table{font-size:12.5px}
+  .catalog td{vertical-align:top}
+  .catalog .name{color:var(--ink)}
+  .catalog .muted{color:var(--ink-faint)}
+  .catalog .step{color:var(--ink-dim)}
+  .tag{display:inline-block;min-width:26px;text-align:center;padding:1px 6px;border-radius:3px;
+    font:600 12px var(--mono);background:#1b2634;color:#7fb6d9;border:1px solid #2c4258}
+  .tag.zero{background:#1d232b;color:#6b7b8c;border-color:#2a3540}
+  .tag.red{background:#3a1c1d;color:#ff8b86;border-color:#6b2c2b}
+  .tag.amber{background:#3a2f1a;color:#ffc477;border-color:#6b5223}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
   th{font-size:11px;color:var(--ink-faint);font-weight:500;letter-spacing:.4px}
@@ -69,7 +80,8 @@
   footer{margin-top:16px;font-size:11px;color:var(--ink-faint);line-height:1.8}
   .err{color:var(--red);font-size:12px;margin-top:8px}
   @media (max-width:1100px){
-    .kpis{grid-template-columns:repeat(3,1fr)}
+    /* 7 张卡在 3 列里会剩一张孤零零的：改成 4 列（4+3），至少成两行 */
+    .kpis{grid-template-columns:repeat(4,1fr)}
     .panels{grid-template-columns:1fr}
     .ring-wrap{justify-content:center}
   }
@@ -95,6 +107,11 @@
       <div class="label">未处理事件</div>
       <div class="value" id="kpi-open">—<small id="kpi-open-sub"></small></div>
       <div class="note" id="kpi-open-note">红 / 黄 / 已认领</div>
+    </div>
+    <div class="kpi" id="kpi-cat-card">
+      <div class="label">问题类别</div>
+      <div class="value" id="kpi-cat">—</div>
+      <div class="note" id="kpi-cat-note">登记 — · 今日命中 —</div>
     </div>
     <div class="kpi red">
       <div class="label">违约行（各判据最近一次）</div>
@@ -123,6 +140,19 @@
     </div>
   </div>
 
+  <div class="panel catalog">
+    <h2>常见问题目录 <span class="hint" id="cat-sum" style="margin:0">—</span></h2>
+    <div class="hint">登记的是「客户能指着讲的现象」，判据只是它的检测手段。「今日样本」取各判据最近一次台账：<b>0</b> 表示今天没抓到样本——不代表没判据，也不代表以后不会出现；「未跑」用它自己的判据行看</div>
+    <table>
+      <thead><tr>
+        <th style="width:66px">类别</th><th>问题（客户的说法）</th>
+        <th style="width:110px">责任方</th><th style="width:96px">今日样本</th>
+        <th style="width:36%">第一步（客户自己能做）</th>
+      </tr></thead>
+      <tbody id="catalog"></tbody>
+    </table>
+  </div>
+
   <div class="panels">
     <div class="panel">
       <h2>违约行构成</h2>
@@ -144,8 +174,8 @@
     <div class="hint">同一个问题只留一条活着的；关闭只认「复跑归零」，不认人工点按钮</div>
     <table>
       <thead><tr>
-        <th style="width:88px">最近</th><th style="width:74px">级别</th><th style="width:74px">状态</th>
-        <th>事件</th><th style="width:110px">责任方</th><th style="width:56px">轮次</th>
+        <th style="width:88px">最近</th><th style="width:60px">级别</th><th style="width:74px">状态</th>
+        <th style="width:82px">类别</th><th>事件</th><th style="width:110px">责任方</th><th style="width:56px">轮次</th>
       </tr></thead>
       <tbody id="events"></tbody>
     </table>
@@ -155,7 +185,7 @@
 
   <footer>
     本页只读。认领与关闭由脚本写库：<code>raise_alerts.py --ack/--close</code>——页面上不给按钮，因为按钮会让人以为点上就修好了。<br>
-    数字来源：<code>/v1/alerts</code>（事件）、<code>/v1/obs/runs</code>（判据运行）、<code>/v1/obs/summary</code>（接口与新鲜度）、<code>/v1/remediation_orders</code>（整改单）。
+    数字来源：<code>/v1/alerts</code>（事件）、<code>/v1/issue_catalog</code>（常见问题目录）、<code>/v1/obs/runs</code>（判据运行）、<code>/v1/obs/summary</code>（接口与新鲜度）、<code>/v1/remediation_orders</code>（整改单）。
   </footer>
 </main>
 
@@ -164,14 +194,23 @@ const CHECK_NAME = {
   station_contract: "工单/缺陷归属",
   defect_fields: "缺陷字段",
   status_policy: "状态口径",
+  data_contract: "契约/隔离区",
+  source_values: "源端值域",
 };
 const CHECK_COLOR = {
   station_contract: "#3fd0e0",
   defect_fields: "#f2b45c",
   status_policy: "#5ad1a0",
+  data_contract: "#9b8cf4",
+  source_values: "#e08fb4",
 };
 // KPI 备注用短名：卡片一行放不下「工单/缺陷归属」这种全称
-const CHECK_SHORT = { station_contract: "工单", defect_fields: "缺陷", status_policy: "状态" };
+const CHECK_SHORT = {
+  station_contract: "工单", defect_fields: "缺陷", status_policy: "状态",
+  data_contract: "契约", source_values: "值域",
+};
+// 违约行 KPI 只算「行」这一种单位：契约(件)、值域(列) 混进来会让 367 变成 369
+const ROW_CHECKS = ["station_contract", "defect_fields", "status_policy"];
 const fmt = (n) => (n === null || n === undefined ? "—" : String(n));
 
 async function getJSON(url) {
@@ -245,11 +284,12 @@ function chip(text, cls) { return `<span class="chip ${cls}">${text}</span>`; }
 
 async function load() {
   try {
-    const [alerts, obs, runs, rms] = await Promise.all([
+    const [alerts, obs, runs, rms, cat] = await Promise.all([
       getJSON("/v1/alerts?size=50"),
       getJSON("/v1/obs/summary"),
       getJSON("/v1/obs/runs?limit=40"),
       getJSON("/v1/remediation_orders?size=50"),
+      getJSON("/v1/issue_catalog?size=50"),
     ]);
 
     const alive = alerts.items.filter((a) => a.state !== "closed");
@@ -264,7 +304,8 @@ async function load() {
     // 每道判据最近一次运行
     const latest = {};
     for (const r of runs.recent) if (!latest[r.check_id]) latest[r.check_id] = r;
-    const parts = Object.keys(CHECK_NAME).map((id) => ({
+    // 环形图与「违约行」只取行类判据：契约按件、值域按列，混进同一个数就是换单位
+    const parts = ROW_CHECKS.map((id) => ({
       id, name: CHECK_NAME[id], value: latest[id] ? Number(latest[id].red_count) : 0,
       color: CHECK_COLOR[id],
     }));
@@ -279,6 +320,41 @@ async function load() {
       return { name: CHECK_NAME[id], color: CHECK_COLOR[id], values: mine.map((r) => Number(r.red_count)) };
     });
     drawSparks(series);
+
+    // 常见问题目录：登记几类、今天命中几类，两个数分开报——不许把「登记 8 类」念成「发现 8 个问题」
+    const catalog = cat.items.slice().sort((a, b) => Number(a.sort_no) - Number(b.sort_no));
+    // 「静默」不能取 alert_sweep 的 red_count——那是「本次新增推送条数」，拿它当样本会把
+    // 一条推送数念成一类毛病。静默的样本只有一种算法：现在有几道判据超过了阈值没跑。
+    const sampleOf = (c) => {
+      if (c.issue_id === "sweep_silent") {
+        const sc = runs.checks.filter((x) => x.silent).length;
+        return { n: sc, sev: "amber" };
+      }
+      const r = latest[c.check_id];
+      if (!r) return { n: null, sev: "" };
+      return { n: Number(r.red_count), sev: r.status === "warn" ? "amber" : "red" };
+    };
+    const tagFor = (c) => {
+      const s = sampleOf(c);
+      if (s.n === null) return `<span class="tag zero">未跑</span>`;
+      if (s.n <= 0) return `<span class="tag zero">0</span>`;
+      return `<span class="tag ${s.sev === "amber" ? "amber" : "red"}">${s.n}</span>`;
+    };
+    const hit = catalog.filter((c) => (sampleOf(c).n || 0) > 0);
+    document.getElementById("kpi-cat").innerHTML = `${hit.length}<small> / ${catalog.length} 类</small>`;
+    document.getElementById("kpi-cat-note").textContent =
+      `登记 ${catalog.length} · 无样本 ${catalog.length - hit.length}`;
+    document.getElementById("kpi-cat-card").className = "kpi" + (hit.length ? " red" : "");
+    document.getElementById("cat-sum").textContent =
+      `登记 ${catalog.length} 类 · 今日命中 ${hit.length} 类 · 无样本 ${catalog.length - hit.length} 类`;
+    document.getElementById("catalog").innerHTML = catalog.map((c) => `<tr>
+      <td>${chip(c.short, "open")}</td>
+      <td><span class="name">${c.name}</span><br>
+          <span class="muted">判据 ${c.check_id} · ${c.note || ""}</span></td>
+      <td>${c.owner || "待指派"}</td>
+      <td>${tagFor(c)}</td>
+      <td class="step">${c.first_step}</td>
+    </tr>`).join("");
 
     const newest = runs.recent[0];
     const sweep = runs.checks.find((c) => c.check_id === "alert_sweep");
@@ -328,6 +404,7 @@ async function load() {
       <td class="mono">${(a.last_seen || "").slice(5, 16)}</td>
       <td>${chip(a.severity === "red" ? "红" : "黄", a.severity)}</td>
       <td>${chip(a.state === "acked" ? "已认领" : "待处理", a.state)}</td>
+      <td>${chip((a.detail && a.detail.issue_short) || "—", "open")}</td>
       <td>${a.title}</td>
       <td>${a.owner || "待指派"}</td>
       <td class="mono">${a.seen_count}</td>

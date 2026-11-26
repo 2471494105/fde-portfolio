@@ -41,6 +41,8 @@ TABLES = {
     "check_runs": ("gov_check_run", "ran_at", ("check_id", "status", "dataset")),
     # 中控台读的是事件，不是原始判据输出：页面不重算判据，避免出现第二套口径
     "alerts": ("gov_alert", "last_seen", ("title", "check_id", "state", "owner", "severity", "kind")),
+    # 常见问题目录：客户侧的类别清单（页面用它回答「这台库一共有多少种毛病」）
+    "issue_catalog": ("gov_issue_catalog", "sort_no", ("issue_id", "name", "check_id", "owner")),
 }
 
 # 台账类视图按时间倒序：翻到第一页就是最近的运行，而不是最老的

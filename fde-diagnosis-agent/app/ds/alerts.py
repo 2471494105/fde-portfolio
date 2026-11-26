@@ -21,8 +21,9 @@ TITLES = {
     "status_policy": "看板状态与流程口径对不上",
     "defect_fields": "缺陷记录字段越界或空批次",
     "source_schema": "源端表结构与登记对不上",
+    "source_values": "源端数值越界或量纲错位",
     "value_domain": "数值量纲或枚举值越界",
-    "data_contract": "映射表缺列或水位断裂",
+    "data_contract": "脏数据被挡在主表外、或契约断言不达标",
     # 扫描自己也是一条要被观测的判据：它停了，中控台上的数字就不再代表现在
     "alert_sweep": "事件扫描（中控台自检）",
 }
@@ -32,10 +33,40 @@ OWNERS = {
     "station_contract": "产线计划员",
     "status_policy": "车间主管",
     "defect_fields": "质量工程师",
+    "source_values": "质量工程师",
+    "source_schema": "数据管理员",
+    "data_contract": "数据管理员",
     "alert_sweep": "值班人",
 }
 
 SILENT_HOURS = 24
+
+# 标题里的量词。判据的红不是都用「行」数：契约是「失败断言 + 隔离区行」的件数，
+# 值域是「越界列」数。写成「行」会在客户面前立刻被抓住——数字对不上口径。
+UNITS = {
+    "data_contract": "件",
+    "source_values": "列",
+    "status_policy": "条",
+}
+
+# 类别登记表是「客户怎么讲这件事」的唯一来源：事件里带过去，页面不再自己拼名字
+try:  # app.ds.alerts / 直接跑脚本两种入口
+    from .issues import category_for
+except ImportError:  # pragma: no cover
+    from app.ds.issues import category_for
+
+
+def issue_fields(check_id: str) -> dict:
+    """把类别信息塞进 detail：页面只读，不重算。没登记就留空，不编一个类别。"""
+    c = category_for(check_id)
+    if not c:
+        return {}
+    return {
+        "issue": c["issue_id"],
+        "issue_short": c["short"],
+        "issue_name": c["name"],
+        "first_step": c["first_step"],
+    }
 
 
 def diff_ids(prev: Iterable[Any] | None, cur: Iterable[Any] | None) -> dict[str, list[str]]:
@@ -51,9 +82,10 @@ def diff_ids(prev: Iterable[Any] | None, cur: Iterable[Any] | None) -> dict[str,
 
 def _title(check_id: str, n: int, delta: int | None = None) -> str:
     base = TITLES.get(check_id, check_id)
+    unit = UNITS.get(check_id, "行")
     if delta is None:
-        return f"{base}：{n} 行"
-    return f"{base}：{n} 行（新增 {delta}）"
+        return f"{base}：{n} {unit}"
+    return f"{base}：{n} {unit}（新增 {delta}）"
 
 
 def plan_transition(
@@ -96,7 +128,8 @@ def plan_transition(
                 "kind": "check_red",
                 "severity": "amber",
                 "title": f"{TITLES.get(check_id, check_id)}：判据自己跑挂了",
-                "detail": {"run_id": cur.get("run_id"), "error": cur.get("error") or ""},
+                "detail": {"run_id": cur.get("run_id"), "error": cur.get("error") or "",
+                           **issue_fields(check_id)},
                 "owner": owner,
                 "notify": True,
             }
@@ -105,11 +138,14 @@ def plan_transition(
 
     if cur_n > 0:
         grew = cur_n > prev_n or bool(d["new"])
+        # 判据自己判「黄」时（warn：有越界但没到拒跑），事件也必须是黄：
+        # 把黄写成红，客户第一次看到就会问「你不是说这只是提醒吗」。
+        sev = "amber" if cur.get("status") == "warn" else "red"
         event = {
             "dedup_key": key_red,
             "check_id": check_id,
             "kind": "check_red",
-            "severity": "red",
+            "severity": sev,
             "title": _title(check_id, cur_n, len(d["new"]) if comparable else None),
             "detail": {
                 "run_id": cur.get("run_id"),
@@ -119,6 +155,7 @@ def plan_transition(
                 "new_ids": d["new"],
                 "gone_ids": d["gone"],
                 "same_count": len(d["same"]),
+                **issue_fields(check_id),
             },
             "owner": owner,
             "notify": bool(first or grew),
@@ -166,7 +203,9 @@ def silent_events(
                     if hours is None
                     else f"{TITLES.get(check_id, check_id)}：{hours:.0f} 小时没复跑"
                 ),
-                "detail": {"hours": None if hours is None else round(hours, 1), "threshold": threshold_hours},
+                "detail": {"hours": None if hours is None else round(hours, 1), "threshold": threshold_hours,
+                           # 静默不是数据问题，类别固定归「判据没人复跑」，别混进数据类
+                           **issue_fields("alert_sweep")},
                 "owner": owners.get(check_id) or "待指派",
                 "notify": True,
             }
@@ -199,6 +238,7 @@ def overdue_events(orders: list[dict], today: date, *, owners: dict[str, str] | 
                     "violation_count": o.get("violation_count"),
                     "table": o.get("table_name"),
                     "field": o.get("field_name"),
+                    **issue_fields("remediation"),
                 },
                 "owner": o.get("owner") or owners.get("remediation") or "待指派",
                 "notify": True,

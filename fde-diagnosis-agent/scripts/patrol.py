@@ -30,6 +30,9 @@ CHECKS = [
     ("station_contract", "工位归属判据 I/J", "check_station_contract.py"),
     ("status_policy", "口径判据 A–H", "check_status_policy.py"),
     ("defect_fields", "缺陷字段判据 K", "check_defect_fields.py"),
+    # 契约与值域两道判据早就有，但只打在终端上；T26 由 collect_issues 把结果落成台账，
+    # 中控台才会多出「隔离区」「值域」两类事件。判据本身没搬进来，避免第二套实现。
+    ("data_contract+source_values", "契约/隔离区 + 源端值域（接线）", "collect_issues.py"),
 ]
 
 
@@ -58,7 +61,11 @@ def main(argv: list[str]) -> int:
         if code >= 2:
             crashed = True
             print(f"[崩] {check_id}（{label}）exit={code}：{tail[-400:]}")
-        print(f"[{'红' if code == 1 else '绿' if code == 0 else '崩'}] {check_id}（{label}）")
+        tag = "红" if code == 1 else "绿" if code == 0 else "崩"
+        # 接线那一步含两道判据：1 = 有红或有黄，不能只念「红」
+        if "+" in check_id and code == 1:
+            tag = "红/黄"
+        print(f"[{tag}] {check_id}（{label}）")
 
     print("— 判据跑完，开始扫描事件 —")
     code, tail = run_one("raise_alerts.py", extra, quiet)

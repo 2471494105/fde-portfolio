@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 12:58:10",
+ "checked_at": "2026-11-26 13:23:22",
  "contract": {
-  "checked_at": "2026-11-26 12:58:09",
+  "checked_at": "2026-11-26 13:23:22",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 12:58:09",
+  "checked_at": "2026-11-26 13:23:22",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 12:58:09",
+  "checked_at": "2026-11-26 13:23:22",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -162,6 +162,20 @@
     "quarantine": 1,
     "total": 15,
     "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[12] 时间轴口径登记（源端 / 水位 / 业务时间三字段）",
+    "added": 0,
+    "quarantine": 0,
+    "total": 15,
+    "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[13] 时间轴探针（业务时间早于水位，应漏；实测新增 0）",
+    "added": 0,
+    "quarantine": 0,
+    "total": 15,
+    "mark": "2026-11-06 08:00:00 #9022"
    }
   ],
   "final_rows": 15,
@@ -189,11 +203,52 @@
    "recovered_with_window": 1,
    "probe_window_seconds": 2592000
   },
+  "time_axis": {
+   "registry": {
+    "source_filter_field": "ts",
+    "local_watermark_field": "ts",
+    "business_time_field": "ts",
+    "filter_clock": "same_clock",
+    "drop_scenario": "",
+    "evidence": "K-3 实证（2026-11-26）：GitHub commits 的 since 按 committer date 过滤，返回里 author.date 可早到 2025-12-15。本地若记 author 时间，这批行会被判已灌过而整条静默丢。本项目源端与业务时间是同一列 ts，但这一点是「当前假设」，不是外部保证——接真源时必须重核一次。"
+   },
+   "table": "stg_defect_logs",
+   "table_cols": [
+    "id",
+    "ts",
+    "device_id",
+    "station",
+    "defect_type",
+    "confidence",
+    "batch",
+    "verdict",
+    "is_actually_ok",
+    "_src",
+    "_loaded_at"
+   ],
+   "plan_ts_key": "ts",
+   "static_issues": [],
+   "ok": true,
+   "static_ok": true,
+   "probe": {
+    "row_id": 9029,
+    "before": 15,
+    "after": 15,
+    "rows_added": 0,
+    "expected_rows_added": 0,
+    "landed": false,
+    "left": 15,
+    "left_behind": false,
+    "plan_ts_key": "ts",
+    "ok": true,
+    "note": "探针业务时间 2026-01-01 早于水位，按 ts 判应漏 → 实测新增 0 条、主表 15 行未变，探针行已清理"
+   }
+  },
   "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 12:58:09",
+  "checked_at": "2026-11-26 13:23:22",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [

@@ -76,5 +76,74 @@ class ProbeVerdictTest(unittest.TestCase):
         self.assertGreater(cdd.QUARANTINE_PROBE["ts"], "2027-01-01")
 
 
+class TimeAxisGateTest(unittest.TestCase):
+    """data_health 侧：时间轴登记与探针的几种红。
+
+    K-3 的教训是「三个钟不一致时增量静默丢」。这里钉住的是：不一致必须变成红，
+    而且不能靠增量脚本自评的 ok——自评和数字要分开看。
+    """
+
+    def _good(self):
+        return {
+            "registry": {"business_time_field": "ts"},
+            "plan_ts_key": "ts",
+            "static_issues": [],
+            "static_ok": True,
+            "probe": {"rows_added": 0, "left_behind": False, "ok": True},
+            "ok": True,
+        }
+
+    def test_missing_evidence_is_red(self):
+        for ta in ({}, None):
+            with self.subTest(ta=ta):
+                self.assertEqual(len(dh.time_axis_issues(ta)), 1)
+
+    def test_inconsistent_registry_is_red(self):
+        ta = self._good()
+        ta["static_issues"] = ["本地水位记 _loaded_at、业务时间字段是 ts"]
+        out = dh.time_axis_issues(ta)
+        self.assertEqual(len(out), 1)
+        self.assertIn("自相矛盾", out[0])
+
+    def test_probe_that_landed_is_red(self):
+        """业务时间早于水位的行被灌进来 = 代码读错了钟。"""
+        ta = self._good()
+        ta["probe"] = {"rows_added": 1, "left_behind": False, "ok": True}
+        out = dh.time_axis_issues(ta)
+        self.assertEqual(len(out), 1)
+        self.assertIn("被灌进 1 条", out[0])
+
+    def test_probe_left_row_behind_is_red(self):
+        ta = self._good()
+        ta["probe"] = {"rows_added": 0, "left_behind": True, "ok": True}
+        out = dh.time_axis_issues(ta)
+        self.assertEqual(len(out), 1)
+        self.assertIn("没清理干净", out[0])
+
+    def test_registry_not_used_is_red(self):
+        """登记说 ts、plan 实际读别的字段：登记没被用上，等于没登记。"""
+        ta = self._good()
+        ta["plan_ts_key"] = "_loaded_at"
+        out = dh.time_axis_issues(ta)
+        self.assertEqual(len(out), 1)
+        self.assertIn("不一致", out[0])
+
+    def test_self_reported_ok_is_ignored(self):
+        """脚本说 ok，但探针数字不对——判据只认数字。"""
+        ta = self._good()
+        ta["probe"] = {"rows_added": 2, "left_behind": False, "ok": True}
+        self.assertEqual(len(dh.time_axis_issues(ta)), 1)
+
+    def test_probe_evidence_missing_is_red(self):
+        ta = self._good()
+        ta["probe"] = {}
+        out = dh.time_axis_issues(ta)
+        self.assertEqual(len(out), 1)
+        self.assertIn("证据不完整", out[0])
+
+    def test_all_green_passes(self):
+        self.assertEqual(dh.time_axis_issues(self._good()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

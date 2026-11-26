@@ -70,6 +70,47 @@ def quarantine_probe_issues(qp):
     return []
 
 
+def time_axis_issues(ta):
+    """时间轴口径的判据：登记是否自洽、探针是否真的把「该漏的行」漏掉了。
+
+    只看登记内容与三个数字，不看增量脚本自评的 ok。它已经在第 [13] 步自己判过一次，
+    这里再判一次是刻意的重复——自评会错，规则和数字不会同时错。
+
+    K-3：源端过滤字段、本地水位字段、业务时间字段不是同一个「钟」时，增量会静默丢。
+    名字一样不算数（名字一样、语义不同的两个 ts 更危险），所以这里既核对登记，
+    也要求探针证明「业务时间早于水位的行确实没被灌进来」。
+    """
+    if not ta:
+        return ["时间轴没被验过（增量检查没给 time_axis 证据，K-3 那条口径等于没落）"]
+    out = []
+    reg = ta.get("registry") or {}
+    if ta.get("static_issues"):
+        out.append("时间轴登记自相矛盾：" + "；".join(ta["static_issues"]))
+    elif "static_issues" not in ta:
+        out.append("时间轴的登记核对结果缺失（只写了登记，没核对）")
+    pr = ta.get("probe") or {}
+    added = pr.get("rows_added")
+    if not isinstance(added, int):
+        out.append("时间轴探针证据不完整（rows_added 缺失）")
+    elif added != 0:
+        out.append(
+            f"时间轴探针被灌进 {added} 条（业务时间早于水位的行本该被判已灌过）："
+            "代码读的不是业务时间字段，真源上就是补录单整批进不来"
+        )
+    if pr.get("left_behind") is True:
+        out.append("时间轴探针没清理干净（主表留下了探针行）")
+    biz = (reg.get("business_time_field") or "").strip()
+    plan_key = (ta.get("plan_ts_key") or "").strip()
+    if not biz:
+        out.append("时间轴登记缺 business_time_field")
+    elif plan_key != biz:
+        out.append(
+            f"plan 实际用的字段（{plan_key or '空'}）与登记的业务时间字段（{biz}）不一致："
+            "登记没被真的用上"
+        )
+    return out
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="data_health_"))
 
@@ -124,10 +165,12 @@ def main() -> int:
         issues.append("四种形态的 B 类结果不一致（搬运过程中丢了信息）")
     if i.get("status") == "error":
         issues.append("增量检查没跑起来")
-    elif i.get("status") != "ok":
+    elif i.get("duplicated"):
         issues.append("增量装载出现重复 id（落库幂等失效）")
-    # 重叠窗口不能只有声明：policy 说开着，[9] 步就必须真的比 [8] 多捞回来一条
-    if i.get("status") == "ok":
+    # 下面几项各自按数字判，不拿 status 当闸门：status 现在同时承载「重复 / 隔离区探针 /
+    # 时间轴」三种失败，用一个布尔量概括它们，会让「哪一条红」变成靠猜。
+    if i.get("status") != "error":
+        # 重叠窗口不能只有声明：policy 说开着，[9] 步就必须真的比 [8] 多捞回来一条
         p = i.get("policy") or {}
         ev = i.get("overlap_evidence") or {}
         if not p.get("window_seconds"):
@@ -166,6 +209,10 @@ def main() -> int:
     # 这里只复核它给的那三个数（见 quarantine_probe_issues）。
     if i.get("status") != "error":
         issues.extend(quarantine_probe_issues(i.get("quarantine_probe") or {}))
+    # 时间轴：源端过滤 / 本地水位 / 业务时间必须是同一个钟。登记自相矛盾、或探针
+    # 证明「业务时间早于水位的行被灌进来了」，都意味着真源上会整批静默丢。
+    if i.get("status") != "error":
+        issues.extend(time_axis_issues(i.get("time_axis") or {}))
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -201,6 +248,11 @@ def main() -> int:
     print(f"跨源矩阵      {len(forms)} 种形态，B 类一致：{m.get('b_consistent')}")
     print(f"增量水位      最终 {i.get('final_rows')} 行 / {i.get('unique_ids')} 个不同 id，"
           f"重复：{i.get('duplicated')}")
+    ta = i.get("time_axis") or {}
+    tp = ta.get("probe") or {}
+    print(f"时间轴口径    登记 {'OK' if ta.get('static_ok') else 'FAIL'}，"
+          f"探针新增 {tp.get('rows_added')} 条（应为 0），"
+          f"业务时间字段 {((ta.get('registry') or {}).get('business_time_field') or '?')}")
     print(f"删除同步      活跃 {d.get('live_devices')} 台 / 软删 {d.get('soft_deleted')} 台 / "
           f"审计 {d.get('audit_rows')} 条 / 护栏 {len(d.get('guards') or [])} 条")
     qd = payload["quarantine"]

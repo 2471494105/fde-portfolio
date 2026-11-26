@@ -1,6 +1,6 @@
 """增量水位：只灌「上次之后」的新数据，而不是每晚全表重传。
 
-五个必须回答的问题，脚本逐个验：
+六个必须回答的问题，脚本逐个验：
 1. 水位存哪        -> stg_watermark 表（我方元数据，可以有 PK）
 2. 怎么不重        -> 两道防线：插入与水位推进同一个事务（崩了一起重滚）；
                       装载前按主键过滤已存在的行（幂等，客户重传整批也不重复）
@@ -14,6 +14,11 @@
                       会漏，第 [8] 步把这条残留边界测出来，而不是假装没有；
                       第 [9] 步证明 `overlap`（水位往回退一段）能把它补齐，
                       第 [10] 步证明重叠区全是旧行时水位不会往回退。
+6. 用哪个钟        -> 源端过滤 / 本地水位 / 业务时间必须是同一个「钟」，且显式登记。
+                      GitHub 的 since 按 committer 过滤、author 可早到 2025-12-15（K-3），
+                      本地若记 author 时间，整条会被判「已灌过」而静默丢弃。
+                      第 [12] 步核对登记与真实表结构，第 [13] 步造一条业务时间早于水位的行，
+                      证明它真的会被漏掉——「我说我按发生时刻筛」，得有一次实跑作证。
 
 用法：python scripts/check_ds_incremental.py
 """
@@ -30,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.ds.incremental import plan  # noqa: E402
+from app.ds.time_axis import TIME_AXIS, axis_issues  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 STG = "stg_defect_logs"
@@ -37,6 +43,12 @@ COLS = [
     "id", "ts", "device_id", "station", "defect_type",
     "confidence", "batch", "verdict", "is_actually_ok",
 ]
+
+# 时间轴口径登记在 app/ds/time_axis.py：源端过滤 / 本地水位 / 业务时间三个字段。
+# plan 的 ts_key 必须从这里取，不许在调用点另写一个字面值——登记与行为同源，
+# 否则「改了登记没改调用」这种事机器也看不出来。
+AXIS = TIME_AXIS["defect_logs"]
+TS_KEY = AXIS["business_time_field"]
 
 # 源数据放内存里，不碰真表（真表有外键，插不进 CX-999）
 BASE = [
@@ -183,6 +195,107 @@ def quarantine_probe_verdict(before, after, restored):
     return True, f"隔离区 {before} → {after}（+1）→ {restored}：上涨可观测，且能收回"
 
 
+# 时间轴探针：一条「业务时间早于水位、入库时间晚于水位」的假记录。
+# 按登记的钟（ts）判，它必然被判「已灌过」；只有代码读错了钟，它才会被灌进主表。
+# 这是 K-3 在本地可复现的形态——错读钟不报错，只是少灌/多灌。
+TIME_AXIS_PROBE_ID = 9029
+TIME_AXIS_PROBE = {
+    "id": TIME_AXIS_PROBE_ID,
+    "ts": "2026-01-01 00:00:00",           # 业务时间：远早于水位 → 本该被漏掉
+    "_loaded_at": "2026-11-26 00:00:00",   # 入库时间：晚于水位 → 错读钟就会把它灌进来
+    "device_id": "CX-PROBE",
+    "station": "2号工位",
+    "defect_type": "划伤",
+    "confidence": 0.90,
+    "batch": "B_PROBE",
+    "verdict": "NG",
+    "is_actually_ok": False,
+}
+
+
+def table_columns(conn, table):
+    """真实列名。PostgreSQL 里未加引号的标识符一律小写，所以这里不用再归一。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = %s""",
+            (table,),
+        )
+        return [r["column_name"] for r in cur.fetchall()]
+
+
+def time_axis_registry(conn):
+    """核对登记本身：三个字段的名字、互相对应关系、以及它们是否真在表里。
+
+    这一层不跑数据，只比「登记」与「表结构」。名字写错不会让任何东西报错，
+    只会让口径变成一句空话——所以缺列即红。
+    """
+    cols = table_columns(conn, STG)
+    issues = axis_issues(AXIS, cols)
+    return {
+        "registry": AXIS,
+        "table": STG,
+        "table_cols": cols,
+        "plan_ts_key": TS_KEY,
+        "static_issues": issues,
+        "ok": not issues,
+    }
+
+
+def has_row(conn, row_id):
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT 1 AS n FROM {STG} WHERE id = %s", (row_id,))
+        return cur.fetchone() is not None
+
+
+def run_time_axis_probe(conn):
+    """跑一次「必须被漏掉」的探针，跑完不论结果都删掉自己那一行。
+
+    判据三个数全来自真查库：新增条数、探针是否落进主表、清理后是否回到原值。
+    """
+    before = count_rows(conn)
+    load(conn, [TIME_AXIS_PROBE])
+    after = count_rows(conn)
+    rows_added = after - before
+    landed = has_row(conn, TIME_AXIS_PROBE_ID)
+    with conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {STG} WHERE id = %s", (TIME_AXIS_PROBE_ID,))
+    conn.commit()
+    left = count_rows(conn)
+    left_behind = left != before
+
+    ok = rows_added == 0 and not landed and not left_behind
+    if rows_added != 0:
+        note = (
+            f"探针被灌进了 {rows_added} 条：代码读的不是业务时间字段（{TS_KEY}）。"
+            "业务时间早于水位的行本该被判已灌过——这正是 K-3 那种静默丢，"
+            "换成真源就是「整批补录单永远进不来」"
+        )
+    elif left_behind:
+        note = (
+            f"探针清理后主表剩 {left} 行、原为 {before} 行："
+            "检查污染了自己要检查的对象"
+        )
+    else:
+        note = (
+            f"探针业务时间 2026-01-01 早于水位，按 {TS_KEY} 判应漏 → 实测新增 0 条、"
+            f"主表 {before} 行未变，探针行已清理"
+        )
+    return {
+        "row_id": TIME_AXIS_PROBE_ID,
+        "before": before,
+        "after": after,
+        "rows_added": rows_added,
+        "expected_rows_added": 0,
+        "landed": landed,
+        "left": left,
+        "left_behind": left_behind,
+        "plan_ts_key": TS_KEY,
+        "ok": ok,
+        "note": note,
+    }
+
+
 def load(conn, rows, fail_after_insert=False, overlap=None):
     """返回 (本次新增条数, 水位, 本次隔离条数)。插入与水位推进同事务。
 
@@ -191,7 +304,7 @@ def load(conn, rows, fail_after_insert=False, overlap=None):
     所以装载前按主键过滤。这就是「plan 负责谁该看，落库负责谁是新的」。
     """
     mark = get_mark(conn)
-    good, bad, new_mark = plan(rows, mark, overlap=overlap)
+    good, bad, new_mark = plan(rows, mark, ts_key=TS_KEY, overlap=overlap)
 
     with conn.cursor() as cur:
         cur.execute(f"SELECT id FROM {STG}")
@@ -297,6 +410,18 @@ def main(argv=None) -> int:
         log.append((f"[11] 隔离区上涨探针（{q_before}→{q_after}→{q_restored}）",
                     0, q_after - q_before, count_rows(conn), get_mark(conn)))
 
+        # [12] 时间轴口径登记：源端过滤 / 本地水位 / 业务时间三个字段互相说得通吗。
+        #      比的是「登记」与真实表结构，不跑数据——名字写错本身不会让任何东西报错。
+        axis = time_axis_registry(conn)
+        log.append(("[12] 时间轴口径登记（源端 / 水位 / 业务时间三字段）",
+                    0, 0, count_rows(conn), get_mark(conn)))
+
+        # [13] 时间轴探针：造一条业务时间早于水位的行，它必须被判「已灌过」。
+        #      代码若读成 _loaded_at 这类入库时间，这行就会被灌进主表——K-3 的错法当场显形。
+        ax_probe = run_time_axis_probe(conn)
+        log.append((f"[13] 时间轴探针（业务时间早于水位，应漏；实测新增 {ax_probe['rows_added']}）",
+                    ax_probe["rows_added"], 0, count_rows(conn), get_mark(conn)))
+
         with conn.cursor() as cur:
             cur.execute(f"SELECT count(*) AS total, count(DISTINCT id) AS uniq FROM {STG}")
             r = cur.fetchone()
@@ -320,6 +445,10 @@ def main(argv=None) -> int:
     print("第 [10] 步守住代价的另一头：重叠区全是旧行时 max 会比原水位更早，水位不许因此倒退。")
     print("第 [11] 步是给隔离区那条判据喂一次真实输入：本脚本开头会 TRUNCATE 隔离区，")
     print("  跑完只留 1 条固定夹具，所以 data_health 的 delta 恒为 0——护栏写着了，但没被触发过。")
+    print("第 [12] 步核对时间轴三字段（源端过滤 / 本地水位 / 业务时间）的登记与真实表结构：")
+    print("  名字写错不会让任何东西报错，只会让「口径」变成一句空话——所以缺列即红。")
+    print("第 [13] 步是 K-3 的本地形态：业务时间早于水位的行必须被漏掉（新增 0 条）；")
+    print("  若代码读成 _loaded_at 这类入库时间，这行会被灌进主表——静默丢变成看得见，且跑完自清理。")
 
     # 结构化落盘（G6）。known_gap 一起写：报告里不能只有「增量跑通了」，
     # 还得带上「它在什么情况下会漏」——否则这份证据比没有更容易被误读。
@@ -356,9 +485,18 @@ def main(argv=None) -> int:
                 "recovered_with_window": log[8][1],     # [9]
                 "probe_window_seconds": int(PROBE_OVERLAP.total_seconds()),
             },
+            # 时间轴：登记（静态核对）+ 探针（实跑证据）。两件事分开写，
+            # 因为「名字对」和「钟对」是两种失败——前者靠表结构，后者只能靠造一条行去看。
+            "time_axis": {
+                **axis,
+                "static_ok": axis["ok"],
+                "probe": ax_probe,
+                "ok": axis["ok"] and ax_probe["ok"],
+            },
             "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；"
                          "给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
-            "status": "ok" if (r["total"] == r["uniq"] and probe_ok) else "fail",
+            "status": "ok" if (r["total"] == r["uniq"] and probe_ok
+                               and axis["ok"] and ax_probe["ok"]) else "fail",
         }
         Path(json_out).write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"

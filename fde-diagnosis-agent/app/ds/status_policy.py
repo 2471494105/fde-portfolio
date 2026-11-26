@@ -220,6 +220,14 @@ class UnknownCheck(KeyError):
     """
 
 
+class CheckNotConfigured(RuntimeError):
+    """判据适用，但它需要的客户级词表没登记（比如看板关闭词）。
+
+    这时候不能「词表为空 = 所有 stage 都算开着」——那会判出一批假红，而且看起来像真问题。
+    缺配置就说缺配置：报错、停下、补登记，不要拿默认值糊过去。
+    """
+
+
 def checks_registry(policy: dict | None = None) -> dict:
     """顶层判据登记表：id → what / reads / enforced_where / 判据用到的词表。"""
     return dict((policy or load()).get("checks") or {})
@@ -297,6 +305,12 @@ def check_problems(policy: dict | None = None) -> list[str]:
         if reg and not applies:
             out.append(f"{name} 把所有登记判据都声明不适用——这家客户身上没有任何一条判据在跑")
         applies_any |= applies
+        # 适用了，但判据需要的客户级词表没登记：那不是「判据没问题」，是「判据没法判」。
+        for cid in sorted(applies):
+            for word_key in (reg.get(cid, {}).get("requires_client_words") or []):
+                if not c.get(word_key):
+                    out.append(f"{name} 适用判据 {cid!r}，但没登记它要的客户级词表 {word_key!r}"
+                               "——缺词表会把每个值都判成「不在其中」，红得看起来像真问题")
     if reg and not applies_any:
         out.append("所有登记客户都对每条判据声明了不适用：这条判据永远不跑，是装饰")
     return out

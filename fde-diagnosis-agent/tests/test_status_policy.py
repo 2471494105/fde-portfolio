@@ -255,7 +255,8 @@ class UnsupportedCheckTest(unittest.TestCase):
             **self.policy,
             "clients": {**self.policy["clients"],
                         "client_b_odoo": {**self.policy["clients"]["client_b_odoo"],
-                                          "unsupported_checks": {}}},
+                                          "unsupported_checks": {},
+                                          "stage_board_closed": ["已关闭"]}},
         }
         b = self.ck.run_check(self.CHECK, rows=b_rows, name="client_b_odoo", policy=stripped)
         self.assertEqual(b["status"], "fail")
@@ -296,6 +297,49 @@ class UnsupportedCheckTest(unittest.TestCase):
                             for p in sp.check_problems(patched)))
         with self.assertRaises(sp.UnknownCheck):
             self.ck.run_check("ghost_check", rows=[], policy=patched)
+
+
+    def test_board_words_are_client_level_not_check_level(self):
+        """「已关闭」属于客户，不属于判据：换词表，判出的条数必须跟着变。"""
+        rows = [{"wo_no": "W1", "state": "已完成", "stage_id": "进行中"},
+                {"wo_no": "W2", "state": "已完成", "stage_id": "已关闭"},
+                {"wo_no": "W3", "state": "已取消", "stage_id": "待排产"}]
+        swapped = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_a": {**self.policy["clients"]["client_a"],
+                                     "stage_board_closed": ["待排产"]}},
+        }
+        r = self.ck.run_check(self.CHECK, rows=rows, name="client_a", policy=swapped)
+        # 只认「待排产」算关闭时：W1（进行中）与 W2（已关闭）都成了「未关闭」，W3（待排产）反而不红。
+        # 2 条、且不含 W3——判据跟着客户词表走，而不是跟着某个写死的词。
+        self.assertEqual(len(r["problems"]), 2)
+        self.assertEqual(sorted(p.split("：")[0] for p in r["problems"]), ["W1", "W2"])
+
+    def test_missing_board_words_raise_instead_of_guessing(self):
+        """缺词表不能当成「所有 stage 都还开着」——那会判出一批看着像真问题的假红。"""
+        patched = {
+            **self.policy,
+            "clients": {**self.policy["clients"],
+                        "client_a": {**self.policy["clients"]["client_a"],
+                                     "stage_board_closed": []}},
+        }
+        with self.assertRaises(sp.CheckNotConfigured):
+            self.ck.run_check(self.CHECK, rows=[], name="client_a", policy=patched)
+        self.assertTrue(any("stage_board_closed" in p and "没登记" in p
+                            for p in sp.check_problems(patched)))
+
+    def test_merged_is_not_counted_as_order_closed(self):
+        """`已合并` 不算「关单」：合并后看板跟着合并到的那张单走，用它判这张单是把别人的看板算到它头上。
+
+        第一次改 T16 时是从 `closed_states` 直接推的，把「已合并」悄悄算进去，红从 19 条变 28 条
+        ——所以「哪些闭环词算关单」必须显式登记（`closed_order_labels`），不能推。
+        """
+        rows = [{"wo_no": "M1", "state": "已合并", "stage_id": "进行中"},
+                {"wo_no": "D1", "state": "已完成", "stage_id": "进行中"}]
+        r = self.ck.run_check(self.CHECK, rows=rows, name="client_a", policy=self.policy)
+        self.assertEqual(len(r["problems"]), 1)
+        self.assertIn("D1", r["problems"][0])
 
 
 class EntryBypassTest(unittest.TestCase):

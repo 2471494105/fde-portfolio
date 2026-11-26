@@ -86,7 +86,10 @@ def main() -> int:
         **policy,
         "clients": {
             **policy["clients"],
-            "client_b_odoo": {**policy["clients"]["client_b_odoo"], "unsupported_checks": {}},
+            "client_b_odoo": {**policy["clients"]["client_b_odoo"], "unsupported_checks": {},
+                              # 去掉声明后判据就真的跑起来了——它要客户级的看板关闭词，
+                              # 没登记会抛 CheckNotConfigured（T16）。这里显式补上，才能看出「红了几条」。
+                              "stage_board_closed": ["已关闭"]},
         },
     }
     b2 = ck.run_check(CHECK, rows=rows, name="client_b_odoo", policy=stripped)
@@ -186,6 +189,36 @@ def main() -> int:
             print("    · " + h)
         chk("T15 直接 import + 调用都被抓", len(hits) >= 2, f"实得 {len(hits)} 条")
         chk("T15 指到影子文件", any("rogue.py" in h for h in hits))
+
+    print("== T16 看板关闭词属于客户：换词表，数字必须跟着变")
+    words_swapped = {
+        **policy,
+        "clients": {**policy["clients"],
+                    "client_a": {**policy["clients"]["client_a"],
+                                 "stage_board_closed": ["进行中"]}},
+    }
+    a2 = ck.run_check(CHECK, rows=rows, name="client_a", policy=words_swapped)
+    print(f"  把 client_a 的看板关闭词改成 ['进行中']：红 {len(a2['problems'])} 条")
+    chk("T16 换词表后 19 → 15 条", len(a2["problems"]) == 15, f"实得 {len(a2['problems'])}")
+
+    no_words = {
+        **policy,
+        "clients": {**policy["clients"],
+                    "client_a": {**policy["clients"]["client_a"], "stage_board_closed": []}},
+    }
+    try:
+        ck.run_check(CHECK, rows=rows, name="client_a", policy=no_words)
+        chk("T16 缺词表必须抛 CheckNotConfigured", False, note="它没抛")
+    except sp.CheckNotConfigured as e:
+        print(f"  缺词表时抛：{e}")
+        chk("T16 缺词表必须抛 CheckNotConfigured", True)
+    chk("T16 E 静层也报「适用却缺词表」",
+        any("stage_board_closed" in p and "没登记" in p for p in sp.check_problems(no_words)))
+
+    merged = [{"wo_no": "M1", "state": "已合并", "stage_id": "进行中"}]
+    m = ck.run_check(CHECK, rows=merged, name="client_a", policy=policy)
+    print(f"  已合并 + 看板未关：{len(m['problems'])} 条（closed_order_labels 不含已合并）")
+    chk("T16 已合并不算关单（否则红从 19 变 28）", m["problems"] == [], f"实得 {m['problems']}")
 
     print("\nRESULT:", "ALL PASS" if ok else "HAS FAIL")
     return 0 if ok else 1

@@ -24,15 +24,31 @@ Impl = Callable[[list[dict], dict, dict], tuple[list[str], int]]
 
 
 def work_order_state_stage_conflict(rows: list[dict], spec: dict, ctx: dict) -> tuple[list[str], int]:
-    """红：业务说已关单（折成「已完成」/「已取消」），看板阶段却还停在未关闭列。
+    """红：业务说已关单（折成闭环词），看板阶段却还停在未关闭列。
 
     「已完成但看板未关闭」在自家库上是真红：关单的人忘了拖看板。到了 Odoo 就不能这么判——
     `stage_id` 是看板列、可以随手拖动，不是终态。区别不在数据，在**这条判据的前提**是否成立，
     所以判据本身要能声明「对这家客户不适用」，而不是让跑它的人自己记住。
+
+    「已关闭」这个词属于**客户**，不属于判据：判据只认「闭环」这件事，客户用哪个词表达看板关上，
+    登记在客户那一份里（`stage_board_closed`）。缺这份词表就抛 `CheckNotConfigured`——
+    空词表会被读成「所有 stage 都还开着」，判出一批看着像真问题的假红。
     """
-    board_closed = set(spec.get("board_closed_states") or [])
-    closed_labels = set(spec.get("closed_labels") or ["已完成", "已取消"])
+    board_closed = set(ctx.get("stage_board_closed") or [])
+    if not board_closed:
+        raise sp.CheckNotConfigured(
+            f"客户 {ctx.get('client')!r} 适用 stage 冲突判据，但没登记 stage_board_closed——"
+            "空词表会把每个 stage 都判成「未关闭」"
+        )
     fold = ctx.get("fold") or {}
+    # 「关单」这个词也必须是显式的：`已合并` 不算——合并后看板跟着合并到的那张单走，
+    # 用它去判这张单「看板没关」是把别人的看板算到它头上。写进 spec 而不是从 closed_states 推，
+    # 推出来的会把「已合并」悄悄算进来（第一次改就是这样，红从 19 条变成 28 条，且没人会注意到）。
+    closed_labels = set(spec.get("closed_order_labels") or [])
+    if not closed_labels:
+        raise sp.CheckNotConfigured(
+            "判据没登记 closed_order_labels——说不出「哪些闭环词算关单」，红的基础就不存在"
+        )
     problems: list[str] = []
     for r in rows:
         state = str(r.get("state") or "")
@@ -162,6 +178,8 @@ def run_check(check_id: str, rows: list[dict] | None = None, name: str | None = 
         "fold": sp.vocab_fold(who, p),
         "closed_states": list(c.get("closed_states") or []),
         "known_open_states": list(c.get("known_open_states") or []),
+        # 客户级词表：判据不自己带词，缺了就抛，不拿默认值糊过去
+        "stage_board_closed": list(c.get("stage_board_closed") or []),
     }
     problems, checked = fn(list(rows or []), spec, ctx)
     return {

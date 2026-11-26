@@ -24,6 +24,9 @@
       "priority_dropped": null,
       "unsupported_columns": [],
       "source_of_truth": "mock_qms/reset.py + data/schema.sql 的 work_orders_open_key 部分唯一索引（同一口径，2026-11-26 起改为读本表；索引谓词因不可参数化仍留字面量，由 scripts/check_status_policy.py 盯漂移）",
+      "stage_board_closed": [
+        "已关闭"
+      ],
       "vocab_fold": {
         "待处理": "待处理",
         "处理中": "处理中",
@@ -96,15 +99,15 @@
   ],
   "checks": {
     "work_order_state_stage_conflict": {
-      "what": "业务说已关单（折成「已完成」）、看板阶段却还停在未关闭列 → 红。两套状态并存时，谁也不是权威，只能判「事实与状态对不上」。",
+      "what": "业务说已关单（折成「已完成」/「已取消」）、看板阶段却还停在未关闭列 → 红。两套状态并存时，谁也不是权威，只能判「事实与状态对不上」。",
       "reads": [
         "state",
         "stage_id"
       ],
-      "board_closed_states": [
-        "已关闭"
+      "requires_client_words": [
+        "stage_board_closed"
       ],
-      "closed_labels": [
+      "closed_order_labels": [
         "已完成",
         "已取消"
       ],

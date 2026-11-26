@@ -27,8 +27,18 @@ from app.ds.delete_sync import plan_deletes  # noqa: E402
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 SQL = ROOT / "data" / "sandbox" / "delete_sync.sql"
 
-# 夹具：模拟「这几台设备有未闭环工单引用」。真实环境这条来自 work_orders 反查。
-PROTECTED = {"CX-103"}
+# 「未闭环」的口径必须和 mock_qms/reset.py 逐字一致：那边用它算「谁还占着幂等键」，
+# 这里用它算「谁不能被删」。同一件事不能有两套定义，否则一处宽一处严，
+# 会出现「建单能建、设备却被删掉」这种自相矛盾的现场。
+OPEN_STATUS_EXCLUDE = ("已完成", "已合并", "已取消")
+
+# 夹具工单：造出「一台有未闭环工单、一台只有已闭环工单」两种样本。
+# 保护集本身不再由常量决定，而是从 work_orders 反查——
+# 这两条只是把客户库里会有的行提前造出来，取数走和真实环境同一条 SQL。
+ORDER_FIXTURES = [
+    {"order_id": "WO-PROBE-103-OPEN", "device_id": "CX-103", "status": "待处理"},
+    {"order_id": "WO-PROBE-102-CLOSED", "device_id": "CX-102", "status": "已完成"},
+]
 
 BASE = [
     {"device_id": "CX-101", "line": "1号线"},
@@ -42,6 +52,36 @@ BASE = [
 def ensure_schema(conn):
     conn.execute(SQL.read_text(encoding="utf-8"))
     conn.commit()
+
+
+def ensure_order_fixtures(conn):
+    """造两条工单：一条未闭环（该保护）、一条已闭环（不该保护）。
+
+    两条都要有，否则「反查口径」只测了一半：只造未闭环的，你永远不知道
+    代码有没有把已闭环的也算进去——那样保护会无限扩大，最后什么都不敢删。
+    """
+    conn.execute("DELETE FROM work_orders WHERE order_id LIKE 'WO-PROBE-%'")
+    for f in ORDER_FIXTURES:
+        conn.execute(
+            "INSERT INTO work_orders (order_id, device_id, root_cause, root_cause_code, "
+            "severity, actions, evidence_refs, idempotency_key, status, assignee_group) "
+            "VALUES (%s, %s, '夹具：验证保护集反查', 'PROBE', 'medium', '无', '[]', %s, %s, '夹具组')",
+            (f["order_id"], f["device_id"], f"probe-{f['order_id']}", f["status"]),
+        )
+    conn.commit()
+
+
+def open_order_devices(conn):
+    """保护集的真实来源：从 work_orders 反查「有未闭环工单的设备」。
+
+    接客户库时只换 DSN，代码不用动——这就是把 `PROTECTED = {"CX-103"}`
+    这种常量替掉的意义。常量只对某一个沙箱有效，换台机器就是错的。
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT device_id FROM work_orders WHERE NOT (status = ANY(%s))",
+        (list(OPEN_STATUS_EXCLUDE),),
+    ).fetchall()
+    return {r["device_id"] for r in rows}
 
 
 def reset(conn):
@@ -78,13 +118,24 @@ def get_states(conn):
 
 
 def protected_ids(conn):
-    """库里的保护标记 ∪ 夹具。
+    """同步 `protected` 列，并返回此刻的保护集。
 
-    保护不能只活在一个脚本常量里：常量改了、或者换成别的入口跑，保护就静默失效。
-    写进表之后，下一轮从表读，保护才跟着设备走。
+    这列是**状态**，不是历史：历史在 `stg_delete_log` 里（每次 protect 都留痕）。
+    所以每次跑都把它对齐成「此刻有未闭环工单」的真相，工单闭环后自动变回 false。
+
+    反过来说：如果把「表里标记过」并进保护集，保护就只增不减——一台设备被
+    保护过一次就永远删不掉，跑久了所有设备都被保护过，删除功能等于没有。
+    这比「保护突然消失」更隐蔽：后者会有人问，前者没有任何症状。
     """
-    rows = conn.execute("SELECT device_id FROM stg_device_state WHERE protected").fetchall()
-    return set(PROTECTED) | {r["device_id"] for r in rows}
+    open_ids = open_order_devices(conn)
+    ids = list(open_ids)
+    conn.execute(
+        "UPDATE stg_device_state SET protected = (device_id = ANY(%s)), updated_at = now() "
+        "WHERE protected <> (device_id = ANY(%s))",
+        (ids, ids),
+    )
+    conn.commit()
+    return open_ids
 
 
 def local_ids(conn):
@@ -131,8 +182,10 @@ def live_count(conn):
 def run_step(conn, label, snapshot, events=None, min_ratio=None):
     load_snapshot(conn, snapshot)
     kwargs = {} if min_ratio is None else {"min_ratio": min_ratio}
+    # 先同步保护标记，再读状态：否则 states 里带的是上一步的旧标记
+    protected = protected_ids(conn)
     result = plan_deletes(local_ids(conn), {r["device_id"] for r in snapshot},
-                          states=get_states(conn), protected=protected_ids(conn),
+                          states=get_states(conn), protected=protected,
                           events=events, **kwargs)
     apply(conn, result)
     acts = {}
@@ -156,6 +209,7 @@ def main(argv=None) -> int:
     log = []
     with psycopg.connect(DSN, row_factory=dict_row, autocommit=True) as conn:
         ensure_schema(conn)
+        ensure_order_fixtures(conn)
         reset(conn)
 
         log.append(run_step(conn, "[1] 首轮全量 5 台（无水可删）", BASE))
@@ -196,10 +250,12 @@ def main(argv=None) -> int:
         soft = conn.execute(
             "SELECT count(*) AS n FROM stg_device_state WHERE deleted_at IS NOT NULL").fetchone()["n"]
         audit = conn.execute("SELECT count(*) AS n FROM stg_delete_log").fetchone()["n"]
+        # 保护集从工单反查，不再来自常量——这里查的就是「代码此刻会保护谁」
+        protected_source = sorted(open_order_devices(conn))
         protected_rows = conn.execute(
-            "SELECT device_id, absent_count, deleted_at IS NOT NULL AS deleted "
+            "SELECT device_id, absent_count, deleted_at IS NOT NULL AS deleted, protected "
             "FROM stg_device_state WHERE device_id = ANY(%s) ORDER BY device_id",
-            (sorted(PROTECTED),)).fetchall()
+            (protected_source,)).fetchall()
 
     print()
     print(f"{'步骤':<46} {'动作':<28} 活跃台数")
@@ -216,7 +272,9 @@ def main(argv=None) -> int:
     if drop_step:
         print(f"骤降轮 [7] 当时的活跃台数：{drop_step[3]} 台"
               f"（正常模式应为 4；低于 4 说明护栏没拦住）")
-    print("被保护的那台（夹具 CX-103）：", protected_rows)
+    print("被保护的那台（从 work_orders 反查未闭环工单）：", protected_rows)
+    print(f"反查到的保护集：{protected_source}"
+          f"（口径：status NOT IN {OPEN_STATUS_EXCLUDE}）")
     print()
     print("第 [2] 步是关键：只缺席一次时一条都没删——一次分页超时就会误删整批客户数据，")
     print("这是连接层里最贵的那种错，而且删完不报错。")
@@ -235,7 +293,14 @@ def main(argv=None) -> int:
             "soft_deleted": soft,
             "audit_rows": audit,
             "protected": [{"id": r["device_id"], "absent_count": r["absent_count"],
-                           "deleted": r["deleted"]} for r in protected_rows],
+                           "deleted": r["deleted"], "marked": r["protected"]}
+                          for r in protected_rows],
+            # 保护集从哪来，要写进产物：读报告的人得能判断「这个保护是配的还是查的」
+            "protected_source": {
+                "from": "work_orders 反查",
+                "rule": f"status NOT IN {list(OPEN_STATUS_EXCLUDE)}",
+                "ids": protected_source,
+            },
             "guards": ["首次缺席不删（阈值 2）", "快照骤降整轮拒绝（<50%）",
                        "未闭环引用不删（优先于删除事件）", "信号矛盾不删",
                        "重新出现即复活", "每次判定留审计"],

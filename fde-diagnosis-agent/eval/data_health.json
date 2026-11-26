@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:46:21",
+ "checked_at": "2026-11-26 11:51:15",
  "contract": {
-  "checked_at": "2026-11-26 11:46:20",
+  "checked_at": "2026-11-26 11:51:15",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:46:20",
+  "checked_at": "2026-11-26 11:51:14",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:46:20",
+  "checked_at": "2026-11-26 11:51:14",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,7 +166,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:46:20",
+  "checked_at": "2026-11-26 11:51:14",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -274,11 +274,27 @@
   "audit_rows": 18,
   "protected": [
    {
+    "id": "CX-101",
+    "absent_count": 0,
+    "deleted": false,
+    "marked": true
+   },
+   {
     "id": "CX-103",
     "absent_count": 1,
-    "deleted": false
+    "deleted": false,
+    "marked": true
    }
   ],
+  "protected_source": {
+   "from": "work_orders 反查",
+   "rule": "status NOT IN ['已完成', '已合并', '已取消']",
+   "ids": [
+    "CX-101",
+    "CX-103",
+    "CX-999"
+   ]
+  },
   "guards": [
    "首次缺席不删（阈值 2）",
    "快照骤降整轮拒绝（<50%）",

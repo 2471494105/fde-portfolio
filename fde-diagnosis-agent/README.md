@@ -296,6 +296,28 @@ venv\Scripts\python.exe -X utf8 scripts\verify_station_governance.py            
 
 证据与拒绝掉的那条路在 `docs/20261126_20_不兜底.md`（`DOC-62`）。
 
+### 缺陷字段面（K）
+
+缺陷页从 T10 起就把 5 行脏数据染了色：`rec 4` 未来时间（`2027-01-01`）、`5`/`6` 置信度 150 与 -10、`8` 批次空串、`10` 批次 NULL。但 Python 侧一条判据都没有——**颜色是页面自己判的，治理结论里什么都没发生**。这是 `DOC-60` 的同一种病换了个页面。
+
+判据 **K** 补三条，登记在 `data/mapping/field_rules.json`，实现是 `app/ds/field_checks.py`：
+
+- `conf_pct_range`：0–100，区间闭合；空值算「没给」不算「给错」；
+- `captured_at_not_future`：**判定时刻可注入**（`--now`），否则页面取浏览器钟、判据取库钟，边界行会随机假红；
+- `lot_no_blank_split`：**NULL 与空串分开**——查映射 vs 查录入，合并成一个「空」就把契约 R2 又抹平一次。
+
+**另起一族、不塞进 `checks.py`**：`run_check` 的 ctx 是客户词表（按客户不同），缺陷规则没有客户差异；硬塞会让 E 判据拿工单行去喂它们。但约束不放松——同一入口 `field_checks.run()`、登记没实现就抛 `UnknownCheck`、F（入口绕过）的 AST 扫描扩到这一族。
+
+```powershell
+# 判据 K：红 5 行（4 / 5 / 6 / 8 / 10），exit 1，末尾落台账 run_id
+venv\Scripts\python.exe -X utf8 scripts\check_defect_fields.py
+
+# 验收：登记↔实现、阈值同源、按 rec_id 对账、改错阈值必须红、台账多一行
+venv\Scripts\python.exe -X utf8 scripts\verify_defect_fields.py
+```
+
+实测评据 K 的红行 = 页面染色的行，按编号逐个相同（`['4','5','6','8','10']`）；反例把 conf 上界改成 200，对账报「conf: 页面多 ['5']，判据多 []」——对账真的会红。顺带拆掉第三份阈值：`mock-mes/scripts/verify_ui.py::expect_defect` 的 `100/0` 改为从登记读。缺陷页也补了一行 KPI：`脏行 5 / 302（越界 2 · 未来 1 · 空批次 2）`。证据在 `docs/20261126_22_缺陷字段面.md`（`DOC-64`）。
+
 ### 判据自己有没有在工作（可观测性）
 
 前四层都在判数据，没有一层判**判据**。判据要靠人开终端，今天跑了不等于明天跑；结果停在 stdout，362 行有没有变化要靠记忆；库里的数据新不新，没有任何一页能答。这一层补的是证据，不是再加一条判据。

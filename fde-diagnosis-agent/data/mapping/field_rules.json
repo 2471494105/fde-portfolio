@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "updated": "2026-11-26",
+  "why": "缺陷页把 5 行脏数据染了色（越界/未来时间/空批次），但 Python 侧一条判据都没有——颜色是页面自己判的，判据沉默。这跟 DOC-60 的病一样：同一条规则写在两个地方，谁改了谁都不会响。这里把三条行级规则登记成一份，页面与判据都从这份取值，并由 scripts/verify_defect_fields.py 拿同一批行按编号对账。",
+  "table": "public.biz_defect_record",
+  "key": "rec_id",
+  "now_injection": "判定时刻必须可注入（--now / 页面 opts.now），否则两个实现各自取钟，边界行会随机对不上；对账时两侧喂同一个字面时刻。",
+  "rules": {
+    "conf_pct_range": {
+      "what": "置信度必须落在 0–100。越界不是「精度差一点」，是量纲或录入错误：150 与 -10 这两行正是 DOC-56 里挪动中位数的那两个值。",
+      "reads": ["conf_pct"],
+      "min": 0,
+      "max": 100,
+      "tag": "超范围",
+      "enforced_where": "app/ds/field_checks.py::conf_pct_range（唯一入口 field_checks.run）",
+      "counterpart": {
+        "file": "mock-mes/api/static/flag.js",
+        "entries": ["defectRowFlag", "defectJudge", "defectCounts"],
+        "limits_key": "DEFECT_LIMITS",
+        "compares": "ids",
+        "note": "页面与判据是同一规则的两个实现；对账按 rec_id 比集合，不比条数（一条行可以同时踩两条规则）。"
+      }
+    },
+    "captured_at_not_future": {
+      "what": "采集时间不能晚于判定时刻。未来时间不是「数据很新」——它会让增量水位跳到未来，之后每一条新数据都被判成「已灌过」而静默停摆（DOC-40 踩过）。",
+      "reads": ["captured_at"],
+      "tag": "未来时间",
+      "enforced_where": "app/ds/field_checks.py::captured_at_not_future（同一入口）",
+      "counterpart": {
+        "file": "mock-mes/api/static/flag.js",
+        "entries": ["defectRowFlag", "defectJudge"],
+        "compares": "ids",
+        "note": "两侧都用注入的同一个时刻；边界行（误差秒级）会随机对不上，所以对账时刻取离数据远的一个字面值。"
+      }
+    },
+    "lot_no_blank_split": {
+      "what": "批次空着要分成两种：NULL = 源端没给这一列（缺失），空串 = 给了但是空的（数据脏）。契约 R2 的「空串≠缺失≠0」在这里落地——两者都该红，但修复动作不同：前者查映射与源端，后者查录入。",
+      "reads": ["lot_no"],
+      "split_null": "缺失",
+      "split_empty": "空串",
+      "tag": "批次 NULL/批次空串",
+      "enforced_where": "app/ds/field_checks.py::lot_no_blank_split（同一入口）",
+      "counterpart": {
+        "file": "mock-mes/api/static/flag.js",
+        "entries": ["defectRowFlag", "defectJudge"],
+        "compares": "ids",
+        "note": "页面上 NULL 与空串是两个标签、两种灰；判据侧也必须分开列，合并成一个「空」就是把 R2 又抹平一次。"
+      }
+    }
+  }
+}

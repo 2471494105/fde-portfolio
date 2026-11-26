@@ -189,19 +189,7 @@ const VIEWS = {
     legend: '<span><i class="r"></i>置信度越界</span><span><i class="a"></i>未来时间</span><span><i class="g"></i>空批次</span>',
     size: 20,
     widths: [76, 176, 96, 96, 132, 82, 112, 88, 70, 112],
-    flag: (r) => {
-      const tags = []; let cls = "";
-      if (r.conf_pct !== null && (Number(r.conf_pct) > 100 || Number(r.conf_pct) < 0)) {
-        tags.push(["超范围", "tag-red"]); cls = "row-red";
-      }
-      if (r.captured_at && r.captured_at > nowText()) {
-        tags.push(["未来时间", "tag-amber"]); if (cls !== "row-red") cls = "row-amber";
-      }
-      if (r.lot_no === null || r.lot_no === "") {
-        tags.push([r.lot_no === null ? "批次 NULL" : "批次空串", "tag-gray"]); if (!cls) cls = "row-gray";
-      }
-      return {cls, tags};
-    }
+    flag: (r) => MesFlag.defectRowFlag(r, {now: nowText()})
   },
   work_orders: {
     title: "维修工单",
@@ -359,6 +347,19 @@ async function refreshKpi(){
         (latest ? latest.minutes_since + " 分钟前" : "从未") +
         " · p95 " + api.p95_ms + " ms · 4xx/5xx " + api.errors +
         "（静默判据 " + silent.length + " · 陈旧表 " + stale + " · 未来时间 " + future + "）";
+    } catch (e) { el.style.display = "none"; }
+    return;
+  }
+  if (cur === "defect_records") {
+    try {
+      const d = await fetch("/v1/defect_records?size=500").then((r) => r.json());
+      // 与行标同一份实现：KPI 和表格不许各判各的
+      const c = MesFlag.defectCounts(d.items, {now: nowText()});
+      el.style.display = "";
+      el.className = c.violating ? "kpi" : "kpi amber";
+      el.innerHTML = "脏行 <b>" + c.violating + "</b> / " + d.total +
+                     "（越界 " + c.conf + " · 未来 " + c.future +
+                     " · 空批次 " + (c.lot_null + c.lot_empty) + "）";
     } catch (e) { el.style.display = "none"; }
     return;
   }

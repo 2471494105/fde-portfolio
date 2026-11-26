@@ -112,7 +112,11 @@ def bypass_problems(root=None) -> list[str]:
 
     base = Path(root) if root else Path(__file__).resolve().parents[2]
     me = Path(__file__).resolve()
-    impl_names = {fn.__name__ for fn in _RUNNERS.values()}
+    # 行级字段判据是第二族（app/ds/field_checks.py），同样只许从 fc.run 进去；
+    # 分族不是放松约束：实现名一起扫，绕过哪一族都报。
+    from . import field_checks as fc
+
+    impl_names = {fn.__name__ for fn in _RUNNERS.values()} | {fn.__name__ for fn in fc.RULES.values()}
     out: list[str] = []
 
     for path in sorted(base.rglob("*.py")):

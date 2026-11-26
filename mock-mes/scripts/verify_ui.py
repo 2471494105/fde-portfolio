@@ -28,6 +28,15 @@ NOW_DATE = NOW[:10]
 # 三个视图各自"有几列"（数据列 + 标记列），列宽改动时这里必须一起改
 COLS = {"devices": 9, "defect_records": 10, "work_orders": 10, "remediation_orders": 10, "check_runs": 7}
 
+# 缺陷页的阈值不再在这里硬写：从判据登记里读（同一份 data/mapping/field_rules.json）。
+# 以前这里写的是 100/0 两个字面量，判据那边也写一份——两边改一处漏一处不会有人响。
+_SPEC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "fde-diagnosis-agent", "data", "mapping", "field_rules.json")
+with io.open(_SPEC_PATH, encoding="utf-8") as _f:
+    _FIELD_SPEC = json.load(_f)
+_CONF_MIN = float(_FIELD_SPEC["rules"]["conf_pct_range"]["min"])
+_CONF_MAX = float(_FIELD_SPEC["rules"]["conf_pct_range"]["max"])
+
 
 def get(path):
     with urllib.request.urlopen(BASE + path, timeout=10) as r:
@@ -69,7 +78,7 @@ def btn_disabled(html, btn):
 def expect_defect(r):
     cls, tags = "", []
     cp = r.get("conf_pct")
-    if cp is not None and (float(cp) > 100 or float(cp) < 0):
+    if cp is not None and (float(cp) > _CONF_MAX or float(cp) < _CONF_MIN):
         tags.append("超范围")
         cls = "row-red"
     if (r.get("captured_at") or "") > NOW:
@@ -177,6 +186,22 @@ def main():
     km = re.search(r'<span[^>]*id="kpi"[^>]*>(.*?)</span>', h, re.S)
     kpi_html = km.group(1) if km else ""
     chk("KPI 有 p95 与静默计数", "p95" in kpi_html and "静默判据" in kpi_html, True)
+
+    # 缺陷页的 KPI：行标与 KPI 必须出自同一份 flag.js 实现，所以这里对的是「计数对不对」，
+    # 而不是「页面有没有画」——画着 5 行红、KPI 写 2，比不画更坏。
+    hd, _ = render(BASE + "/app/#defect_records", "kpi")
+    kd = re.search(r'<span[^>]*id="kpi"[^>]*>(.*?)</span>', hd, re.S)
+    kpi_html_d = kd.group(1) if kd else ""
+    print("KPI:", re.sub(r"<[^>]+>", "", kpi_html_d), "（缺陷页）")
+    d = get("/v1/defect_records?size=500")
+    exp_v = sum(1 for r in d["items"] if expect_defect(r)[0])
+    n_red = sum(1 for r in d["items"] if expect_defect(r)[0] == "row-red")
+    n_amb = sum(1 for r in d["items"] if expect_defect(r)[0] == "row-amber")
+    n_blank = sum(1 for r in d["items"] if expect_defect(r)[0] == "row-gray")
+    chk("缺陷页 KPI 脏行数", ("脏行 <b>%d</b> / %d" % (exp_v, d["total"])) in kpi_html_d, True)
+    chk("缺陷页 KPI 三类计数", ("越界 %d" % n_red) in kpi_html_d and
+        ("未来 %d" % n_amb) in kpi_html_d and
+        ("空批次 %d" % n_blank) in kpi_html_d, True)
     m = (re.search(r'<div[^>]*id="banner"[^>]*class="([^"]*)"', h)
          or re.search(r'<div[^>]*class="([^"]*)"[^>]*id="banner"', h))
     chk("banner 未出现", (m.group(1) if m else "?").find("show"), -1)

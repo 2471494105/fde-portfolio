@@ -212,6 +212,7 @@ def _data_health():
     p = ROOT / "eval" / "data_health.json"
     empty = {"contract": None, "matrix_b_consistent": None,
              "incremental_duplicated": None, "quarantine_rows": None,
+             "quarantine_delta": None,
              "delete_live": None, "delete_soft": None,
              "known_gap": "", "checked_at": "", "stale_minutes": None,
              "stale": False, "issues": []}
@@ -249,6 +250,8 @@ def _data_health():
         delete_live=dl.get("live_devices"),
         delete_soft=dl.get("soft_deleted"),
         quarantine_rows=(d.get("quarantine") or {}).get("rows"),
+        # 涨没涨比有多少重要：绝对值里混着固定夹具，只有差值是信号
+        quarantine_delta=(d.get("quarantine") or {}).get("delta"),
         known_gap=i.get("known_gap") or "",
         issues=d.get("issues") or [],
     )

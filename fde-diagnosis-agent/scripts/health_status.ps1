@@ -32,6 +32,7 @@ $problems = @()
 # ---- 1) 最近一次检查（来源 data_health.json）----
 $dh = $null
 $ageH = $null
+$ageMin = $null
 if (Test-Path -LiteralPath $JsonPath) {
     try {
         $dh = Get-Content -LiteralPath $JsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -49,7 +50,10 @@ if ($dh) {
     if (-not $parsed) {
         $problems += "checked_at 读不出来：'$($dh.checked_at)'"
     } else {
-        $ageH = [math]::Round(((Get-Date) - $ca).TotalHours, 1)
+        # 留一份不四舍五入的分钟数：显示「几分钟前」时用 ageH（已 Round 到 0.1 小时）
+        # 会算出 0，三四分钟也显示「0 分钟前」，读起来像刚跑过
+        $ageMin = ((Get-Date) - $ca).TotalMinutes
+        $ageH = [math]::Round($ageMin / 60, 1)
         if ($ageH -gt $MaxAgeHours) { $problems += "最近一次检查是 $ageH 小时前，超过 $MaxAgeHours 小时" }
     }
     if ($dh.status -ne 'ok') {
@@ -104,12 +108,15 @@ if (-not $task) {
 
 # ---- 输出：三段并排，各答一个问题 ----
 $stateOk = if ($dh -and $dh.status -eq 'ok') { 'OK' } elseif ($dh) { "$($dh.status)" } else { '?' }
-$freshness = if ($null -eq $ageH) { '未知' } elseif ($ageH -lt 1) { "$([math]::Round($ageH * 60)) 分钟前" } else { "$ageH 小时前" }
+$freshness = if ($null -eq $ageMin -and $null -eq $ageH) { '未知' } elseif (-not $ageH -or ($ageMin -lt 60)) { "$([math]::Round($ageMin)) 分钟前" } else { "$ageH 小时前" }
 # data_health.json 里每一块都是对象，不是格式化好的字符串——
 # 这里逐字段取，"契约 16/16" 那种写法只在 run_eval 写 meta 时才存在
 $blocks = if ($dh) {
     $ct = "$($dh.contract.pass)/$($dh.contract.total)"
-    "            契约 $ct · 矩阵一致 $($dh.matrix.b_consistent) · 增量重复 $($dh.incremental.duplicated) · 删除 活跃 $($dh.delete.live_devices)/软删 $($dh.delete.soft_deleted) · 隔离 $($dh.quarantine.rows) 条"
+    # 隔离区只报「涨」：0 涨不是信息，涨了才是
+    $qd = $dh.quarantine
+    $qt = if (-not $qd.readable) { '读不到' } elseif ($qd.delta -gt 0) { "$($qd.rows) 条（较上次 +$($qd.delta)）" } else { "$($qd.rows) 条" }
+    "            契约 $ct · 矩阵一致 $($dh.matrix.b_consistent) · 增量重复 $($dh.incremental.duplicated) · 删除 活跃 $($dh.delete.live_devices)/软删 $($dh.delete.soft_deleted) · 隔离 $qt"
 } else { '' }
 
 Write-Host ""

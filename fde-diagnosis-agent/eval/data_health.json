@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 11:28:46",
+ "checked_at": "2026-11-26 11:34:39",
  "contract": {
-  "checked_at": "2026-11-26 11:28:46",
+  "checked_at": "2026-11-26 11:34:39",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 11:28:45",
+  "checked_at": "2026-11-26 11:34:39",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 11:28:45",
+  "checked_at": "2026-11-26 11:34:39",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -166,7 +166,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 11:28:45",
+  "checked_at": "2026-11-26 11:34:39",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -272,7 +272,10 @@
  },
  "quarantine": {
   "db": "fde_sandbox",
+  "readable": true,
   "rows": 1,
+  "prev_rows": 1,
+  "delta": 0,
   "reasons": {
    "ts_in_future": 1
   },

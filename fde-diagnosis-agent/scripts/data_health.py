@@ -75,6 +75,23 @@ def main() -> int:
 
     # 隔离区单独查沙箱：契约检查跑的是主库，主库没有 stg_quarantine。
     q = cdc.quarantine_report(SBX_DSN)
+    q_rows = sum(x["n"] for x in q) if q else 0
+
+    # 「隔离区有没有涨」只能跟上一次比：沙箱里那条是增量检查的固定夹具，
+    # 绝对值恒为 1，一直盯着绝对值等于一直盯着一个常数。
+    # 这里读 OUT 的旧值，跑完之后才会被覆盖——顺序错了就会自己跟自己比。
+    #
+    # 但要注意一个自指问题：增量检查每轮都会 TRUNCATE stg_quarantine 再插 1 条夹具，
+    # 也就是「检查脚本重置了它自己要检查的对象」。所以在本项目里 delta 恒为 0，
+    # 它测不出真实世界的变化；真实环境里隔离区不复位，这个数才是有意义的信号。
+    # 判据本身验过：把旧值改成 0 再跑，delta=+1 会红；再跑一次自愈回 0。
+    prev_rows = None
+    if OUT.exists():
+        try:
+            prev_rows = (json.loads(OUT.read_text(encoding="utf-8")).get("quarantine") or {}).get("rows")
+        except Exception:
+            prev_rows = None
+    delta = (q_rows - prev_rows) if isinstance(prev_rows, int) else None
 
     issues = []
     if c.get("status") == "error":
@@ -99,6 +116,12 @@ def main() -> int:
         guards = d.get("guards") or []
         if len(guards) < 5:
             issues.append("删除同步的护栏少了（应有 5 条）")
+    if q is None:
+        # 表不存在和连不上库在 quarantine_report 里是同一个返回值（None），
+        # 但两种都不能当成「隔离区是空的」——读不到不等于没有
+        issues.append("隔离区读不到（表不存在或库连不上，不等于 0 条）")
+    elif delta is not None and delta > 0:
+        issues.append(f"隔离区比上次多了 {delta} 条（有新行被挡在主表外）")
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -108,7 +131,11 @@ def main() -> int:
         "delete": d,
         "quarantine": {
             "db": "fde_sandbox",
-            "rows": sum(x["n"] for x in q) if q else 0,
+            "readable": q is not None,
+            "rows": q_rows,
+            # 涨没涨比有多少更重要：这个数里混着固定夹具，绝对值看不出趋势
+            "prev_rows": prev_rows,
+            "delta": delta,
             "reasons": {x["reason"]: x["n"] for x in q} if q else {},
             # 这 1 条不是「生产库脏了」，是增量检查的固定夹具（2027 年那条）。
             # 不写清来源，读报告的人会以为系统在往隔离区里丢数据。
@@ -130,7 +157,10 @@ def main() -> int:
           f"重复：{i.get('duplicated')}")
     print(f"删除同步      活跃 {d.get('live_devices')} 台 / 软删 {d.get('soft_deleted')} 台 / "
           f"审计 {d.get('audit_rows')} 条 / 护栏 {len(d.get('guards') or [])} 条")
-    print(f"隔离区        {(payload['quarantine'])['rows']} 条（来自检查夹具，见 note）")
+    qd = payload["quarantine"]
+    delta_text = "" if qd["delta"] is None else f"（较上次 {qd['delta']:+d} 条）"
+    readable_text = "" if qd["readable"] else "**读不到**："
+    print(f"隔离区        {readable_text}{qd['rows']} 条{delta_text}（来自检查夹具，见 note）")
     if issues:
         print("\n问题：")
         for x in issues:

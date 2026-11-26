@@ -119,3 +119,9 @@ scripts/verify_ui.py       三页渲染对账（DOM vs 接口，8 组检查）
 `007` 会清空业务表重灌，跑完必须再跑 `009`，否则那两条 NULL 行没了。
 
 连接串在 `.env`（不入库）。
+
+## 判据侧（在 agent 仓库里）
+
+这个库的价值是"给判据当靶子"，判据本身不在这个目录。`export_registry.py` 导出的快照给 `fde-diagnosis-agent/scripts/check_source_schema.py` 用（S1–S4），`--sync-to` 直接落到 `data/mapping/source_schema/`。
+
+换源验收——把八条判据指到 `fde_client`，看换一家客户时哪几处必须拒跑——跑法与九条反例的档位见 `../fde-diagnosis-agent/docs/20261126_13_换源验收.md`（`DOC-55`）。反例造在 `probe` schema 的同构影子表上，这个库的客户表一行不动。

@@ -228,6 +228,29 @@ $env:PGPASSWORD='postgres'
 4. 报告文件名带 commit（`report_YYYYMMDD_HHMM_<commit7>.json`），`report_eval.json` 只是最新副本。
    两份报告要可比，必须 `model` / `commit` / `code_hash` / `cases_hash` 四根轴全同；四轴校验没过的报告现在直接不落盘。
 
+### 源端判据与换源验收（S1–S5）
+
+数据治理那条线不碰 `BEHAVIOR_FILES`：改它不动 `code_hash`、不用付 373 秒全量。判据分两层——**结构面** S1 漂移 / S2 未消费（黄）/ S3 破坏 / S4 未声明改名，**值域面** S5 量纲与格式；另有口径登记 A/B/C（未登记直接拒跑，`PolicyNotRegistered`）。三档处置：**红 exit 1 / 拒跑 exit 3 / 黄 exit 0**。
+
+验的不是"判据能不能跑"，是"换一家客户时哪几处会跪"。第二家客户 `client_mes` 已独立登记（走 A，`client_a` 的两份样本未动）：
+
+```powershell
+# 换源验收全流程：干净态基线 + 九条反例 + 旧客户回归，自带造景与清理，可连跑
+venv\Scripts\python.exe -X utf8 scripts\verify_switch.py
+
+# 只看干净态（不造景）
+venv\Scripts\python.exe -X utf8 scripts\check_source_schema.py --client=client_mes --dsn=postgresql://postgres:postgres@localhost:5432/fde_client
+venv\Scripts\python.exe -X utf8 scripts\check_source_values.py  --client=client_mes --dsn=postgresql://postgres:postgres@localhost:5432/fde_client
+
+# 旧客户回归：不带参数即走 client_a 的 CSV 样本
+venv\Scripts\python.exe -X utf8 scripts\check_source_schema.py
+venv\Scripts\python.exe -X utf8 scripts\check_source_values.py
+```
+
+判据：`verify_switch.py` 末尾必须是 `RESULT: ALL PASS` 且退出码 0；两个单独脚本 exit 3 = 拒跑（**这不是失败，是设计**）。`--keep` 保留 `probe` schema 与临时登记供排查。
+
+九个缺口（含最像假绿的那条：`limit 200` 不带 `ORDER BY` 跳过脏行）与全部档位在 `docs/20261126_13_换源验收.md`（`DOC-55`）。
+
 ## 目录
 
 ```
@@ -243,7 +266,8 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
-             00_文档索引.md 是全部 36 篇的状态表：哪篇能引用、哪篇只是历史，先看它
+             数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）
+             00_文档索引.md 是全部 56 篇（`DOC-01`–`DOC-55` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

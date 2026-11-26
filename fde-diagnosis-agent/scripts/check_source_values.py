@@ -11,6 +11,8 @@ S1 只看得到「列还在不在」。量纲从百分制改成小数、日期�
 用法：
     python scripts/check_source_values.py
     python scripts/check_source_values.py --table=defect_logs --source=<另一份 CSV> --limit=50
+    python scripts/check_source_values.py --client=client_mes \\
+        --dsn=postgresql://postgres:postgres@localhost:5432/fde_client
     python scripts/check_source_values.py --json=eval/source_values.json
 """
 
@@ -30,7 +32,7 @@ from app.ds import value_domain as vd    # noqa: E402
 
 
 def main(argv: list) -> int:
-    client, only_table, source, json_out = "client_a", "", "", ""
+    client, only_table, source, json_out, dsn = "client_a", "", "", "", ""
     limit = vd.DEFAULT_LIMIT
     for a in argv:
         if a.startswith("--client="):
@@ -43,6 +45,8 @@ def main(argv: list) -> int:
             limit = int(a.split("=", 1)[1])
         elif a.startswith("--json="):
             json_out = a.split("=", 1)[1]
+        elif a.startswith("--dsn="):
+            dsn = a.split("=", 1)[1]
 
     reg_dir = ss.REGISTRY_DIR
     tables = sorted(p.stem[len(client) + 1:] for p in reg_dir.glob(f"{client}_*.json"))
@@ -51,7 +55,7 @@ def main(argv: list) -> int:
 
     results, worst = [], 0
     for t in tables:
-        r = vd.analyze(client, t, source or None, limit)
+        r = vd.analyze(client, t, source or None, limit, dsn or None)
         results.append(r)
         worst = max(worst, r["exit"])
         tag = {3: "FAIL-拒跑", 1: "FAIL", 0: "ok" if not r["findings"] else "warn"}[r["exit"]]

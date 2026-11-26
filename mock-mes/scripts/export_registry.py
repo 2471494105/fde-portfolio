@@ -80,7 +80,15 @@ def build(rows: list[dict], table: str) -> dict:
         "source_path": "postgresql://localhost:5432/fde_client (public.%s)" % table,
         "key_columns": keys,
         "renames": {},
-        "columns": [{"name": r["column_name"]} for r in rows],
+        # 登记要给判据的不只是列名：类型和必填是 information_schema 本来就给得出的，
+        # 只写名字等于把这两维主动退化成"未观测"——S1 会一直报"类型未观测 8 列"，
+        # 而真正改成 text->integer 的那一天，它也只会继续报"未观测"。
+        "columns": [
+            {"name": r["column_name"],
+             "type": r["data_type"],
+             "required": (not bool(r["is_nullable"])) if r["is_nullable"] is not None else None}
+            for r in rows
+        ],
         "limits": (
             "库元数据给出类型与必填（is_nullable），列集合可信、空列也可见；"
             "值域取 gov.field_registry 的 domain 声明，未声明的不参与判定。"

@@ -1,0 +1,54 @@
+{
+  "name": "客户 MES · fde_client 直连",
+  "note": "换客户的第二份映射：源是库不是 CSV，所以 from 指的还是列名，但类型/格式由源端登记给，这里只管「我们消费哪几列」。",
+  "tables": {
+    "md_device": {
+      "source": "postgresql://localhost:5432/fde_client (public.md_device)",
+      "fields": {
+        "device_id": {"from": "equip_no"},
+        "line": {"from": "prod_line"},
+        "station": {"from": "work_station"},
+        "camera_model": {"from": "cam_model"},
+        "light_model": {"from": "lamp_type"},
+        "install_date": {"from": "install_dt", "type": "date", "format": "%Y-%m-%d"},
+        "maintenance_cycle_days": {"from": "maint_cycle", "type": "int"}
+      },
+      "ignored": {
+        "lens_spec": "镜头型号目前不进我方事实层：选型归工艺，判据不用它；S2 报出来是提醒，不是缺陷"
+      }
+    },
+    "biz_defect_record": {
+      "source": "postgresql://localhost:5432/fde_client (public.biz_defect_record)",
+      "fields": {
+        "id": {"from": "rec_id", "type": "int"},
+        "ts": {"from": "captured_at", "type": "timestamp", "format": "%Y-%m-%d %H:%M:%S"},
+        "device_id": {"from": "equip_no"},
+        "defect_type": {"from": "defect_name"},
+        "confidence": {"from": "conf_pct", "type": "real", "scale": 1.0},
+        "batch": {"from": "lot_no", "default": ""},
+        "verdict": {"from": "judge"},
+        "is_actually_ok": {"from": "is_ok", "type": "bool"}
+      },
+      "ignored": {
+        "work_station": "业务表这一列是「2号工位」写法，与字典 md_station.station_no（产线A-01）不是一套；消费它会把两种口径混进同一列，先不消费，等口径定案"
+      }
+    },
+    "biz_work_order": {
+      "source": "postgresql://localhost:5432/fde_client (public.biz_work_order)",
+      "fields": {
+        "wo_no": {"from": "wo_no"},
+        "station": {"from": "station_no"},
+        "device_id": {"from": "equip_no"},
+        "opened_at": {"from": "opened_at", "type": "timestamp", "format": "%Y-%m-%d %H:%M:%S"},
+        "closed_at": {"from": "closed_at", "type": "timestamp", "format": "%Y-%m-%d %H:%M:%S"},
+        "state": {"from": "state"},
+        "board_stage": {"from": "stage_id"},
+        "priority": {"from": "priority", "type": "int"},
+        "team": {"from": "maintenance_team_id"}
+      },
+      "ignored": {
+        "note": "全空列；客户现场也没人填，先不接"
+      }
+    }
+  }
+}

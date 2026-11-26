@@ -8,6 +8,11 @@ S1 看的是「列还在不在」，看不见这些：
 
 这一层靠**样本值**判，不靠声明。声明（`domains`）写在源端登记里，和列名同一份文件。
 
+样本从哪来：CSV 表头派（`csv.DictReader` 前 N 行）或库直连派（`information_schema` 定列，
+`select ... limit N` 取值）。两派的差别不在判据，在"值的原文长什么样"——库里的是
+`date`/`timestamptz` 对象，CSV 里的是文本，所以取值时要按声明的 format 归一，
+否则同一列在两条路上会得出两种结论。
+
 分三档，理由不同：
   breaking  量纲跳变 / 全部不可解析 —— 基准变了，符号乘错就是「所有结论反向」，拒跑
   red       超范围 / 部分不可解析 —— 可能是新数据边界，先看，人来决定
@@ -17,7 +22,7 @@ S1 看的是「列还在不在」，看不见这些：
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +50,42 @@ def observe_values(path, limit: int | None = DEFAULT_LIMIT) -> tuple[list, int]:
     return rows, len(rows)
 
 
+def _text(v, dom: dict) -> str:
+    """把库里取出来的值统一成"跟 CSV 里那串字一样"的文本。
+
+    库给的是对象：`date(2023,1,5)`、`datetime(..., tzinfo=+08:00)`、`Decimal`。
+    直接 str() 会得到 `2026-11-01 08:00:00+08:00`，按声明 `%Y-%m-%d %H:%M:%S` 判就全错。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime(dom.get("format") or "%Y-%m-%d %H:%M:%S")
+    if isinstance(v, date):
+        return v.isoformat()
+    return str(v).strip()
+
+
+def observe_values_db(dsn: str, schema: str, table: str,
+                      limit: int | None = DEFAULT_LIMIT,
+                      order_by: str | None = None) -> tuple[list, int]:
+    """库直连取样本。列取全，行取前 N 行——和 CSV 那条路同样只是"抽查"。
+
+    **必须带 order by**：不带 ORDER BY 的 `limit 200` 拿到的是哪 200 行由执行计划决定，
+    实测直接跳过了 rec_id 5/6 那两条越界值——判据报 ok，脏数据在库里躺着。
+    按登记的主键排序取前 N 行，抽查的边界才是可复述的（"前 200 行"而不是"随便 200 行"）。
+    """
+    import psycopg
+    from psycopg.rows import dict_row
+
+    sql = 'select * from "%s"."%s"%s limit %d' % (
+        schema, table,
+        (' order by "%s"' % order_by) if order_by else "",
+        int(limit or DEFAULT_LIMIT))
+    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+        rows = conn.execute(sql).fetchall()
+    return [dict(r) for r in rows], len(rows)
+
+
 def _num(v):
     try:
         return float(str(v).strip())
@@ -62,7 +103,9 @@ def check_range(col: str, values: list, dom: dict) -> list:
     if not dom.get("range"):
         return []
     lo, hi = dom["range"]
-    sev = dom.get("range_severity", RED)
+    # 登记导出写的是 spec.severity（一个统一的档位字段），不是 range_severity。
+    # 只读后一个等于把"声明改成黄"这件事吞掉，所有越界都按红报——口径由登记决定，不能由键名决定。
+    sev = dom.get("severity") or dom.get("range_severity") or RED
     filled = [v for v in values if str(v).strip() != ""]
     if not filled:
         return []
@@ -157,19 +200,40 @@ def check_empty(col: str, values: list, dom: dict) -> list:
                      f"空值 {empty}/{len(values)}（声明不允许空）", [])]
 
 
-def analyze(client: str, table: str, path=None, limit: int | None = DEFAULT_LIMIT) -> dict:
+def analyze(client: str, table: str, path=None, limit: int | None = DEFAULT_LIMIT,
+            dsn: str | None = None) -> dict:
     from app.ds import source_schema as ss
 
     reg = ss.load(client, table)
     doms = load_domains(reg)
-    src = Path(path) if path else ss.ROOT / reg["source_path"]
-    rows, scanned = observe_values(src, limit)
+    via = reg.get("observed_via") or "csv_header"
+
+    if path:
+        # 显式 --source 优先：故障注入用的探针文件都走这条路
+        src = Path(path)
+        rows, scanned = observe_values(src, limit)
+    elif via in ("db", "db_metadata", "odoo", "api"):
+        if not dsn:
+            raise RuntimeError(
+                f"{client}/{table} 登记的是 {via}，取值要给 --dsn（或环境变量 FDE_CLIENT_DSN）"
+            )
+        import re
+        raw = reg["source_path"]
+        m = re.search(r"\(([^)]+)\)", raw)
+        target = m.group(1).strip() if m else raw
+        schema, table_name = (target.split(".", 1) if "." in target else ("public", target))
+        src = Path(f"{via}:{dsn.split('@')[-1].split('/')[-1]}/{schema}.{table_name}")
+        key = (reg.get("key_columns") or [None])[0]
+        rows, scanned = observe_values_db(dsn, schema, table_name, limit, order_by=key)
+    else:
+        src = ss.ROOT / reg["source_path"]
+        rows, scanned = observe_values(src, limit)
     findings = []
     for col, dom in doms.items():
         if col not in (rows[0] if rows else {}):
             findings.append(_finding(col, "missing", RED, "样本里没有这一列", []))
             continue
-        values = [r.get(col, "") for r in rows]
+        values = [_text(r.get(col), dom) for r in rows]
         findings += check_range(col, values, dom)
         findings += check_enum(col, values, dom)
         findings += check_format(col, values, dom)

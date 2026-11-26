@@ -254,22 +254,25 @@ venv\Scripts\python.exe -X utf8 scripts\check_source_values.py
 再往后是**换客户时真正会出事的那一层：折法**。`closed_states` 只说了「哪些词算闭环」，没说「折成我方哪一态」——折法缺了，保护集（有未闭环单、不许删的设备）会静默失真，而且不报错。`client_b_odoo` 已登记：闭环 `done`/`cancel`、五条 `vocab_fold`、缺口 `已合并` 显式认领、`work_order_state_stage_conflict` 声明不适用（Odoo 的 `stage_id` 是看板列，不是终态）。
 
 「声明不适用」本身也要能证伪：`unsupported_checks` 现在是 `{check_id: 理由}`，判据 id 登记在顶层 `checks` 里（what / reads / 落点 / 外部对照），跑判据只走 `app/ds/checks.py::run_check` ——它先过 `check_applies()`，声明不适用的直接返回 `not_applicable` 且不读数据，返回值里的 `ran` 是「实现有没有被调用」的诚实信号。`client_b` 声明了看板判据不适用后，仍有一条 `status_vocabulary_coverage`（只管「这个词我认识吗」）在跑，避免「声明把整家客户的判据关空」。
+但这套东西的完备性架在三个隐含前提上，每一个都能单独塌。**入口**：E 只看得见走 `run_check` 的调用，有人直接 `import` 实现就绕过 `check_applies()` —— 所以 `bypass_problems(root)` 用 AST 扫全仓库，报 `from app.ds.checks import <实现名>` / 直接调用实现名 / 访问 `_RUNNERS`，解析失败的 `.py` 也报（扫不了不等于没绕过）。**词表归属**：看板关闭词属于客户的看板列，不属于判据 —— `client_a.stage_board_closed` 按客户登记，缺词抛 `CheckNotConfigured`（空词表会让 `stage not in []` 恒真，判出一批假红）。**字段面**：`state` 由 `vocab_fold` 管、`stage_id` 由判据词表管，剩下的 `priority` / `maintenance_team_id` 没人管就会按字面比 —— 数字比数字永远「能跑」，只是判错。按一手样本（`07_外部样本/odoo-maintenance-model.py` 第 291/307 行）分别处理：`priority` 四档同构做恒等折法（不声称标签语义等价），`maintenance_team_id` 是 `Many2one` 的整数 id、我方是文本 `TEAM-n`，没有对方团队字典就映射不了 → 进 `unsupported_columns` 并写理由。
+判据从 A–E 扩到 **A–G**：F 扫入口绕过，G 查 `judged_fields`（未覆盖 / 空折法 / 声明无理由 / 折法键不在表里）。证据在 `docs/20261126_17_判据的边界.md`（`DOC-59`）；`DOC-58` 的第 1、3 条未决到此解掉，第 2、4 条仍在。
 
 ```powershell
 # 折法验收：同一批 60 张工单换成 Odoo 词表，两侧保护集必须完全相同；再故意折错，看结论会不会按预期变
 venv\Scripts\python.exe -X utf8 scripts\verify_k5_fold.py
 
-# 不适用声明是否可证伪：A 适用真跑 19 条红 / B 声明后 ran=False / 去掉声明立刻红 19 条 / 假入口被捕
+# 不适用声明 + 入口绕过 + 词表归属 + 字段面：19 条红 / ran=False / 假入口被抓 / 换词表 19→15 / 折法覆盖真库
 venv\Scripts\python.exe -X utf8 scripts\verify_unsupported.py
 
-# 五条口径判据（A/B/C/D/E）；换客户时把观测面一起换过去，否则查的是自己家的库
+# 七条口径判据（A 索引 / B 未登记词 / C 拒跑 / D 折法 / E 不适用声明 / F 入口绕过 / G 字段面）；
+# 换客户时把观测面一起换过去，否则查的是自己家的库
 venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py
 venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py --dsn=postgresql://postgres:postgres@localhost:5432/fde_client --table=probe.wo_b
 ```
 
 `verify_k5_fold.py` 判据：末尾 `RESULT: ALL PASS` 且 exit 0，跑完 `probe` schema 必须已清。反例是**成对**的：只认 `cancel`（漏折 `done`）保护集 24 → 33 台，只认 `done`（漏折 `cancel`）24 → 41 台——两个方向多出来的不是同一批设备。实测与代价在 `docs/20261126_15_换客户折法验收.md`（`DOC-57`）。
 
-`verify_unsupported.py` 判据同样是 `RESULT: ALL PASS`。它的三条硬证据：同一批 60 行，`client_a` 适用 → `ran=True`、红 19 条；`client_b` 声明不适用 → `ran=False`、`checked=0`；**只把声明去掉 → 立刻红 19 条**（「不适用」挡的就是每天 19 条假红）。代价与未决在 `docs/20261126_16_不适用声明要能证伪.md`（`DOC-58`）。
+`verify_unsupported.py` 判据同样是 `RESULT: ALL PASS`。三条硬证据：同一批 60 行，`client_a` 适用 → `ran=True`、红 19 条；`client_b` 声明不适用 → `ran=False`、`checked=0`；**只把声明去掉 → 立刻红 19 条**（「不适用」挡的就是每天 19 条假红）。再往后四组：真仓库入口绕过 0 命中、走 `run_check` 不误报、影子文件 `rogue.py` 被抓 2 条；看板词改成 `["进行中"]` 红 19→15、清空抛错；字段面撤掉两条声明各报一条、真库 `distinct` 与折法键集合相等。代价与未决见 `docs/20261126_16_不适用声明要能证伪.md`（`DOC-58`）与 `docs/20261126_17_判据的边界.md`（`DOC-59`）。
 
 ## 目录
 
@@ -287,8 +290,9 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
              数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）、
-             量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）、不适用声明要能证伪（DOC-58）
-             00_文档索引.md 是全部 59 篇（`DOC-01`–`DOC-58` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）、不适用声明要能证伪（DOC-58）、
+             判据的边界：入口/词表归属/字段面（DOC-59）
+             00_文档索引.md 是全部 60 篇（`DOC-01`–`DOC-59` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

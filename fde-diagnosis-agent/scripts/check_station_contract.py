@@ -177,6 +177,8 @@ def main(argv: list) -> int:
         details = {
             "red_metric": "violating_rows",
             "rows": {c["id"]: c["violations"] for c in summary.get("contracts") or []},
+            # 行编号单独存：中控台要靠它比「哪几行新增、哪几行消失」，只存条数比不出来
+            "ids": [f"{c['id']}#{k}" for c in summary.get("contracts") or [] for k in (c.get("keys") or [])],
             "gaps": {g["id"]: g["state"] for g in summary.get("gaps") or []},
             "today_override": today.isoformat() if today != date.today() else None,
         }

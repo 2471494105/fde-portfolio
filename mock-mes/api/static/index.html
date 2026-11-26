@@ -33,6 +33,13 @@
   }
   nav button:hover{background:#eceef1}
   nav button.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
+  nav a.navlink{
+    text-align:left;border-radius:var(--r);padding:8px 10px;font:inherit;text-decoration:none;
+    color:var(--ink-2);display:flex;justify-content:space-between;align-items:center;margin-top:6px;
+    border-top:1px dashed var(--line);padding-top:12px;
+  }
+  nav a.navlink:hover{background:#eceef1;color:var(--brand)}
+  nav a.navlink .num{color:var(--brand-2)}
   nav .num{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
   nav button.on .num{color:var(--brand-2)}
   .side-foot{margin-top:auto;padding:12px 16px;border-top:1px solid var(--line);
@@ -120,6 +127,8 @@
     <button data-view="work_orders">维修工单<span class="num" id="num-work_orders">·</span></button>
     <button data-view="remediation_orders">数据整改单<span class="num" id="num-remediation_orders">·</span></button>
     <button data-view="check_runs">判据运行<span class="num" id="num-check_runs">·</span></button>
+    <!-- 中控台是同一进程里的第二张皮：深色大屏，读的是事件表，不另起服务 -->
+    <a class="navlink" href="/app/console.html">数据中控台<span class="num">深色 ↗</span></a>
   </nav>
   <div class="side-foot">
     账号 ro_reader<br>

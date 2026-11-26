@@ -196,6 +196,7 @@ def audit(registry: dict, tables: dict[str, list[dict]], master_rows: list[dict]
                 "total": len(rows),
                 "violations": len(bad),
                 "samples": [b["key"] for b in bad[:5]],
+                "keys": [str(b["key"]) for b in bad],
                 "reasons": _reason_counts(bad),
                 "owner": c.get("owner"),
                 "due": c.get("due"),

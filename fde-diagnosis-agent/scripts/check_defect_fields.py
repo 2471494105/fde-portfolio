@@ -147,6 +147,8 @@ def main(argv: list[str]) -> int:
             "rows": {k: len(v.get("ids") or []) for k, v in results.items()},
             "now_override": now if any(a.startswith("--now=") for a in argv) else None,
             "table": table,
+            # 行编号入库：中控台按编号比集合，才能说出「新增 1 行、消失 3 行」
+            "ids": summary["red_ids"],
         }
         try:
             run_id = runlog.record(

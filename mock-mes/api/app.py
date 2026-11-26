@@ -39,10 +39,12 @@ TABLES = {
         ("rm_no", "contract_id", "table_name", "field_name", "owner", "state"),
     ),
     "check_runs": ("gov_check_run", "ran_at", ("check_id", "status", "dataset")),
+    # 中控台读的是事件，不是原始判据输出：页面不重算判据，避免出现第二套口径
+    "alerts": ("gov_alert", "last_seen", ("title", "check_id", "state", "owner", "severity", "kind")),
 }
 
 # 台账类视图按时间倒序：翻到第一页就是最近的运行，而不是最老的
-DESC = {"check_runs"}
+DESC = {"check_runs", "alerts"}
 
 app = FastAPI(title="Mock MES Read API", version="3.0", description="第三条取数路：分页接口 + 客户端 + 观测")
 
@@ -169,3 +171,11 @@ def list_rows(
 
 STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/app", StaticFiles(directory=str(STATIC), html=True), name="app")
+
+
+@app.get("/console", include_in_schema=False)
+def console():
+    """中控台与作业页同一个进程、同一个端口、同一套只读账号：不另开服务。"""
+    from fastapi.responses import FileResponse
+
+    return FileResponse(STATIC / "console.html")

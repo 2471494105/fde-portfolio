@@ -339,6 +339,32 @@ cd ..\mock-mes; python -X utf8 scripts\verify_obs.py
 
 顺手查出验收脚本自己的一个 bug：`verify_ui.py` 的 `text()` 用非贪婪正则取 `id="kpi"` 的内容，遇到内层 `<b>…</b>` 就在第一个 `</b>` 前停住——之前所有 KPI 断言比的都是被截断的字符串（只判空，所以没造成假绿）。改成取整个 `<span id="kpi">` 段再匹配。证据在 `docs/20261126_21_可观测性.md`（`DOC-63`），未做的四条风险（4xx 未拆路径、24 h 阈值是拍的、指标只在内存、无告警通道）也写在那里。
 
+### 中控台与推送（T23）
+
+可观测性回答「判据跑没跑」，回答不了客户的下一句：「那谁来做、做到什么算完？」判据红了只是屏幕上的十几行字，整改单要人手工开——**系统很诚实，但没人在听**。
+
+T23 把「红」变成一条**事件**：表 `gov_alert`（`mock-mes/sql/014_alerts.sql`）用 `dedup_key` 做身份、`seen_count` 数「存在几轮」、三态 `open/acked/closed`，唯一索引 `where state <> 'closed'` 让「复发」也可数。判定规则在 `app/ds/alerts.py`（纯函数，不连库）：
+
+- **同一批红再跑一次不推**——只有「从绿转红」或「红行出现新编号」才叫醒人，其余只涨 `seen_count`；
+- **变绿只写「复跑归零」，不写「已修复」**——修没修好由复跑证明；
+- **判据静默单独一类**——它红的是「没人看」，不是数据；
+- 行级按**编号比集合**，老台账只有条数时标 `baseline`，不假装「新增 0」。
+
+页面是同一进程里的第二张皮（深色，`/console` 与 `/v1/alerts` 都在 8021，不另开服务），**只读、不给关闭按钮**：按钮会把「关掉」与「修好」变成同一个动作。推送顺序是 `判据 → 台账 → 事件 → 通道`：默认只落投递箱，`--webhook` 才外发，**外发失败写进 `detail.delivery` 且不当作已推**。
+
+```powershell
+# 扫最近两次运行 → 开/关事件（有新增 exit 1，没事 exit 0）
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --list
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --ack=1 --by=张工
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --close=1 --reason="复跑归零，2026-12-01 验收"
+
+# 验收：事件状态机 A1–A7
+venv\Scripts\python.exe -X utf8 scripts\verify_alerts.py
+```
+
+实测：2 条活事件（工位归属 362 行 / 缺陷字段 5 行），各 6 轮仍红；页面环形 362 / 5 / 0（98.6% 集中在工位归属）。`verify_alerts.py` A1–A7 全 `[ok]`，`mock-mes/scripts/verify_console.py` C1–C9 ALL PASS（无外网资源、五个数字与接口逐项相等、趋势恰三条），单测 18 条、全量 594。证据与「没做什么」（无值班表、阈值是拍的、无实时推送）在 `docs/20261126_23_中控台与推送.md`（`DOC-65`）。
+
 ## 目录
 
 ```

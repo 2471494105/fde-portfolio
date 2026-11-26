@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>质量管理后端 · fde_client</title>
+<style>
+  :root{
+    --ink:#1c2430; --ink-2:#5b6675; --ink-3:#8a94a3;
+    --line:#e5e8ec; --line-2:#eef0f3;
+    --bg:#ffffff; --bg-side:#f5f6f8; --bg-head:#fafbfc;
+    --brand:#12426e; --brand-2:#1b5c94; --brand-soft:#e8f0f8;
+    --red:#b3261e; --red-bg:#fdecea;
+    --amber:#8a5300; --amber-bg:#fdf3e3;
+    --gray:#5b6675; --gray-bg:#f1f3f5;
+    --row:36px; --r:6px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    display:flex; background:var(--bg); color:var(--ink);
+    font:13px/1.45 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  aside{width:212px;flex:0 0 212px;background:var(--bg-side);border-right:1px solid var(--line);
+        display:flex;flex-direction:column}
+  .brand{padding:16px 16px 12px;font-size:15px;font-weight:600;letter-spacing:.2px}
+  .brand span{display:block;font-size:11px;font-weight:400;color:var(--ink-3);margin-top:2px;letter-spacing:0}
+  nav{padding:6px 10px;display:flex;flex-direction:column;gap:2px}
+  nav button{
+    text-align:left;background:none;border:0;border-radius:var(--r);padding:8px 10px;font:inherit;
+    color:var(--ink-2);cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+  }
+  nav button:hover{background:#eceef1}
+  nav button.on{background:var(--brand-soft);color:var(--brand);font-weight:600}
+  nav .num{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+  nav button.on .num{color:var(--brand-2)}
+  .side-foot{margin-top:auto;padding:12px 16px;border-top:1px solid var(--line);
+             font-size:11px;color:var(--ink-3);line-height:1.7}
+  main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .top{display:flex;align-items:flex-end;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--line)}
+  .top h1{margin:0;font-size:17px;font-weight:600}
+  .top .sub{color:var(--ink-3);font-size:12px;padding-bottom:1px}
+  .top .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .pill{background:var(--brand-soft);color:var(--brand);border-radius:999px;padding:3px 9px;font-size:11px}
+  .count{font-variant-numeric:tabular-nums;color:var(--ink-2)}
+  .count b{color:var(--ink);font-size:14px;font-weight:600}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+  .search{position:relative}
+  .search input{
+    width:232px;height:30px;border:1px solid var(--line);border-radius:var(--r);
+    padding:0 30px 0 10px;font:inherit;color:var(--ink);outline:none;background:#fff;
+  }
+  .search input:focus{border-color:var(--brand-2);box-shadow:0 0 0 3px rgba(27,92,148,.12)}
+  .search .clr{position:absolute;right:6px;top:5px;border:0;background:none;color:var(--ink-3);cursor:pointer;font-size:14px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:999px;padding:3px 10px;
+       font-size:11px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+  .kpi b{color:var(--red)}
+  .kpi.amber b{color:var(--amber)}
+  .legend{margin-left:auto;display:flex;gap:10px;align-items:center;font-size:11px;color:var(--ink-3)}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .legend .r{background:var(--red-bg);outline:1px solid #f3c3be}
+  .legend .a{background:var(--amber-bg);outline:1px solid #efd8b0}
+  .legend .g{background:var(--gray-bg);outline:1px solid #dfe3e8}
+  .banner{display:none;margin:10px 20px 0;background:var(--red-bg);color:var(--red);
+          border:1px solid #f3c3be;border-radius:var(--r);padding:8px 12px;font-size:12px}
+  .banner.show{display:block}
+  .tablewrap{flex:1;overflow:auto;padding:0 20px}
+  table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed}
+  thead th{
+    position:sticky;top:0;z-index:2;background:var(--bg-head);border-bottom:1px solid var(--line);
+    text-align:left;font-weight:600;color:var(--ink-2);height:34px;padding:0 10px;white-space:nowrap;
+    font-size:12px;
+  }
+  tbody td{height:var(--row);border-bottom:1px solid var(--line-2);padding:0 10px;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+           font-variant-numeric:tabular-nums}
+  tbody tr:hover td{background:#fbfcfd}
+  tbody td.cell-time{font-size:12px;letter-spacing:-.2px}
+  .cell-null{color:var(--ink-3);font-style:italic}
+  .row-red td{background:var(--red-bg)}
+  .row-red:hover td{background:#fbe3e1}
+  .row-amber td{background:var(--amber-bg)}
+  .row-gray td{background:var(--gray-bg)}
+  .tag{display:inline-block;border-radius:4px;padding:1px 6px;font-size:11px;margin-right:4px;white-space:nowrap}
+  .tag-red{background:#f7d7d3;color:var(--red)}
+  .tag-amber{background:#f6e3c2;color:var(--amber)}
+  .tag-gray{background:#e3e6ea;color:var(--gray)}
+  footer{display:flex;align-items:center;gap:10px;padding:10px 20px;border-top:1px solid var(--line);
+         font-size:12px;color:var(--ink-2);background:#fff}
+  .pager{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .pager button{
+    height:28px;padding:0 12px;border:1px solid var(--line);background:#fff;border-radius:var(--r);
+    font:inherit;color:var(--ink);cursor:pointer
+  }
+  .pager button:hover:not(:disabled){border-color:var(--brand-2);color:var(--brand)}
+  .pager button:disabled{color:var(--ink-3);cursor:not-allowed;background:#fafbfc}
+  .pager .of{color:var(--ink-3);font-variant-numeric:tabular-nums}
+  .empty{padding:40px 10px;text-align:center;color:var(--ink-3)}
+  @media (max-width:1100px){
+    aside{width:172px;flex-basis:172px}
+    .side-foot{font-size:10px}
+    .top .sub{display:none}
+  }
+  @media (max-width:900px){
+    aside{width:168px;flex-basis:168px}
+    .search input{width:150px}
+    .legend{display:none}
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">质量管理后端<span>fde_client · 只读视图</span></div>
+  <nav id="nav">
+    <button data-view="devices">设备台账<span class="num" id="num-devices">·</span></button>
+    <button data-view="defect_records">缺陷记录<span class="num" id="num-defect_records">·</span></button>
+    <button data-view="work_orders">维修工单<span class="num" id="num-work_orders">·</span></button>
+  </nav>
+  <div class="side-foot">
+    账号 ro_reader<br>
+    数据源 postgres / fde_client<br>
+    接口 /v1/*
+  </div>
+</aside>
+
+<main>
+  <div class="top">
+    <h1 id="title">设备台账</h1>
+    <div class="sub" id="subtitle"></div>
+    <div class="right">
+      <span class="count">共 <b id="total">—</b> 条</span>
+      <span class="pill" id="src">/v1/devices</span>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search">
+      <input id="q" type="text" placeholder="搜索编号 / 名称 / 批次…" autocomplete="off">
+      <button class="clr" id="clr" title="清空">×</button>
+    </div>
+    <span class="pill" id="filterhint" style="display:none"></span>
+    <span class="kpi" id="kpi" style="display:none"></span>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+  <div class="tablewrap">
+    <table id="grid">
+      <thead><tr id="head"></tr></thead>
+      <tbody id="body"></tbody>
+    </table>
+  </div>
+
+  <footer>
+    <span id="pageinfo">—</span>
+    <div class="pager">
+      <button id="prev">上一页</button>
+      <span class="of" id="pageno">1 / 1</span>
+      <button id="next">下一页</button>
+    </div>
+  </footer>
+</main>
+<script>
+const VIEWS = {
+  devices: {
+    title: "设备台账",
+    sub: "master data · 48 台设备分布在 4 条产线 16 个工位",
+    cols: ["equip_no","prod_line","work_station","cam_model","lens_spec","lamp_type","install_dt","maint_cycle"],
+    labels: {equip_no:"设备号",prod_line:"产线",work_station:"工位",cam_model:"相机型号",
+             lens_spec:"镜头",lamp_type:"光源",install_dt:"安装日期",maint_cycle:"保养周期(天)"},
+    legend: "",
+    size: 20,
+    widths: [100, 78, 112, 196, 118, 88, 106, 100, 96],
+    flag: () => ({cls:"", tags:[]})
+  },
+  defect_records: {
+    title: "缺陷记录",
+    sub: "business data · 302 条，脏行在这里必须看得见",
+    cols: ["rec_id","captured_at","equip_no","work_station","defect_name","conf_pct","lot_no","judge","is_ok"],
+    labels: {rec_id:"编号",captured_at:"采集时间",equip_no:"设备号",work_station:"工位",
+             defect_name:"缺陷",conf_pct:"置信度",lot_no:"批次",judge:"判定",is_ok:"结果"},
+    legend: '<span><i class="r"></i>置信度越界</span><span><i class="a"></i>未来时间</span><span><i class="g"></i>空批次</span>',
+    size: 20,
+    widths: [76, 176, 96, 96, 132, 82, 112, 88, 70, 112],
+    flag: (r) => {
+      const tags = []; let cls = "";
+      if (r.conf_pct !== null && (Number(r.conf_pct) > 100 || Number(r.conf_pct) < 0)) {
+        tags.push(["超范围", "tag-red"]); cls = "row-red";
+      }
+      if (r.captured_at && r.captured_at > nowText()) {
+        tags.push(["未来时间", "tag-amber"]); if (cls !== "row-red") cls = "row-amber";
+      }
+      if (r.lot_no === null || r.lot_no === "") {
+        tags.push([r.lot_no === null ? "批次 NULL" : "批次空串", "tag-gray"]); if (!cls) cls = "row-gray";
+      }
+      return {cls, tags};
+    }
+  },
+  work_orders: {
+    title: "维修工单",
+    sub: "business data · 60 张，state 与 stage_id 两套状态会打架",
+    cols: ["wo_no","station_no","equip_no","opened_at","closed_at","state","stage_id","priority","maintenance_team_id"],
+    labels: {wo_no:"工单号",station_no:"工位",equip_no:"设备号",opened_at:"开单",closed_at:"关单",
+             state:"业务状态",stage_id:"看板阶段",priority:"优先级",maintenance_team_id:"班组",note:"备注"},
+    legend: '<span><i class="r"></i>关单了看板没关</span><span><i class="a"></i>看板关了没关单</span>',
+    size: 20,
+    widths: [128, 78, 90, 172, 172, 74, 74, 60, 72, 118],
+    flag: (r) => {
+      // 两套状态并存，谁也不是权威，只能判"事实与状态对不上"，两个方向分开报：
+      // 红 = 业务说关单了（已完成）但看板还挂在别处；橙 = 看板已关闭却没有关单时间。
+      if (r.state === "已完成" && r.stage_id !== "已关闭") {
+        return {cls:"row-red", tags:[["关单未关板","tag-red"]]};
+      }
+      if (r.stage_id === "已关闭" && !r.closed_at) {
+        return {cls:"row-amber", tags:[["关板未关单","tag-amber"]]};
+      }
+      return {cls:"", tags:[]};
+    }
+  }
+};
+
+function viewFromHash(){
+  const h = (location.hash || "").replace("#", "");
+  return VIEWS[h] ? h : "devices";
+}
+
+// ?page= 与 # 一起支持深链：翻页、定位都能直接用 URL 复述
+const qs0 = new URLSearchParams(location.search);
+const TIME_COLS = new Set(["captured_at", "opened_at", "closed_at", "install_dt"]);
+let cur = viewFromHash(), page = Math.max(1, parseInt(qs0.get("page") || "1", 10) || 1), q = qs0.get("q") || "";
+
+function $(id){ return document.getElementById(id); }
+
+function nowText(){
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate()) + " " +
+         p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
+async function api(view){
+  const url = "/v1/" + view + "?page=" + page + "&size=" + VIEWS[view].size +
+              "&q=" + encodeURIComponent(q);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+function cell(v){
+  if (v === null) return '<span class="cell-null">NULL</span>';
+  if (v === "") return '<span class="cell-null">（空串）</span>';
+  return String(v).replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+}
+
+function renderHead(view){
+  const v = VIEWS[view];
+  const ws = v.widths;
+  $("grid").innerHTML =
+    "<colgroup>" + ws.map((w) => '<col style="width:' + w + 'px">').join("") + "</colgroup>" +
+    '<thead><tr id="head">' +
+    v.cols.map((c) => "<th>" + (v.labels[c] || c) + "</th>").join("") +
+    "<th>标记</th></tr></thead>" +
+    '<tbody id="body"></tbody>';
+  $("grid").style.minWidth = ws.reduce((a, b) => a + b, 0) + "px";
+}
+
+async function load(){
+  const v = VIEWS[cur];
+  $("banner").className = "banner";
+  $("title").textContent = v.title;
+  $("subtitle").textContent = v.sub;
+  $("src").textContent = "/v1/" + cur;
+  $("legend").innerHTML = v.legend;
+  renderHead(cur);
+
+  let data;
+  try { data = await api(cur); }
+  catch (e) {
+    $("banner").className = "banner show";
+    $("banner").textContent = "读不到接口（" + e.message + "）。先运行 api\\run.ps1，"
+      + "再用 http://127.0.0.1:8021/app 打开，不要双击文件。";
+    $("body").innerHTML = '<tr><td colspan="' + (v.cols.length+1) +
+      '"><div class="empty">没有数据</div></td></tr>';
+    return;
+  }
+
+  $("total").textContent = data.total;
+  const pages = Math.max(1, Math.ceil(data.total / v.size));
+  $("pageno").textContent = page + " / " + pages;
+  $("prev").disabled = page <= 1;
+  $("next").disabled = page >= pages;
+  $("filterhint").style.display = q ? "" : "none";
+  $("filterhint").textContent = q ? "过滤：" + q : "";
+  $("pageinfo").textContent = data.items.length
+    ? "第 " + ((page-1)*v.size+1) + "–" + ((page-1)*v.size+data.items.length) +
+      " 条 / 共 " + data.total + " 条"
+    : "0 条";
+
+  const rows = data.items.map((r) => {
+    const f = v.flag(r);
+    const tds = v.cols.map((c) => "<td" + (TIME_COLS.has(c) ? ' class="cell-time"' : "") +
+      ">" + cell(r[c]) + "</td>").join("");
+    const tags = f.tags.map((t) => '<span class="tag ' + t[1] + '">' + t[0] + "</span>").join("");
+    return '<tr class="' + f.cls + '">' + tds + "<td>" + tags + "</td></tr>";
+  });
+  $("body").innerHTML = rows.length ? rows.join("")
+    : '<tr><td colspan="' + (v.cols.length+1) + '"><div class="empty">没有匹配的记录</div></td></tr>';
+
+  document.querySelectorAll("#nav button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.view === cur));
+  refreshKpi();
+}
+
+async function refreshKpi(){
+  const el = $("kpi");
+  if (cur !== "work_orders") { el.style.display = "none"; return; }
+  try {
+    const d = await fetch("/v1/work_orders?size=500").then((r) => r.json());
+    let red = 0, amber = 0;
+    d.items.forEach((r) => {
+      if (r.state === "已完成" && r.stage_id !== "已关闭") red++;
+      else if (r.stage_id === "已关闭" && !r.closed_at) amber++;
+    });
+    el.style.display = "";
+    el.className = red ? "kpi" : "kpi amber";
+    el.innerHTML = "两套状态对不上 <b>" + (red + amber) + "</b> / " + d.total +
+                   "（红 " + red + " · 橙 " + amber + "）";
+  } catch (e) { el.style.display = "none"; }
+}
+
+async function countAll(){
+  for (const view of Object.keys(VIEWS)) {
+    try {
+      const d = await fetch("/v1/" + view + "?size=1").then((r) => r.json());
+      $("num-" + view).textContent = d.total;
+    } catch (e) { $("num-" + view).textContent = "—"; }
+  }
+}
+
+document.getElementById("nav").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-view]");
+  if (!b) return;
+  cur = b.dataset.view; page = 1; q = ""; $("q").value = "";
+  history.replaceState(null, "", "#" + cur);
+  load();
+});
+$("prev").onclick = () => { if (page > 1) { page--; load(); } };
+$("next").onclick = () => { page++; load(); };
+let tmr = null;
+$("q").oninput = () => {
+  clearTimeout(tmr);
+  tmr = setTimeout(() => { q = $("q").value.trim(); page = 1; load(); }, 260);
+};
+$("clr").onclick = () => { $("q").value = ""; q = ""; page = 1; load(); };
+
+window.addEventListener("hashchange", () => {
+  const v = viewFromHash();
+  if (v !== cur) { cur = v; page = 1; q = ""; $("q").value = ""; load(); }
+});
+
+if (q) $("q").value = q;
+countAll();
+load();
+</script>
+</body>
+</html>

@@ -296,6 +296,27 @@ venv\Scripts\python.exe -X utf8 scripts\verify_station_governance.py            
 
 证据与拒绝掉的那条路在 `docs/20261126_20_不兜底.md`（`DOC-62`）。
 
+### 判据自己有没有在工作（可观测性）
+
+前四层都在判数据，没有一层判**判据**。判据要靠人开终端，今天跑了不等于明天跑；结果停在 stdout，362 行有没有变化要靠记忆；库里的数据新不新，没有任何一页能答。这一层补的是证据，不是再加一条判据。
+
+`mock-mes/sql/013_observability.sql` 建 `gov_check_run`（`check_id / ran_at / duration_ms / status ∈ ok|warn|fail|error / red_count / dataset / code_hash / details`），`app/ds/runlog.py` 提供 `record` / `latest` / `staleness_hours`。两条判据脚本改成**默认落台账** + `--no-record`：`check_station_contract.py` 的 `red_count` 是**违约行合计**（`details.red_metric=violating_rows`），`check_status_policy.py` 的是**失败判据条数**（`failed_checks`）——两种量不混成一个数，否则趋势线没有意义。两条硬规则：写台账失败要打 `stderr`（观测缺一条不能让结论变绿）；`staleness_hours()` 从未跑过返回 `None`，调用方必须当红。
+
+数据侧三个信号在 `mock-mes/api/obs.py`：接口指标（300 样本环形缓冲，`p50/p95/max`、`2xx/3xx/4xx/5xx`、最慢 5 条、`top_paths`）、数据新鲜度（9 张表白名单，`stale>24h`，**`future` 单列**——`-849 h` 不是「很新」而是未来时间脏值）、运行台账（每条判据 `hours_since` / `silent>24h`）。接口是 `/healthz`（真连库，失败 503）、`/v1/obs/summary`（三块一次取全）、`/v1/obs/{api,freshness,runs}`；页面第五页「判据运行」。
+
+```powershell
+# 判据默认落台账，末尾打印 run_id；加 --no-record 只判不记账
+venv\Scripts\python.exe -X utf8 scripts\check_station_contract.py     # I fail 362 行 / J warn
+venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py        # A–H 全 ok
+
+# 在后端目录：六段验收（连库 / 计数 / p95 / 陈旧 / 未来时间 / 静默 / 不写台账）
+cd ..\mock-mes; python -X utf8 scripts\verify_obs.py
+```
+
+实测：台账 `run_id=1 station_contract fail 362 95ms`、`run_id=2 status_policy ok 0 1546ms`；`verify_obs.py` O1–O6 全 `[ok]`（连库 82 ms、p95 84.7 ms、工单表 7497.7 h 陈旧、缺陷表 -849.3 h 未来、30 h 静默、`--no-record` 2→2）；`verify_ui.py` 10 组 ALL PASS。
+
+顺手查出验收脚本自己的一个 bug：`verify_ui.py` 的 `text()` 用非贪婪正则取 `id="kpi"` 的内容，遇到内层 `<b>…</b>` 就在第一个 `</b>` 前停住——之前所有 KPI 断言比的都是被截断的字符串（只判空，所以没造成假绿）。改成取整个 `<span id="kpi">` 段再匹配。证据在 `docs/20261126_21_可观测性.md`（`DOC-63`），未做的四条风险（4xx 未拆路径、24 h 阈值是拍的、指标只在内存、无告警通道）也写在那里。
+
 ## 目录
 
 ```

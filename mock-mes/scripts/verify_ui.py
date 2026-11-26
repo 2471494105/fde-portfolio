@@ -26,7 +26,7 @@ NOW = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 NOW_DATE = NOW[:10]
 
 # 三个视图各自"有几列"（数据列 + 标记列），列宽改动时这里必须一起改
-COLS = {"devices": 9, "defect_records": 10, "work_orders": 10, "remediation_orders": 10}
+COLS = {"devices": 9, "defect_records": 10, "work_orders": 10, "remediation_orders": 10, "check_runs": 7}
 
 
 def get(path):
@@ -96,6 +96,16 @@ def expect_none(r):
     return "", []
 
 
+def expect_run(r):
+    """判据运行页：ok 绿 / warn 黄 / fail 红 / error 灰，与页面 flag 同一套语义。"""
+    if r.get("status") == "ok":
+        return "row-green", ["绿"]
+    if r.get("status") == "warn":
+        return "row-amber", ["黄"]
+    if r.get("status") == "fail":
+        return "row-red", ["红"]
+    return "row-gray", ["脚本崩"]
+
 def expect_rm(r):
     """整改单：closed 绿；未关闭且过期红；未关闭未过期橙。判据 J 的口径。"""
     if r.get("state") == "closed":
@@ -111,6 +121,7 @@ CASES = [
     ("defect_records", "/app/#defect_records", "/v1/defect_records?page=1&size=20", expect_defect),
     ("work_orders", "/app/#work_orders", "/v1/work_orders?page=1&size=20", expect_wo),
     ("remediation_orders", "/app/#remediation_orders", "/v1/remediation_orders?page=1&size=20", expect_rm),
+    ("check_runs", "/app/#check_runs", "/v1/check_runs?page=1&size=20", expect_run),
     ("devices-p3", "/app/?page=3#devices", "/v1/devices?page=3&size=20", expect_none),
     ("wo-p2", "/app/?page=2#work_orders", "/v1/work_orders?page=2&size=20", expect_wo),
     ("wo-p3", "/app/?page=3#work_orders", "/v1/work_orders?page=3&size=20", expect_wo),
@@ -160,9 +171,12 @@ def main():
         chk(tag + " 控制台报错", len([l for l in err.splitlines()
                                       if "CONSOLE" in l or "Uncaught" in l]), 0)
 
-    h, _ = render(BASE + "/app/#remediation_orders", "kpi")
-    print("侧栏计数:", text(h, "num-devices"), text(h, "num-defect_records"), text(h, "num-work_orders"), text(h, "num-remediation_orders"))
-    print("KPI:", text(h, "kpi"), "（整改单页）")
+    h, _ = render(BASE + "/app/#check_runs", "kpi")
+    print("侧栏计数:", text(h, "num-devices"), text(h, "num-defect_records"), text(h, "num-work_orders"), text(h, "num-remediation_orders"), text(h, "num-check_runs"))
+    print("KPI:", text(h, "kpi"), "（判据运行页）")
+    km = re.search(r'<span[^>]*id="kpi"[^>]*>(.*?)</span>', h, re.S)
+    kpi_html = km.group(1) if km else ""
+    chk("KPI 有 p95 与静默计数", "p95" in kpi_html and "静默判据" in kpi_html, True)
     m = (re.search(r'<div[^>]*id="banner"[^>]*class="([^"]*)"', h)
          or re.search(r'<div[^>]*class="([^"]*)"[^>]*id="banner"', h))
     chk("banner 未出现", (m.group(1) if m else "?").find("show"), -1)

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 from datetime import date
 from pathlib import Path
@@ -43,6 +44,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ds import station_contract as sc  # noqa: E402
+from app.ds import runlog  # noqa: E402
 
 CLIENT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_client"
 
@@ -96,6 +98,7 @@ def check_registry(registry: dict) -> list[str]:
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
+    record_run = True
     dsn = CLIENT_DSN
     today = date.today()
     for a in argv:
@@ -103,10 +106,14 @@ def main(argv: list) -> int:
             json_out = a.split("=", 1)[1]
         elif a == "--skip-db":
             skip_db = True
+        elif a == "--no-record":
+            record_run = False
         elif a.startswith("--dsn="):
             dsn = a.split("=", 1)[1]
         elif a.startswith("--today="):
             today = date.fromisoformat(a.split("=", 1)[1])
+
+    t0 = time.perf_counter()
 
     registry = sc.load()
     checks: dict[str, dict] = {}
@@ -163,6 +170,28 @@ def main(argv: list) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"json → {out}")
+
+    if record_run:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        red_rows = sum(c["violations"] for c in summary.get("contracts") or [])
+        details = {
+            "red_metric": "violating_rows",
+            "rows": {c["id"]: c["violations"] for c in summary.get("contracts") or []},
+            "gaps": {g["id"]: g["state"] for g in summary.get("gaps") or []},
+            "today_override": today.isoformat() if today != date.today() else None,
+        }
+        try:
+            run_id = runlog.record(
+                "station_contract",
+                summary["status"] if summary["status"] in ("ok", "warn", "fail") else "error",
+                red_rows,
+                duration_ms,
+                dataset=f"fde_client @ {dsn.rsplit('/', 1)[-1]}",
+                details=details,
+            )
+            print(f"运行台账 → run_id={run_id}（{summary['status']}，红 {red_rows} 行，{duration_ms} ms）")
+        except Exception as e:  # 写不进去要说出来：观测缺一条，不能把结论变绿
+            print(f"[warn] 运行台账没写进去：{type(e).__name__}: {e}", file=sys.stderr)
 
     return 0 if summary["status"] in ("ok", "warn") else 1
 

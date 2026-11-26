@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,11 @@ import psycopg
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
+
+try:  # uvicorn api.app:app
+    from . import obs
+except ImportError:  # 直接 python api/app.py 的旧用法
+    import obs  # type: ignore
 
 DSN = os.environ.get(
     "FDE_CLIENT_RO_DSN",
@@ -32,9 +38,68 @@ TABLES = {
         "rm_no",
         ("rm_no", "contract_id", "table_name", "field_name", "owner", "state"),
     ),
+    "check_runs": ("gov_check_run", "ran_at", ("check_id", "status", "dataset")),
 }
 
-app = FastAPI(title="Mock MES Read API", version="2.0", description="第三条取数路：分页接口 + 客户端")
+# 台账类视图按时间倒序：翻到第一页就是最近的运行，而不是最老的
+DESC = {"check_runs"}
+
+app = FastAPI(title="Mock MES Read API", version="3.0", description="第三条取数路：分页接口 + 客户端 + 观测")
+
+
+@app.middleware("http")
+async def observe(request: Request, call_next):
+    """每个请求记一条样本；/v1/obs 自己不记（读指标不该改指标）。"""
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - t0) * 1000
+    if not request.url.path.startswith("/v1/obs"):
+        obs.record(request.url.path, response.status_code, ms)
+    response.headers["X-Resp-Ms"] = f"{ms:.1f}"
+    return response
+
+
+@app.get("/healthz")
+def healthz(response: Response):
+    """就绪探针：能取数才算活着。分开「进程在」与「库连得上」两件事。"""
+    t0 = time.perf_counter()
+    try:
+        with psycopg.connect(DSN) as conn:
+            conn.execute("select 1").fetchone()
+    except Exception as e:
+        response.status_code = 503
+        return {"status": "down", "reason": f"{type(e).__name__}: {e}"}
+    return {"status": "ok", "db_ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+
+@app.get("/v1/obs/summary")
+def obs_summary(response: Response):
+    """三件事一次取全：接口指标 / 数据新鲜度 / 判据运行。"""
+    try:
+        return {
+            "api": obs.api_snapshot(),
+            "freshness": obs.freshness(DSN),
+            "runs": obs.runs(DSN),
+            "generated_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+        }
+    except Exception as e:
+        response.status_code = 503
+        return {"status": "down", "reason": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/v1/obs/api")
+def obs_api():
+    return obs.api_snapshot()
+
+
+@app.get("/v1/obs/freshness")
+def obs_freshness():
+    return obs.freshness(DSN)
+
+
+@app.get("/v1/obs/runs")
+def obs_runs(limit: int = Query(20, ge=1, le=200)):
+    return obs.runs(DSN, limit=limit)
 
 
 def jsonable(v: Any) -> Any:
@@ -72,8 +137,9 @@ def list_rows(
 
     with psycopg.connect(DSN, row_factory=dict_row) as conn:
         total = conn.execute("select count(*) as n from %s %s" % (table, where), params).fetchone()["n"]
+        order = "desc" if name in DESC else "asc"
         rows = conn.execute(
-            "select * from %s %s order by %s limit %d offset %d" % (table, where, key, size, offset),
+            "select * from %s %s order by %s %s limit %d offset %d" % (table, where, key, order, size, offset),
             params,
         ).fetchall()
 

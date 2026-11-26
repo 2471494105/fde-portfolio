@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -44,6 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.ds import runlog  # noqa: E402
 from app.ds import status_policy as sp  # noqa: E402
 
 DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
@@ -239,6 +241,7 @@ def load_wo_rows(dsn: str = CLIENT_DSN, table: str = "public.biz_work_order") ->
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
+    record_run = True
     dsn = DSN
     table = "work_orders"
     for a in argv:
@@ -246,10 +249,14 @@ def main(argv: list) -> int:
             json_out = a.split("=", 1)[1]
         elif a == "--skip-db":
             skip_db = True
+        elif a == "--no-record":
+            record_run = False
         elif a.startswith("--dsn="):
             dsn = a.split("=", 1)[1]
         elif a.startswith("--table="):
             table = a.split("=", 1)[1]
+
+    t0 = time.perf_counter()
 
     policy = sp.load()
     rows = None
@@ -291,6 +298,24 @@ def main(argv: list) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"json → {out}")
+
+    if record_run:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        fails = [k for k, v in checks.items() if v["status"] == "fail"]
+        red = len(fails)
+        details = {"red_metric": "failed_checks", "fails": fails, "skip_db": skip_db}
+        try:
+            run_id = runlog.record(
+                "status_policy",
+                "fail" if fails else "ok",
+                red,
+                duration_ms,
+                dataset=f"{table} @ {dsn.rsplit('/', 1)[-1]}",
+                details=details,
+            )
+            print(f"运行台账 → run_id={run_id}（{'fail' if fails else 'ok'}，红 {red} 条判据，{duration_ms} ms）")
+        except Exception as e:  # 写不进去要说出来：观测缺一条，不能把结论变绿
+            print(f"[warn] 运行台账没写进去：{type(e).__name__}: {e}", file=sys.stderr)
 
     return 0 if ok else 1
 

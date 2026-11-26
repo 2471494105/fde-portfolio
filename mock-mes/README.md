@@ -64,15 +64,16 @@ python scripts\verify_change_flow.py                              # 15 项检查
 
 `f3` 是唯一一种**我们想改也改不进去**的变更：库里早有 `conf_pct=150/-10`，加 `CHECK (0..100)` 会被 PG 当场拒。
 先洗数据还是先放宽声明是业务要拿主意的事——判据能做的是把它拦在结构变更这一刻。
-## 客户端四页（同一进程里的只读视图）
+## 客户端五页（同一进程里的只读视图）
 
 ```powershell
 .\api\run.ps1            # uvicorn api.app:app --port 8021
 # 浏览器打开 http://127.0.0.1:8021/app   （不要双击 index.html，file:// 下拉不到接口）
-python -X utf8 scripts\verify_ui.py   # 9 组渲染对账，全 PASS
+python -X utf8 scripts\verify_ui.py   # 10 组渲染对账，全 PASS
+python -X utf8 scripts\verify_obs.py   # 可观测性六段（连库/指标/新鲜度/静默/不写台账）
 ```
 
-四页和接口是同一个进程：页面上每一个数字，都是 `ro_reader` 从这个库里读出来的，没有第二份假数据。
+五页和接口是同一个进程：页面上每一个数字，都是 `ro_reader` 从这个库里读出来的，没有第二份假数据。
 
 | 页 | URL | 条数 | 这一页要让你看见什么 |
 |---|---|---|---|
@@ -80,6 +81,7 @@ python -X utf8 scripts\verify_ui.py   # 9 组渲染对账，全 PASS
 | 缺陷记录 | `/app/#defect_records` | 302 | 脏行必须露出来：`conf_pct` 越界（红）、`captured_at` 是未来（橙）、`lot_no` 空串或 NULL（灰，两种"空"分色显示） |
 | 维修工单 | `/app/#work_orders` | 60 | 两套状态并存，谁也不是权威：红=关单了看板没关（19 张，`已完成` 10 + `已取消` 9），橙=看板关了没关单（6 张），顶部 KPI 直接报 `25 / 60` |
 | 数据整改单 | `/app/#remediation_orders` | 2 | 判据红的落点：`RM-20261126-01`（工单 60 行）、`RM-20261126-02`（缺陷 302 行），责任方「产线计划员」、到期 2026-12-03；KPI `未关闭 2 / 2（逾期 0 · 违约 362 行）`。绿=已关闭 / 橙=未关闭 / 红=逾期 |
+| 判据运行 | `/app/#check_runs` | 2 | **判据自己有没有在工作**：`gov_check_run` 台账逐次一行（结果 / 红数 / 耗时 / 观测面），KPI 一行报 `运行 4 次 · 最近 1.1 分钟前 · p95 170.6 ms · 4xx/5xx 31（静默判据 0 · 陈旧表 4 · 未来时间 1）`。绿=ok / 黄=warn / 红=fail / 灰=error |
 
 翻页与搜索可以直接写进 URL，录屏和复述都靠它：
 `/app/?page=2#work_orders`、`/app/?q=CX-14#devices`（命中 9 台）。
@@ -88,9 +90,11 @@ python -X utf8 scripts\verify_ui.py   # 9 组渲染对账，全 PASS
 
 **整改单页的口径**：`state` 只有 `open` / `closed` 两种，**关闭不是点按钮**——`fde-diagnosis-agent` 的 `scripts/raise_remediation.py --close` 会复跑判据，违规归零才写 `closed` + 关闭证据；还剩 60 / 302 行时它直接拒绝。页面按同一套语义着色，数据全来自 `gov_remediation_order`，没有前端自算。
 
-**验收口径**：`scripts/verify_ui.py` 不用截图判对错——截图只能证明"看起来像"。它拿 Edge 无头渲染后的 DOM，把每行底色、标记、页脚区间、页码、上一页/下一页禁用态逐项与 `/v1/*` 的返回体比对，同时收 stderr 里的 CONSOLE 报错。目前 9 组（四页首页 + 末页 + 第 2 页 + 搜索页）全 PASS，控制台 0 报错，侧栏计数 `48 302 60 2`。
+**验收口径**：`scripts/verify_ui.py` 不用截图判对错——截图只能证明"看起来像"。它拿 Edge 无头渲染后的 DOM，把每行底色、标记、页脚区间、页码、上一页/下一页禁用态逐项与 `/v1/*` 的返回体比对，同时收 stderr 里的 CONSOLE 报错。目前 10 组（五页首页 + 末页 + 第 2 页 + 搜索页）全 PASS，控制台 0 报错，侧栏计数 `48 302 60 2 4`。判据运行页的 KPI 断言取整个 `<span id="kpi">` 段再匹配——早先用 `text()` 取 innerHTML 会在内层 `<b>` 的第一个 `</b>` 处截断，读到 `运行 2` 就没了。
 
-截图证据：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单各一套）。
+**可观测性三个入口**：`GET /healthz`（真连库 `select 1`，失败 503，不是进程活着就算健康）、`GET /v1/obs/summary`（接口指标 + 新鲜度 + 判据台账一次取全，页面首屏只打这一枪）、`GET /v1/obs/{api,freshness,runs}`（各自单独取）。中间件给每个响应加 `X-Resp-Ms`，并跳过 `/v1/obs*` 自身——读指标不能污染指标。`scripts/verify_obs.py` 的 O1–O6 分段证明：连库 / 计数在涨 / 读指标不进样本 / p95 有值 / 工单表被标陈旧（7497.7 h）/ 缺陷表被标**未来时间**（-849.3 h）/ 主数据无时间列不误报 / 30 小时没跑判静默 / `--no-record` 不写台账。口径写在 `docs/20261126_21_可观测性.md`（`DOC-63`）。
+
+截图证据：`out/ui/*.png`（1280 与 1024 两档，设备/缺陷/工单/整改单/判据运行各一套）。
 
 ## 目录
 
@@ -107,6 +111,7 @@ sql/009_null_anomaly.sql   两条"库里形态的空值"（NULL 与空串不是�
 sql/010_audit.sql          审计触发器（update 只记变化的列）+ 越权安全阀 gov.read_guarded()
 sql/011_station_id_upgrade.sql  工位稳定键 station_id（存量库升级，幂等；新装由 004/005/006 直接建）
 sql/012_remediation.sql    数据整改单 gov_remediation_order（同契约同表只许一张 open）
+sql/013_observability.sql 判据运行台账 gov_check_run（判据跑没跑、跑了多久、红多少）
 scripts/bootstrap.ps1      一条命令跑完 001~003，幂等
 scripts/export_registry.py 登记册 -> 与 source_schema 同构的 JSON
 scripts/query_readonly.py  只读取数 + 越权自证
@@ -116,9 +121,11 @@ scripts/simulate_change.py 按变更单执行/回滚 DDL，只认 approved
 scripts/inject_faults.py   三种故障注入（结构先动 / 登记先动 / 值域收紧）
 scripts/verify_change_flow.py T8 验收十五项检查，自带预清理
 api/app.py                 分页接口（FastAPI，8021）+ 静态挂载 /app
-api/static/index.html      客户端四页（单文件 HTML + CSS，无框架）
+api/static/index.html      客户端五页（单文件 HTML + CSS，无框架）
+api/obs.py                 可观测性：接口指标环形缓冲 + 数据新鲜度 + 判据运行台账
 api/static/flag.js         红/橙判定唯一的一份实现（行标与 KPI 共用；判据 H 拿它对账）
-scripts/verify_ui.py       四页渲染对账（DOM vs 接口，9 组检查）
+scripts/verify_ui.py       五页渲染对账（DOM vs 接口，10 组检查）
+scripts/verify_obs.py      可观测性六段验收（O1–O6）
 ```
 
 **执行顺序**：`bootstrap.ps1` → `004/005`（主数据）→ `006/007`（业务）→ `008`（治理）→ `011`（工位稳定键，存量库升级；新装由 004/005/006 直接建，跑到这里也是空操作）→ `012`（整改单表）→ `009`（空值补丁）→ `010`（审计触发器）。跑故障注入或变更模拟前先 `pg_dump` 一份；改坏了按这个顺序重灌，40 秒左右。

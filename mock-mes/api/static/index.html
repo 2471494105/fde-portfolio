@@ -119,6 +119,7 @@
     <button data-view="defect_records">缺陷记录<span class="num" id="num-defect_records">·</span></button>
     <button data-view="work_orders">维修工单<span class="num" id="num-work_orders">·</span></button>
     <button data-view="remediation_orders">数据整改单<span class="num" id="num-remediation_orders">·</span></button>
+    <button data-view="check_runs">判据运行<span class="num" id="num-check_runs">·</span></button>
   </nav>
   <div class="side-foot">
     账号 ro_reader<br>
@@ -230,6 +231,24 @@ const VIEWS = {
       if (r.due_on && String(r.due_on) < today) return {cls:"row-red", tags:[["逾期","tag-red"]]};
       return {cls:"row-amber", tags:[["未关闭","tag-amber"]]};
     }
+  },
+  // 判据运行台账：可观测性先回答「这件事发生过吗、什么时候、红了几条」。
+  // 一条判据超过 24 小时没跑，页面按红处理——监控自己静默比数据静默更危险。
+  check_runs: {
+    title: "判据运行",
+    sub: "observability · 判据跑没跑、库里的数据多旧、接口慢不慢",
+    cols: ["ran_at","check_id","status","red_count","duration_ms","dataset"],
+    labels: {ran_at:"运行时间",check_id:"判据",status:"结果",red_count:"红",
+             duration_ms:"耗时(ms)",dataset:"观测面"},
+    legend: '<span><i class="r"></i>有红</span><span><i class="a"></i>有认领中的黄</span><span><i class="g" style="background:#f0f8f2"></i>全绿</span>',
+    size: 20,
+    widths: [186, 168, 74, 60, 92, 300],
+    flag: (r) => {
+      if (r.status === "ok") return {cls:"row-green", tags:[["绿","tag-green"]]};
+      if (r.status === "warn") return {cls:"row-amber", tags:[["黄","tag-amber"]]};
+      if (r.status === "fail") return {cls:"row-red", tags:[["红","tag-red"]]};
+      return {cls:"row-gray", tags:[["脚本崩","tag-gray"]]};
+    }
   }
 };
 
@@ -327,6 +346,22 @@ async function load(){
 
 async function refreshKpi(){
   const el = $("kpi");
+  if (cur === "check_runs") {
+    try {
+      const s = await fetch("/v1/obs/summary").then((r) => r.json());
+      const api = s.api, fr = s.freshness, rr = s.runs;
+      const latest = rr.recent[0];
+      const silent = rr.checks.filter((c) => c.silent);
+      const stale = fr.stale.length, future = fr.future.length;
+      el.style.display = "";
+      el.className = (silent.length || stale.length || future.length || api.errors) ? "kpi" : "kpi amber";
+      el.innerHTML = "运行 <b>" + rr.recent.length + "</b> 次 · 最近 " +
+        (latest ? latest.minutes_since + " 分钟前" : "从未") +
+        " · p95 " + api.p95_ms + " ms · 4xx/5xx " + api.errors +
+        "（静默判据 " + silent.length + " · 陈旧表 " + stale + " · 未来时间 " + future + "）";
+    } catch (e) { el.style.display = "none"; }
+    return;
+  }
   if (cur === "remediation_orders") {
     try {
       const d = await fetch("/v1/remediation_orders?size=500").then((r) => r.json());

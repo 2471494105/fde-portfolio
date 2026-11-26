@@ -1,5 +1,5 @@
 {
-  "version": "v1",
+  "version": "v2",
   "updated": "2026-11-26",
   "default_client": "client_a",
   "why": "状态集是契约的一个版本，不是字典。OPC UA FiniteStateMachineType 规定子类型不得增删 States/Transitions，所以换客户 = 换一版口径，必须登记、必须能拒跑。",
@@ -7,23 +7,103 @@
     "client_a": {
       "display_name": "本项目沙箱客户 client_a（三词终态）",
       "registered": true,
-      "closed_states": ["已完成", "已合并", "已取消"],
-      "known_open_states": ["待处理", "处理中"],
-      "severity_map": {"low": "low", "medium": "medium", "high": "high"},
+      "closed_states": [
+        "已完成",
+        "已合并",
+        "已取消"
+      ],
+      "known_open_states": [
+        "待处理",
+        "处理中"
+      ],
+      "severity_map": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high"
+      },
       "priority_dropped": null,
       "unsupported_columns": [],
-      "source_of_truth": "mock_qms/reset.py + data/schema.sql 的 work_orders_open_key 部分唯一索引（同一口径，2026-11-26 起改为读本表；索引谓词因不可参数化仍留字面量，由 scripts/check_status_policy.py 盯漂移）"
+      "source_of_truth": "mock_qms/reset.py + data/schema.sql 的 work_orders_open_key 部分唯一索引（同一口径，2026-11-26 起改为读本表；索引谓词因不可参数化仍留字面量，由 scripts/check_status_policy.py 盯漂移）",
+      "vocab_fold": {
+        "待处理": "待处理",
+        "处理中": "处理中",
+        "已完成": "已完成",
+        "已合并": "已合并",
+        "已取消": "已取消"
+      },
+      "fold_gaps_states": []
     },
     "client_b_odoo": {
-      "display_name": "Odoo maintenance.request（样本客户，未登记）",
+      "display_name": "Odoo maintenance.request（第二家客户，K-5 已登记折法）",
+      "registered": true,
+      "closed_states": [
+        "done",
+        "cancel"
+      ],
+      "known_open_states": [
+        "draft",
+        "confirmed"
+      ],
+      "severity_map": {
+        "0": "low",
+        "1": "low",
+        "2": "medium",
+        "3": "high"
+      },
+      "priority_dropped": "0",
+      "unsupported_columns": [
+        "maintenance_team_id"
+      ],
+      "source_of_truth": "Odoo maintenance.request：闭环看 state + stage_id 看板阶段，与本项目三词无对应（07_外部样本/odoo-maintenance-model.py）",
+      "note": "折法已登记（v2），不再按『所有词都当未闭环』去猜；保护集按 closed_states 反查。但『已合并』无对应（见 fold_gaps）、跨字段判据不适用（见 unsupported_checks），这两处是显式声明的损失，不是没发生。",
+      "vocab_fold": {
+        "draft": "待处理",
+        "confirmed": "处理中",
+        "done": "已完成",
+        "cancel": "已取消",
+        "merged": "已完成"
+      },
+      "fold_gaps": [
+        "「已合并」在 Odoo 词表里没有对应：合并动作在对方表现为 done + 看板归档，所以这一桶在 B 侧为空，合并事实折进 done。代价是『合并』这一层语义在 B 客户身上丢失，我方按『已完成』处理——不影响闭环判断，影响的是『同一问题被并到别的单』这类追溯。"
+      ],
+      "unsupported_checks": [
+        "work_order_state_stage_conflict（我方『已完成但看板未关闭』）：Odoo 的 stage_id 是看板列不是终态，两者不该互判，这条判据对 B 不适用；强行套会每天造出一批假红。"
+      ],
+      "fold_gaps_states": [
+        "已合并"
+      ]
+    },
+    "client_c_unregistered": {
+      "display_name": "未登记占位客户（只为 C 判据的活反例存在）",
       "registered": false,
       "closed_states": null,
-      "known_open_states": ["state:confirm", "stage_id:*"],
-      "severity_map": {"0": "low", "1": "low", "2": "medium", "3": "high"},
-      "priority_dropped": "0",
-      "unsupported_columns": ["maintenance_team_id"],
-      "source_of_truth": "Odoo maintenance.request：闭环看 state + stage_id 看板阶段，与本项目三词无对应（07_外部样本/odoo-maintenance-model.py）",
-      "note": "未登记闭环口径 → 保护集/删除一律拒跑。按我们的三词去判，Odoo 工单 100% 未闭环，保护集只增不减，删除功能等于没有，且不报错。"
+      "known_open_states": [
+        "state:*"
+      ],
+      "severity_map": {},
+      "priority_dropped": null,
+      "unsupported_columns": [],
+      "source_of_truth": "不存在：它存在的唯一理由是证明『未登记会拒跑』这条护栏还活着",
+      "note": "不要删。删了 C 判据就没有输入，变成了永远绿的装饰。"
     }
-  }
+  },
+  "canonical_states": [
+    "待处理",
+    "处理中",
+    "已完成",
+    "已合并",
+    "已取消"
+  ],
+  "change_log": [
+    {
+      "version": "v1",
+      "date": "2026-11-26",
+      "what": "口径从四处手抄收成一处登记；未登记即拒跑"
+    },
+    {
+      "version": "v2",
+      "date": "2026-11-26",
+      "what": "登记第二家客户 client_b_odoo（K-5）：补 vocab_fold 声明折法、canonical_states 定我方基准词，并加未登记占位 client_c_unregistered——C 判据需要一个活的反例，不能因为没有反例就把护栏当装饰"
+    }
+  ]
 }

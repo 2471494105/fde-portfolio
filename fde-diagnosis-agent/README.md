@@ -230,7 +230,7 @@ $env:PGPASSWORD='postgres'
 
 ### 源端判据与换源验收（S1–S5）
 
-数据治理那条线不碰 `BEHAVIOR_FILES`：改它不动 `code_hash`、不用付 373 秒全量。判据分两层——**结构面** S1 漂移 / S2 未消费（黄）/ S3 破坏 / S4 未声明改名，**值域面** S5 量纲与格式；另有口径登记 A/B/C（未登记直接拒跑，`PolicyNotRegistered`）。三档处置：**红 exit 1 / 拒跑 exit 3 / 黄 exit 0**。
+数据治理那条线不碰 `BEHAVIOR_FILES`：改它不动 `code_hash`、不用付 373 秒全量。判据分两层——**结构面** S1 漂移 / S2 未消费（黄）/ S3 破坏 / S4 未声明改名，**值域面** S5 量纲与格式；另有口径登记 A/B/C/D（A 索引谓词漂移；B 库里出现未登记状态；C 未登记客户拒跑 `PolicyNotRegistered`；D 折法完整性——每个客户词必须折到我方基准五词）。三档处置：**红 exit 1 / 拒跑 exit 3 / 黄 exit 0**。
 
 验的不是"判据能不能跑"，是"换一家客户时哪几处会跪"。第二家客户 `client_mes` 已独立登记（走 A，`client_a` 的两份样本未动）：
 
@@ -251,6 +251,19 @@ venv\Scripts\python.exe -X utf8 scripts\check_source_values.py
 
 九个缺口（含最像假绿的那条：`limit 200` 不带 `ORDER BY` 跳过脏行）与全部档位在 `docs/20261126_13_换源验收.md`（`DOC-55`）。量纲那一档后来单独改过：判据从看极值改成看中位数——一个 `150` 脏值不许掩盖整列换基准，反过来脏值也不许被当成量纲证据（`DOC-56` 的 e8/e9 是成对的）。
 
+再往后是**换客户时真正会出事的那一层：折法**。`closed_states` 只说了「哪些词算闭环」，没说「折成我方哪一态」——折法缺了，保护集（有未闭环单、不许删的设备）会静默失真，而且不报错。`client_b_odoo` 已登记：闭环 `done`/`cancel`、五条 `vocab_fold`、缺口 `已合并` 显式认领、`work_order_state_stage_conflict` 声明不适用（Odoo 的 `stage_id` 是看板列，不是终态）。
+
+```powershell
+# 折法验收：同一批 60 张工单换成 Odoo 词表，两侧保护集必须完全相同；再故意折错，看结论会不会按预期变
+venv\Scripts\python.exe -X utf8 scripts\verify_k5_fold.py
+
+# 四条口径判据（A/B/C/D）；换客户时把观测面一起换过去，否则查的是自己家的库
+venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py
+venv\Scripts\python.exe -X utf8 scripts\check_status_policy.py --dsn=postgresql://postgres:postgres@localhost:5432/fde_client --table=probe.wo_b
+```
+
+`verify_k5_fold.py` 判据：末尾 `RESULT: ALL PASS` 且 exit 0，跑完 `probe` schema 必须已清。反例是**成对**的：只认 `cancel`（漏折 `done`）保护集 24 → 33 台，只认 `done`（漏折 `cancel`）24 → 41 台——两个方向多出来的不是同一批设备。实测与代价在 `docs/20261126_15_换客户折法验收.md`（`DOC-57`）。
+
 ## 目录
 
 ```
@@ -266,8 +279,9 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
-             数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）
-             00_文档索引.md 是全部 56 篇（`DOC-01`–`DOC-55` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             数据治理线：口径登记（DOC-52）、源端 S1–S4 漂移（DOC-53）、值域 S5（DOC-54）、换源验收（DOC-55）、
+             量纲判据改中位数（DOC-56）、换客户折法验收（DOC-57）
+             00_文档索引.md 是全部 58 篇（`DOC-01`–`DOC-57` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

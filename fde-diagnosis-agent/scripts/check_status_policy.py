@@ -13,13 +13,18 @@
   A 索引谓词 vs 口径表       —— 不一致就被判红（否则索引还在按旧词判闭环）
   B 库里出现未登记的状态     —— 既不算闭环也不算未闭环，代码会机械地把它归进某一类
   C 未登记客户必须拒跑       —— 反例自证：它得抛 `PolicyNotRegistered`，不抛就红
+  D 折法完整性（K-5）        —— 登记了词表就要说清每个词折成我方哪一态；
+                                我方基准词在这家客户身上没有落点的，必须在 fold_gaps_states 认领
 
-判据 B 需要连库；`--skip-db` 只跑 A 与 C。连不上库时状态是 `skipped`，**不是绿**。
+判据 B 需要连库；`--skip-db` 只跑 A/C/D。连不上库时状态是 `skipped`，**不是绿**。
+B 的观测面默认是 `fde_rag.work_orders`（本家库）；换客户时用 `--dsn=` 与 `--table=`
+把它指到客户库，否则「查的是自己家的词、说的是客户家的事」。
 
 用法：
     python scripts/check_status_policy.py
     python scripts/check_status_policy.py --json=eval/status_policy.json
     python scripts/check_status_policy.py --skip-db
+    python scripts/check_status_policy.py --dsn=postgresql://.../fde_client --table=wo_b
 """
 
 from __future__ import annotations
@@ -60,20 +65,30 @@ def check_schema_drift(policy: dict) -> dict:
     }
 
 
-def check_db_states(policy: dict) -> dict:
-    """B：库里实际出现的状态，是否都在口径表的已知集合里。"""
+def check_db_states(policy: dict, dsn: str = DSN, table: str = "work_orders") -> dict:
+    """B：库里实际出现的状态，是否都在口径表的已知集合里。
+
+    观测面可换：默认查本家库 `fde_rag.work_orders`；换客户时用 `--dsn` / `--table`
+    指到客户库，否则就是拿自己家的词去说客户家的事。
+    """
     try:
         import psycopg
     except Exception as e:  # 依赖缺失也是「没验」，不是绿
         return {"status": "skipped", "detail": [f"psycopg 不可用：{e}"]}
     try:
-        with psycopg.connect(DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT status FROM work_orders ORDER BY status")
+        sql = f"SELECT DISTINCT state FROM {table} ORDER BY state"
+        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            try:
+                cur.execute(sql)
+            except Exception:
+                conn.rollback()
+                cur.execute(f"SELECT DISTINCT status FROM {table} ORDER BY status")
             actual = tuple(r[0] for r in cur.fetchall() if r[0] is not None)
         client = sp.client(policy.get("default_client"), policy)
         unknown = sp.unknown_states(actual, client)
         return {
             "status": "fail" if unknown else "ok",
+            "source": f"{table} @ {dsn.rsplit('/', 1)[-1]}",
             "actual_states": list(actual),
             "unknown_states": unknown,
             "detail": [f"库里出现未登记状态 {unknown}，它既不算闭环也不算未闭环"]
@@ -105,21 +120,48 @@ def check_unregistered_refuses(policy: dict) -> dict:
     }
 
 
+def check_fold(policy: dict) -> dict:
+    """D：折法完整性——登记了词表，就要说清每个词折成我方哪一态。
+
+    A/B/C 都只问「这家客户自己内部自不自洽」，问不到「和我们的基准对不对得上」。
+    换客户的真正风险在后一半：词表自洽、折法缺失，保护集就会静默失真。
+    """
+    details = []
+    checked = []
+    for name, c in policy["clients"].items():
+        if not c.get("registered"):
+            continue
+        checked.append(name)
+        details += [f"{name}：{p}" for p in sp.fold_problems(name, policy)]
+    return {
+        "status": "fail" if details else "ok",
+        "checked": checked,
+        "detail": details,
+    }
+
+
 def main(argv: list) -> int:
     json_out = ""
     skip_db = False
+    dsn = DSN
+    table = "work_orders"
     for a in argv:
         if a.startswith("--json="):
             json_out = a.split("=", 1)[1]
         elif a == "--skip-db":
             skip_db = True
+        elif a.startswith("--dsn="):
+            dsn = a.split("=", 1)[1]
+        elif a.startswith("--table="):
+            table = a.split("=", 1)[1]
 
     policy = sp.load()
     checks = {
         "A_schema_index_drift": check_schema_drift(policy),
         "B_unregistered_db_states": {"status": "skipped", "detail": ["--skip-db"]}
-        if skip_db else check_db_states(policy),
+        if skip_db else check_db_states(policy, dsn, table),
         "C_unregistered_client_refuses": check_unregistered_refuses(policy),
+        "D_fold_completeness": check_fold(policy),
     }
     ok = all(c["status"] in ("ok", "skipped") for c in checks.values()) and any(
         c["status"] == "ok" for c in checks.values()

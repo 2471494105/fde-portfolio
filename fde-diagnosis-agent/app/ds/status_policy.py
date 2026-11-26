@@ -65,10 +65,17 @@ def closed_states(name: str | None = None, policy: dict | None = None) -> tuple[
     """
     c = client(name, policy)
     states = c.get("closed_states")
-    if not c.get("registered") or not states:
+    if not c.get("registered"):
         raise PolicyNotRegistered(
             f"客户 {c.get('display_name') or name!r} 未登记闭环口径"
             f"（source_of_truth={c.get('source_of_truth')!r}）"
+        )
+    if not states:
+        # 登记了却给了空词表，跟「没登记」是两件事：一个要人补登记，一个要人补词表。
+        # 报错混用会让修的人找错地方（K-5 反例第一次跑出来就是这样）。
+        raise PolicyNotRegistered(
+            f"客户 {c.get('display_name') or name!r} 已登记但闭环词表为空——"
+            "空词表会被下游当成「全部未闭环」，等于删除功能静默消失"
         )
     return tuple(states)
 
@@ -157,3 +164,47 @@ def unknown_states(actual: tuple[str, ...], c: dict) -> list[str]:
     """
     known = set(c.get("closed_states") or []) | set(c.get("known_open_states") or [])
     return sorted(set(actual) - known)
+
+
+# ---------- 折法判据（K-5）：换了客户，词不同，事实必须还是同一件事 ----------
+
+def vocab_fold(name: str | None = None, policy: dict | None = None) -> dict:
+    """客户词 → 我方基准词的折法。未登记客户照旧拒跑，不返回空表。"""
+    c = client(name, policy)
+    if not c.get("registered"):
+        raise PolicyNotRegistered(f"客户 {c.get('display_name') or name!r} 未登记，没有折法可谈")
+    return dict(c.get("vocab_fold") or {})
+
+
+def fold_problems(name: str | None = None, policy: dict | None = None) -> list[str]:
+    """D 判据：折法完整性。空列表表示这家客户的折法说得清。
+
+    为什么需要它：`closed_states` 只说了「哪些词算闭环」，没说「这些词对应我方哪一态」。
+    少这一层，两个后果都不会报错——
+      · 对方的 done 没折，保护集把它当未闭环 → 删除功能等于没有（静默）；
+      · 折到基准词表之外（笔误），下游按字符串比就永远匹配不上 → 同一后果。
+    以及反向的一条：我方基准里有、这家客户没有的态，必须在 `fold_gaps_states` 里
+    显式认领（比如 Odoo 没有「已合并」）。**不认领就等于假装它存在。**
+    """
+    p = policy or load()
+    c = client(name, p)
+    canonical = list(p.get("canonical_states") or [])
+    fold = c.get("vocab_fold") or {}
+    declared_gaps = set(c.get("fold_gaps_states") or [])
+    words = list(c.get("closed_states") or []) + [
+        w for w in (c.get("known_open_states") or []) if not w.endswith(":*")
+    ]
+    out: list[str] = []
+    for w in words:
+        target = fold.get(w)
+        if not target:
+            out.append(f"{w} 没有折法目标——它会被机械地归进某一类，没人知道是哪一类")
+        elif canonical and target not in canonical:
+            out.append(f"{w} 折到 {target!r}，不在我方基准词表 {canonical} 里（多半是笔误）")
+    covered = {v for v in fold.values() if v in canonical}
+    for s in canonical:
+        if s not in covered and s not in declared_gaps:
+            out.append(f"我方基准词 {s!r} 在这家客户身上没有落点，也没在 fold_gaps_states 里认领")
+    for s in sorted(declared_gaps - set(canonical)):
+        out.append(f"fold_gaps_states 里的 {s!r} 不在我方基准词表里（认领错了对象）")
+    return out

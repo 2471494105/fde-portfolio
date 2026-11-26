@@ -235,7 +235,7 @@ $env:PGPASSWORD='postgres'
 验的不是"判据能不能跑"，是"换一家客户时哪几处会跪"。第二家客户 `client_mes` 已独立登记（走 A，`client_a` 的两份样本未动）：
 
 ```powershell
-# 换源验收全流程：干净态基线 + 九条反例 + 旧客户回归，自带造景与清理，可连跑
+# 换源验收全流程：干净态基线 + 十条反例 + 旧客户回归，自带造景与清理，可连跑
 venv\Scripts\python.exe -X utf8 scripts\verify_switch.py
 
 # 只看干净态（不造景）
@@ -249,7 +249,7 @@ venv\Scripts\python.exe -X utf8 scripts\check_source_values.py
 
 判据：`verify_switch.py` 末尾必须是 `RESULT: ALL PASS` 且退出码 0；两个单独脚本 exit 3 = 拒跑（**这不是失败，是设计**）。`--keep` 保留 `probe` schema 与临时登记供排查。
 
-九个缺口（含最像假绿的那条：`limit 200` 不带 `ORDER BY` 跳过脏行）与全部档位在 `docs/20261126_13_换源验收.md`（`DOC-55`）。
+九个缺口（含最像假绿的那条：`limit 200` 不带 `ORDER BY` 跳过脏行）与全部档位在 `docs/20261126_13_换源验收.md`（`DOC-55`）。量纲那一档后来单独改过：判据从看极值改成看中位数——一个 `150` 脏值不许掩盖整列换基准，反过来脏值也不许被当成量纲证据（`DOC-56` 的 e8/e9 是成对的）。
 
 ## 目录
 

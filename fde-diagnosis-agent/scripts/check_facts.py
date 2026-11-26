@@ -36,11 +36,13 @@ sys.path.insert(0, str(ROOT))
 
 from app.ds.facts import (  # noqa: E402
     FACT_KEYS,
+    blank_cells,
     fact_hash,
     fact_value,
     plan_facts,
     plan_issues,
     rows_to_facts,
+    schema_drift,
 )
 
 PROD_DSN = "postgresql://postgres:postgres@localhost:5432/fde_rag"
@@ -60,6 +62,9 @@ SQL = ROOT / "data" / "facts.sql"
 PROD_TENANT = "client_a"      # 生产租户：巡检只计数、只读
 SELFTEST_TENANT = "fcheck"    # 验收租户：七步在这里跑，允许清掉自己
 SOURCE = "facts_check"
+# 生产租户那 35 行的真实身份：夹具，不是客户数据。标签分开是为了将来能一条语句
+# 清干净（--purge-fixture），而不是让两批数据混在一张表里、谁也说不清哪条是真的。
+FIXTURE_SOURCE = "fixture_seed"
 
 # 夹具照抄 data/external/devices.csv：不拿库里剩下的行凑数，
 # 否则「一致」这条判据会变成「和它自己比」。
@@ -190,6 +195,8 @@ def sync(prod, sbx, tenant=SELFTEST_TENANT, source=SOURCE):
     """
     rows = sbx.execute("SELECT * FROM stg_devices").fetchall()
     incoming = rows_to_facts(rows)
+    # 空白串被当成「没给」跳过的单元格。跳对，但不能静默——调用方要报数。
+    blanks = blank_cells(rows)
     live_ids = {str(r["device_id"]) for r in rows if r.get("device_id")}
 
     # 删除的唯一合法来源是 L-1 的判定（stg_device_state.deleted_at 有值），
@@ -235,6 +242,9 @@ def sync(prod, sbx, tenant=SELFTEST_TENANT, source=SOURCE):
                  json.dumps(o["value"], ensure_ascii=False), o["value_hash"],
                  o["valid_from_basis"], o["supersedes"], o["source"]),
             )
+    # 空白串的痕迹跟着 plan 走：调用方（巡检、报告）能看见「这一轮有几个单元格
+    # 被当成没给跳过了」。跳过是对的，沉默不对——上游若真想清空，我们既不清也不报。
+    plan["blanks"] = [f"{e}.{k}" for e, k in sorted(blanks)]
     return plan
 
 
@@ -338,11 +348,17 @@ def version_chain(prod, entity_id, fact_key, tenant=SELFTEST_TENANT):
 def main(argv=None) -> int:
     json_out = ""
     seed_prod = False
+    mark_fixture = False
+    purge_fixture = False
     for arg in (argv if argv is not None else sys.argv[1:]):
         if arg.startswith("--json="):
             json_out = arg.split("=", 1)[1]
         elif arg == "--seed-prod":
             seed_prod = True
+        elif arg == "--mark-fixture":
+            mark_fixture = True
+        elif arg == "--purge-fixture":
+            purge_fixture = True
 
     log = []
     with psycopg.connect(PROD_DSN, row_factory=dict_row, autocommit=True) as prod, \
@@ -353,10 +369,52 @@ def main(argv=None) -> int:
             # 手动入口：把 BASE 当作生产租户的首次导入，之后巡检只读它、绝不再写。
             # 幂等——重复跑是 0 关 0 开。它不在 data_health 的调用路径里，
             # 只能人手执行一次；自动化永远走不到这个分支。
+            #
+            # source 用 fixture_seed 而不是 initial_load：这 35 行来自夹具，不是客户数据。
+            # 打上这个标签，将来真实客户数据接入时才能一条语句把它们清干净
+            # （--purge-fixture），而不是混在真实历史里分不出来。
             load_devices(sbx, BASE)
-            plan = sync(prod, sbx, tenant=PROD_TENANT, source="initial_load")
+            plan = sync(prod, sbx, tenant=PROD_TENANT, source=FIXTURE_SOURCE)
             print(f"生产租户 {PROD_TENANT} 初始化：开 {len(plan['opens'])} 条、"
-                  f"关 {len(plan['closes'])} 条，现有 {count_rows(prod, PROD_TENANT)} 行")
+                  f"关 {len(plan['closes'])} 条，现有 {count_rows(prod, PROD_TENANT)} 行"
+                  f"（source={FIXTURE_SOURCE}）")
+            return 0
+
+        if mark_fixture:
+            # 把早期导入的行补打夹具标签。只改 source 一列，不动值、不动时间。
+            # 留着它是因为第一次 --seed-prod 用的是 initial_load，而那个名字
+            # 分不出「夹具」和「客户首导」——将来两种数据混在一张表里就说不清了。
+            n = prod.execute(
+                "UPDATE facts.device_fact SET source = %s "
+                "WHERE tenant = %s AND source = %s",
+                (FIXTURE_SOURCE, PROD_TENANT, "initial_load")).rowcount
+            prod.commit()
+            print(f"生产租户 {PROD_TENANT}：{n} 行标为 {FIXTURE_SOURCE}"
+                  f"（现在 {count_rows(prod, PROD_TENANT)} 行）")
+            return 0
+
+        if purge_fixture:
+            # 真实客户数据接入之前，把夹具行清干净。只删 source=fixture_seed 的行，
+            # 别的 source 一行不碰；顺序照 reset_tenant：先查跨租户引用，再清引用，再删。
+            ids_sql = "SELECT id FROM facts.device_fact WHERE tenant = %s AND source = %s"
+            cross = prod.execute(
+                "SELECT count(*) AS n FROM facts.device_fact WHERE tenant <> %s "
+                "AND supersedes IN (" + ids_sql + ")",
+                (PROD_TENANT, PROD_TENANT, FIXTURE_SOURCE)).fetchone()["n"]
+            prod.execute(
+                "UPDATE facts.device_fact SET supersedes = NULL WHERE tenant <> %s "
+                "AND supersedes IN (" + ids_sql + ")",
+                (PROD_TENANT, PROD_TENANT, FIXTURE_SOURCE))
+            prod.execute(
+                "UPDATE facts.device_fact SET supersedes = NULL WHERE tenant = %s "
+                "AND supersedes IN (" + ids_sql + ")",
+                (PROD_TENANT, PROD_TENANT, FIXTURE_SOURCE))
+            n = prod.execute(
+                "DELETE FROM facts.device_fact WHERE tenant = %s AND source = %s",
+                (PROD_TENANT, FIXTURE_SOURCE)).rowcount
+            prod.commit()
+            print(f"生产租户 {PROD_TENANT} 夹具已清除：删 {n} 行、清掉跨租户引用 {cross} 条，"
+                  f"现在 {count_rows(prod, PROD_TENANT)} 行")
             return 0
 
         # 生产租户在验收开始前的行数。整段跑完再数一次，两个数相等才叫「没伸手进去」。
@@ -496,6 +554,45 @@ def main(argv=None) -> int:
                           and other_hash_before["value_hash"] == other_hash_after["value_hash"]),
         }
 
+        # [11] 两个「一直没有判据」的缺口：空白串、列漂移。
+        #
+        # 空白串：上游给 '' 到底算「清空」还是「没给」，协议里没定义。我们的口径是
+        # 「没给」——保持当前值不动，但把单元格记进 blanks 让巡检报数。这一条缺了的话，
+        # 哪天上游真用空串表达清空，我们会一直认为旧值有效，而且没有任何地方会响。
+        t3 = [dict(r) for r in t2]
+        for r in t3:
+            if r["device_id"] == "CX-103":
+                r["lens_model"] = ""
+        load_devices(sbx, t3)
+        plan_blank = sync(prod, sbx, tenant=SELFTEST_TENANT, source="blank_probe")
+        cur_lens = prod.execute(
+            "SELECT value FROM facts.device_fact_current WHERE tenant = %s "
+            "AND entity_id = 'CX-103' AND fact_key = 'lens_model'",
+            (SELFTEST_TENANT,)).fetchone()
+        blank_ev = {
+            "entity_id": "CX-103",
+            "fact_key": "lens_model",
+            "blank_seen": "CX-103.lens_model" in plan_blank["blanks"],
+            "opens": len(plan_blank["opens"]),
+            "closes": len(plan_blank["closes"]),
+            "current_value": cur_lens["value"] if cur_lens else None,
+            "kept": bool(cur_lens) and cur_lens["value"] == "16mm",
+        }
+        # 恢复（用 t2，不是 changed——[10] 已经把 CX-102 的工位改成 9-9，
+        # 拿 changed 恢复会额外制造一次改值，把行数统计打乱）
+        load_devices(sbx, t2)
+        sync(prod, sbx, tenant=SELFTEST_TENANT, source="blank_restore")
+
+        # 列漂移：表里每一列业务数据都必须有历史。多一列而 FACT_KEYS 没跟，
+        # 那列每轮被覆盖、永久不参与版本化，且没有任何检查会发现——
+        # 之前的注释声称「第 [6] 步会拿表结构核对」，而第 [6] 步从来不读列名。
+        cols = sbx.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'stg_devices'").fetchall()
+        dr = schema_drift([c["column_name"] for c in cols])
+        schema_ev = {"columns": [c["column_name"] for c in cols],
+                     "fact_keys": list(FACT_KEYS), **dr}
+
         chain = version_chain(prod, "CX-101", "line", tenant=SELFTEST_TENANT)
         total = count_rows(prod, SELFTEST_TENANT)
         cur = current_rows(prod, SELFTEST_TENANT)
@@ -522,6 +619,26 @@ def main(argv=None) -> int:
             # 读路径漏了租户过滤，跨客户写了引用。正常应为 0。
             "selftest_cross_tenant_refs": cross_refs,
             "selftest_rows": total,
+        }
+
+        # 时间跨度（P1-4）：这里只产出证据，不在单轮判红。
+        #
+        # 「跨度太短」或「只有一批」在任何单轮数据里都可能正常（刚部署、刚切租户）。
+        # 判红必须有跨轮基线：曾经有过 2 批以上、之后不再增长，才是同步停摆的迹象。
+        # 那条判据在 data_health.facts_drift 里，对着 eval/facts_ledger.json 比。
+        # 这里输出 span_hours 与 ingested_batches，让跨轮判断有东西可比。
+        cover = prod.execute(
+            "SELECT count(*) AS n, min(valid_from) AS f, max(valid_from) AS l, "
+            "count(DISTINCT date_trunc('hour', ingested_at)) AS batches "
+            "FROM facts.device_fact WHERE tenant = %s", (PROD_TENANT,)).fetchone()
+        coverage = {
+            "tenant": PROD_TENANT,
+            "rows": cover["n"],
+            "first_valid_from": cover["f"].strftime(fmt) if cover["f"] else None,
+            "last_valid_from": cover["l"].strftime(fmt) if cover["l"] else None,
+            "span_hours": (round((cover["l"] - cover["f"]).total_seconds() / 3600, 1)
+                           if cover["f"] and cover["l"] else 0.0),
+            "ingested_batches": cover["batches"],
         }
 
     print()
@@ -555,6 +672,16 @@ def main(argv=None) -> int:
     tn = tenant_ev
     print(f"多租户隔离   {tn['other_tenant']} 的 CX-101.line：{tn['other_rows_before']} → "
           f"{tn['other_rows_after']} 行，值指纹 {'未变' if tn['untouched'] else '被改了'}")
+    be, se = blank_ev, schema_ev
+    print(f"空白串       {be['entity_id']}.{be['fact_key']} 写 '' → "
+          f"{'记进 blanks' if be['blank_seen'] else '没记进 blanks'}、"
+          f"{be['opens']} 开 {be['closes']} 关，当前值仍 {be['current_value']!r}")
+    print(f"列漂移       stg_devices {len(se['columns'])} 列 vs FACT_KEYS "
+          f"{len(se['fact_keys'])} 个；表多 {'、'.join(se['missing_in_keys']) or '无'}，"
+          f"清单多 {'、'.join(se['extra_in_keys']) or '无'}")
+    print(f"生产覆盖     {coverage['tenant']} {coverage['rows']} 行，跨度 "
+          f"{coverage['span_hours']} 小时，{coverage['ingested_batches']} 个入库批次"
+          f"（单轮只看证据，跨轮判据在 data_health）")
     print(f"沙箱重置后   facts {surv['facts_before']} → {surv['facts_after']} 行"
           f"（沙箱清空后 {surv['sandbox_rows_after_truncate']} 行，已恢复 {surv['restored_rows']} 台）")
     print(f"生产租户     {isolation['prod_tenant']} {isolation['prod_rows_before']} → "
@@ -615,6 +742,22 @@ def main(argv=None) -> int:
             f"验收动到了生产租户（{isolation['prod_tenant']} "
             f"{isolation['prod_rows_before']} → {isolation['prod_rows_after']} 行）："
             "验收只能写自己的租户")
+    if not blank_ev["blank_seen"]:
+        issues.append("空白串没被记进 blanks（跳过是静默的：上游若真想清空，没人会知道）")
+    if not blank_ev["kept"]:
+        issues.append(
+            f"空白串改动了 {blank_ev['entity_id']}.{blank_ev['fact_key']} 的当前值"
+            "（'' 被当成真值写进历史）")
+    if blank_ev["opens"] or blank_ev["closes"]:
+        issues.append(f"空白串产生了 {blank_ev['opens']} 开 / {blank_ev['closes']} 关（应为 0/0）")
+    if schema_ev["missing_in_keys"]:
+        issues.append(
+            f"stg_devices 有 {len(schema_ev['missing_in_keys'])} 列业务数据没纳入 FACT_KEYS"
+            f"：{'、'.join(schema_ev['missing_in_keys'])}（这些列永久没有历史）")
+    if schema_ev["extra_in_keys"]:
+        issues.append(
+            f"FACT_KEYS 有 {len(schema_ev['extra_in_keys'])} 个键在 stg_devices 里不存在"
+            f"：{'、'.join(schema_ev['extra_in_keys'])}（清单已过期）")
     if len(chain) != 2:
         issues.append(f"CX-101.line 版本链 {len(chain)} 行（改一次应恰好 2 行）")
     elif chain[0]["valid_to"] is None or chain[1]["supersedes"] != chain[0]["id"]:
@@ -649,6 +792,9 @@ def main(argv=None) -> int:
             "isolation": isolation,
             "retirement": de,
             "tenant_isolation": tenant_ev,
+            "blank_cells": blank_ev,
+            "schema_drift": schema_ev,
+            "coverage": coverage,
             "totals": {"rows": total, "current": cur},
             "issues": issues,
             "status": status,

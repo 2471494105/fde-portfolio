@@ -190,6 +190,34 @@ def facts_issues(f):
     if iso.get("selftest_cross_tenant_refs"):
         out.append(f"发现 {iso['selftest_cross_tenant_refs']} 条跨租户 supersedes 引用："
                    "版本链已经跨客户了（读路径漏过租户过滤）")
+
+    # 空白串：跳过是对的，不报是错的。
+    # 上游用 '' 表达「清空」时，我们既不清也不报，旧值会一直有效下去——
+    # 这是 L1 唯一一种「上游说了一句、我们没听见」的失败形态。
+    b = f.get("blank_cells") or {}
+    if not b:
+        out.append("事实层没验空白串（'' 会不会被当成真值写进历史，未被证明）")
+    else:
+        if not b.get("blank_seen"):
+            out.append("空白串没被记进 blanks（跳过是静默的：上游真想清空时没人知道）")
+        if not b.get("kept"):
+            out.append(f"空白串改动了 {b.get('entity_id')}.{b.get('fact_key')} 的当前值"
+                       "（'' 被当成真值写进历史）")
+        if b.get("opens") or b.get("closes"):
+            out.append(f"空白串产生了 {b.get('opens')} 开 / {b.get('closes')} 关（应为 0/0）")
+
+    # 列漂移：表里每一列业务数据都必须有历史。加一列而清单没跟，那列每轮被覆盖、
+    # 永久不参与版本化，而且不会有任何检查发现——它只是安静地不在版本里。
+    d = f.get("schema_drift") or {}
+    if not d:
+        out.append("事实层没核对列清单（stg_devices 加一列会不会静默丢历史，未被证明）")
+    else:
+        if d.get("missing_in_keys"):
+            out.append(f"stg_devices 有 {len(d['missing_in_keys'])} 列业务数据没纳入 "
+                       f"FACT_KEYS：{'、'.join(d['missing_in_keys'])}（这些列永久没有历史）")
+        if d.get("extra_in_keys"):
+            out.append(f"FACT_KEYS 有 {len(d['extra_in_keys'])} 个键在 stg_devices 里不存在："
+                       f"{'、'.join(d['extra_in_keys'])}（清单已过期）")
     return out
 
 
@@ -220,6 +248,18 @@ def facts_drift(prev_facts, cur_facts):
             f"生产事实层最早一条的 valid_from 从 {pf} 变成 {cf}（跨轮）："
             "老历史消失，行数却没少"
         )
+
+    # 入库批次：只在「曾经有过 2 批以上」时才判。
+    #
+    # 刚部署、只有一批夹具导入是正常的，任何单轮「批次太少」的判断都会永远红——
+    # 那是噪声，不是判据（这一条是从跨租户判据那次假报里学来的）。但有基线之后
+    # 批次倒退，就只有两种解释：同步停摆，或者历史被清后重导。
+    pv = (prev_facts or {}).get("coverage") or {}
+    cv = (cur_facts or {}).get("coverage") or {}
+    pb, cb = pv.get("ingested_batches"), cv.get("ingested_batches")
+    if isinstance(pb, int) and isinstance(cb, int) and pb >= 2 and cb < pb:
+        out.append(f"生产事实层的入库批次从 {pb} 降到 {cb}（跨轮）："
+                   "同步可能停摆，或者历史被清后重导")
     return out
 
 
@@ -382,11 +422,16 @@ def main() -> int:
             ledger = []
     if "isolation" in (fa or {}):
         iso = fa.get("isolation") or {}
+        cov = fa.get("coverage") or {}
         ledger.append({
             "checked_at": payload["checked_at"],
             "prod_tenant": iso.get("prod_tenant"),
             "prod_rows": iso.get("prod_rows_after"),
             "prod_first_valid_from": iso.get("prod_first_valid_from"),
+            # 入库批次也记：它是「同步还在跑」唯一的时间证据。
+            # 只记行数，同步停摆（不再有新值）和「值一直没变」长得一样。
+            "prod_ingested_batches": cov.get("ingested_batches"),
+            "prod_span_hours": cov.get("span_hours"),
             "selftest_tenant": iso.get("selftest_tenant"),
             "selftest_rows": iso.get("selftest_rows"),
         })

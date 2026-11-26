@@ -12,11 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.ds.facts import (  # noqa: E402
     FACT_KEYS,
+    blank_cells,
     fact_hash,
     fact_value,
     plan_facts,
     plan_issues,
     rows_to_facts,
+    schema_drift,
 )
 
 DEVICE_ROW = {
@@ -219,6 +221,72 @@ class RetireTest(unittest.TestCase):
                            "valid_from_basis": "ingested"}],
                 "retire": [{"id": 1, "entity_id": "CX-101", "fact_key": "line"}]}
         self.assertTrue(any("两种结论冲突" in x for x in plan_issues(plan)))
+
+
+class BlankCellTest(unittest.TestCase):
+    """空白串：跳过它是判断，不报它是失职。
+
+    上游给 `''` 到底算「清空」还是「没给」，协议里没定义。我们的口径是「没给」：
+    保持当前值不动、把单元格记进 `blank_cells()` 让巡检报数。两条都要测——
+    只测「跳过」会漏掉「跳过是静默的」，只测「报数」会漏掉「值真的被改了」。
+    """
+
+    def test_blank_string_is_not_a_value(self):
+        row = dict(DEVICE_ROW, lens_model="")
+        got = rows_to_facts([row])
+        self.assertNotIn(("CX-101", "lens_model"), got)
+        # 其它属性照常进来：跳过是按单元格的，不是按行的
+        self.assertIn(("CX-101", "line"), got)
+
+    def test_whitespace_only_counts_as_blank(self):
+        for blank in ("   ", "\t", "\u3000"):
+            with self.subTest(blank=repr(blank)):
+                got = rows_to_facts([dict(DEVICE_ROW, camera_model=blank)])
+                self.assertNotIn(("CX-101", "camera_model"), got)
+
+    def test_real_value_like_zero_is_not_blank(self):
+        """`0` / `"0"` 都是值，不是空。判空只认「去掉空白后长度 0」。"""
+        self.assertIn(("CX-101", "maintenance_cycle_days"),
+                      rows_to_facts([dict(DEVICE_ROW, maintenance_cycle_days=0)]))
+        self.assertIn(("CX-101", "station"),
+                      rows_to_facts([dict(DEVICE_ROW, station="0")]))
+
+    def test_blank_cells_lists_what_was_skipped(self):
+        row = dict(DEVICE_ROW, lens_model="  ", station="")
+        blanks = blank_cells([row])
+        self.assertEqual(set(blanks), {("CX-101", "lens_model"), ("CX-101", "station")})
+
+    def test_blank_does_not_close_the_current_value(self):
+        """跳过之后那条键变成「这一轮没给」→ 进 uncovered，绝不关旧值。"""
+        current = {("CX-101", "lens_model"): {"id": 7, "value_hash": "abc", "value": "16mm"}}
+        incoming = rows_to_facts([dict(DEVICE_ROW, lens_model="")])
+        plan = plan_facts(current, incoming)
+        self.assertEqual({c["id"] for c in plan["closes"]}, set())
+        self.assertEqual({u["fact_key"] for u in plan["uncovered"]}, {"lens_model"})
+
+
+class SchemaDriftTest(unittest.TestCase):
+    """列清单漂移：表里多一列而 FACT_KEYS 没跟，那列永久没有历史且无人发现。"""
+
+    COLS = ["device_id"] + list(FACT_KEYS) + ["_src", "_loaded_at"]
+
+    def test_matching_columns_report_no_drift(self):
+        got = schema_drift(self.COLS)
+        self.assertEqual(got, {"missing_in_keys": [], "extra_in_keys": []})
+
+    def test_new_table_column_is_reported(self):
+        got = schema_drift(self.COLS + ["color"])
+        self.assertEqual(got["missing_in_keys"], ["color"])
+        self.assertEqual(got["extra_in_keys"], [])
+
+    def test_stale_key_is_reported(self):
+        got = schema_drift([c for c in self.COLS if c != "light_model"])
+        self.assertEqual(got["extra_in_keys"], ["light_model"])
+
+    def test_metadata_and_entity_key_are_not_business_columns(self):
+        """`_src` / `_loaded_at` 描述这行怎么来的，不描述设备；`device_id` 是实体键。"""
+        got = schema_drift(["device_id", "_src", "_loaded_at", "batch_id"])
+        self.assertEqual(got["missing_in_keys"], ["batch_id"])
 
 
 if __name__ == "__main__":

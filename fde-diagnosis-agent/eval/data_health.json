@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 14:23:21",
+ "checked_at": "2026-11-26 14:36:22",
  "contract": {
-  "checked_at": "2026-11-26 14:23:20",
+  "checked_at": "2026-11-26 14:36:21",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 14:23:19",
+  "checked_at": "2026-11-26 14:36:20",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 14:23:20",
+  "checked_at": "2026-11-26 14:36:21",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -248,7 +248,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 14:23:20",
+  "checked_at": "2026-11-26 14:36:21",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -472,7 +472,7 @@
   "status": "ok"
  },
  "facts": {
-  "checked_at": "2026-11-26 14:23:21",
+  "checked_at": "2026-11-26 14:36:22",
   "host_db": {
    "facts": "fde_rag",
    "current": "fde_sandbox"
@@ -574,18 +574,18 @@
    "fact_key": "line",
    "chain": [
     {
-     "id": 1000,
+     "id": 1232,
      "value": "3号线",
-     "valid_from": "2026-11-26 14:23:20",
-     "valid_to": "2026-11-26 14:23:20",
+     "valid_from": "2026-11-26 14:36:21",
+     "valid_to": "2026-11-26 14:36:21",
      "supersedes": null
     },
     {
-     "id": 1031,
+     "id": 1263,
      "value": "1号线B",
-     "valid_from": "2026-11-26 14:23:20",
+     "valid_from": "2026-11-26 14:36:21",
      "valid_to": null,
-     "supersedes": 1000
+     "supersedes": 1232
     }
    ],
    "old_closed": true,
@@ -616,7 +616,7 @@
    "prod_first_valid_from": "2026-11-26 14:15:35",
    "prod_last_valid_from": "2026-11-26 14:15:35",
    "selftest_tenant": "fcheck",
-   "selftest_rows_cleared_at_start": 44,
+   "selftest_rows_cleared_at_start": 46,
    "selftest_cross_tenant_refs": 0,
    "selftest_rows": 44
   },
@@ -639,6 +639,48 @@
    "other_hash_before": "d687460a1b1f9d16",
    "other_hash_after": "d687460a1b1f9d16",
    "untouched": true
+  },
+  "blank_cells": {
+   "entity_id": "CX-103",
+   "fact_key": "lens_model",
+   "blank_seen": true,
+   "opens": 0,
+   "closes": 0,
+   "current_value": "16mm",
+   "kept": true
+  },
+  "schema_drift": {
+   "columns": [
+    "device_id",
+    "line",
+    "station",
+    "camera_model",
+    "lens_model",
+    "light_model",
+    "install_date",
+    "maintenance_cycle_days",
+    "_src",
+    "_loaded_at"
+   ],
+   "fact_keys": [
+    "line",
+    "station",
+    "camera_model",
+    "lens_model",
+    "light_model",
+    "install_date",
+    "maintenance_cycle_days"
+   ],
+   "missing_in_keys": [],
+   "extra_in_keys": []
+  },
+  "coverage": {
+   "tenant": "client_a",
+   "rows": 35,
+   "first_valid_from": "2026-11-26 14:15:35",
+   "last_valid_from": "2026-11-26 14:15:35",
+   "span_hours": 0.0,
+   "ingested_batches": 1
   },
   "totals": {
    "rows": 44,

@@ -45,7 +45,11 @@ from datetime import date, datetime
 
 # 参与版本化的设备属性。刻意不含 device_id：它是实体键（entity_id），不是属性。
 # 这份清单必须与 stg_devices 的业务列一致；表里多一列而这里没跟，
-# 那一列就永久没有历史——`scripts/check_facts.py` 第 [6] 步会拿表结构核对。
+# 那一列就永久没有历史。`scripts/check_facts.py` 第 [11] 步拿
+# information_schema 真列清单与它逐列比对（多出的列直接判红）。
+#
+# 之前这行注释写的是「第 [6] 步会拿表结构核对」——第 [6] 步是 consistency()，
+# 拿表里的**值**比对，从不看列名。一句写错的注释，等于给了一个不存在的保证。
 FACT_KEYS = (
     "line",
     "station",
@@ -87,16 +91,28 @@ def fact_hash(v):
 def rows_to_facts(rows, keys=FACT_KEYS, id_key="device_id"):
     """把一批当前值摊平成 `{(entity_id, fact_key): value}`。
 
-    两道跳过，都是同一个意思——「这一轮没告诉我们这个值」：
+    三道跳过，都是同一个意思——「这一轮没告诉我们这个值」：
 
     - 列不在 row 里（CSV 源、外部接口会这样）；
-    - 值为 `None`（pg 落地表会这样：`SELECT *` 永远给出所有列，上游少给一列就是 NULL）。
+    - 值为 `None`（pg 落地表会这样：`SELECT *` 永远给出所有列，上游少给一列就是 NULL）；
+    - 值为空白串（`''`、纯空格、全角空格都算）。
 
     第二道是踩出来的：`stg_devices` 没有约束，少给一列的落地结果就是 NULL。第一版
     把 NULL 当成「值变了」，一次只给两列的上游就把其余 6 个属性判成「清空」——
     关掉旧值再写入 NULL，历史当场被抹平。**在 pg 源里 NULL 是语义黑洞**：
-    它同时表示「没给」和「给了空值」，落地表这一层分不出来。要表达「真的清空」，
-    必须改源端协议（空串、显式 tombstone），不能靠把 NULL 塞进这张表。
+    它同时表示「没给」和「给了空值」，落地表这一层分不出来。
+
+    第三道（空串）是这一轮补的，理由和 NULL 一样，但方向相反：`''` **看起来像
+    「清空」，实际更可能是「没给」**——Excel 导出、CSV 空单元格、接口返回空字段，
+    给的都是 `''`。第一版只跳过 NULL，于是 `''` 会被当成真值写进历史，`fact_hash('')`
+    照算，下游拿到「设备型号是一个空字符串」。而注释里写着「要表达真的清空必须
+    改源端协议（空串、显式 tombstone）」——注释把空串说成清空信号，代码把空串存成值，
+    两边一个字都没对上。
+
+    现在的口径：**`''` 一律当「没给」**，保持当前值不动，并把单元格记进
+    `blank_cells()` 让巡检报数。真要表达「这个属性被清空了」，必须走显式 tombstone
+    协议（`{"op":"clear"}` 之类），而不是让空串兼任两种语义——那等于把「上游导出
+    少了个空格」和「设备型号被注销」写成同一件事。
 
     空 device_id 的行直接跳过——没有实体，事实无处挂。
     """
@@ -106,9 +122,55 @@ def rows_to_facts(rows, keys=FACT_KEYS, id_key="device_id"):
         if eid is None or str(eid).strip() == "":
             continue
         for k in keys:
-            if k in r and r.get(k) is not None:
-                out[(str(eid), k)] = fact_value(r.get(k))
+            if k not in r:
+                continue
+            v = r.get(k)
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            out[(str(eid), k)] = fact_value(v)
     return out
+
+
+def blank_cells(rows, keys=FACT_KEYS, id_key="device_id"):
+    """这一轮「给了个空白」的单元格：`{(entity_id, fact_key): 原始值}`。
+
+    单独拿出来是为了**让跳过可被看见**。跳过本身是对的（见 `rows_to_facts`），
+    但一个永远沉默的跳过就是一次静默失效：如果上游真的想清空，我们既不清、
+    也不报，历史里那条旧值会一直有效下去。所以跳过要留痕，由巡检报数。
+    """
+    out = {}
+    for r in rows:
+        eid = r.get(id_key)
+        if eid is None or str(eid).strip() == "":
+            continue
+        for k in keys:
+            v = r.get(k)
+            if isinstance(v, str) and v.strip() == "":
+                out[(str(eid), k)] = v
+    return out
+
+
+def schema_drift(columns, keys=FACT_KEYS, reserved=("device_id",)):
+    """业务列清单与 `FACT_KEYS` 的漂移。
+
+    判据只有一条：**每一列业务数据都必须有历史**。表里多一列而 `FACT_KEYS` 没跟，
+    那一列的值每轮同步都被覆盖、永远不留版本，而且不会有任何检查发现——
+    它只是安静地不参与版本化。
+
+    返回 `{"missing_in_keys": [...], "extra_in_keys": [...]}`：
+    前者是「表有、清单没有」= 该修清单；后者是「清单有、表没有」= 该修清单或表。
+    两边都非空才算两边都有问题。
+
+    保留列的口径：`device_id` 是实体键；以 `_` 开头的是装载元数据（`_src`、`_loaded_at`），
+    它们描述「这行怎么来的」，不描述设备，不该进版本。
+    """
+    business = {c for c in columns if c not in reserved and not str(c).startswith("_")}
+    return {
+        "missing_in_keys": sorted(business - set(keys)),
+        "extra_in_keys": sorted(set(keys) - business),
+    }
 
 
 def plan_facts(current, incoming, tenant="client_a", source="sync",

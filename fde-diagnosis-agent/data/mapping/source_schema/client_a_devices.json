@@ -1,0 +1,39 @@
+{
+  "client": "client_a",
+  "table": "devices",
+  "label": "设备档案",
+  "observed_via": "csv_header",
+  "observed_at": "2026-11-26",
+  "source_path": "data/sandbox/from_client/equipment.csv",
+  "key_columns": [
+    "equip_no"
+  ],
+  "renames": {},
+  "columns": [
+    {
+      "name": "equip_no"
+    },
+    {
+      "name": "prod_line"
+    },
+    {
+      "name": "work_station"
+    },
+    {
+      "name": "cam_model"
+    },
+    {
+      "name": "lens_spec"
+    },
+    {
+      "name": "lamp_type"
+    },
+    {
+      "name": "install_dt"
+    },
+    {
+      "name": "maint_cycle"
+    }
+  ],
+  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。"
+}

@@ -1,0 +1,43 @@
+{
+  "client": "client_a",
+  "tables": [
+    {
+      "client": "client_a",
+      "table": "defect_logs",
+      "observed_via": "csv_header(defect_records.csv)",
+      "registered_at": "2026-11-26",
+      "s1_drift": {
+        "added": [],
+        "removed": [],
+        "type_changed": [],
+        "type_unchecked": [],
+        "required_changed": [],
+        "renamed": [],
+        "rename_suspect": null
+      },
+      "s2_unconsumed": [],
+      "s3_breaking": [],
+      "status": "ok",
+      "exit": 0
+    },
+    {
+      "client": "client_a",
+      "table": "devices",
+      "observed_via": "csv_header(equipment.csv)",
+      "registered_at": "2026-11-26",
+      "s1_drift": {
+        "added": [],
+        "removed": [],
+        "type_changed": [],
+        "type_unchecked": [],
+        "required_changed": [],
+        "renamed": [],
+        "rename_suspect": null
+      },
+      "s2_unconsumed": [],
+      "s3_breaking": [],
+      "status": "ok",
+      "exit": 0
+    }
+  ]
+}

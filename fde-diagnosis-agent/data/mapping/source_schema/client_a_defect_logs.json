@@ -1,0 +1,42 @@
+{
+  "client": "client_a",
+  "table": "defect_logs",
+  "label": "缺陷日志",
+  "observed_via": "csv_header",
+  "observed_at": "2026-11-26",
+  "source_path": "data/sandbox/from_client/defect_records.csv",
+  "key_columns": [
+    "rec_id"
+  ],
+  "renames": {},
+  "columns": [
+    {
+      "name": "rec_id"
+    },
+    {
+      "name": "captured_at"
+    },
+    {
+      "name": "equip_no"
+    },
+    {
+      "name": "work_station"
+    },
+    {
+      "name": "defect_name"
+    },
+    {
+      "name": "conf_pct"
+    },
+    {
+      "name": "lot_no"
+    },
+    {
+      "name": "judge"
+    },
+    {
+      "name": "is_ok"
+    }
+  ],
+  "limits": "CSV 表头只给列名，给不出类型与必填；这两维标记为未观测，不参与判定。"
+}

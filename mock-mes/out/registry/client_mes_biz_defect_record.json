@@ -1,0 +1,67 @@
+{
+  "client": "client_mes",
+  "table": "biz_defect_record",
+  "label": "缺陷记录",
+  "observed_via": "db_metadata",
+  "observed_at": "2026-11-26",
+  "source_path": "postgresql://localhost:5432/fde_client (public.biz_defect_record)",
+  "key_columns": [
+    "rec_id"
+  ],
+  "renames": {},
+  "columns": [
+    {
+      "name": "rec_id"
+    },
+    {
+      "name": "captured_at"
+    },
+    {
+      "name": "equip_no"
+    },
+    {
+      "name": "work_station"
+    },
+    {
+      "name": "defect_name"
+    },
+    {
+      "name": "conf_pct"
+    },
+    {
+      "name": "lot_no"
+    },
+    {
+      "name": "judge"
+    },
+    {
+      "name": "is_ok"
+    }
+  ],
+  "limits": "库元数据给出类型与必填（is_nullable），列集合可信、空列也可见；值域取 gov.field_registry 的 domain 声明，未声明的不参与判定。",
+  "domains": {
+    "captured_at": {
+      "format": "%Y-%m-%d %H:%M"
+    },
+    "conf_pct": {
+      "range": [
+        0,
+        100
+      ],
+      "severity": "yellow",
+      "unit": "percent"
+    },
+    "judge": {
+      "enum": [
+        "NG",
+        "OK"
+      ]
+    },
+    "is_ok": {
+      "enum": [
+        "N",
+        "Y"
+      ]
+    }
+  }
+}

@@ -64,5 +64,15 @@
   "prod_span_hours": 0.0,
   "selftest_tenant": "fcheck",
   "selftest_rows": 44
+ },
+ {
+  "checked_at": "2026-11-26 14:39:52",
+  "prod_tenant": "client_a",
+  "prod_rows": 35,
+  "prod_first_valid_from": "2026-11-26 14:15:35",
+  "prod_ingested_batches": 1,
+  "prod_span_hours": 0.0,
+  "selftest_tenant": "fcheck",
+  "selftest_rows": 44
  }
 ]

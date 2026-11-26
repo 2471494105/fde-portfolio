@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 14:36:22",
+ "checked_at": "2026-11-26 14:39:52",
  "contract": {
-  "checked_at": "2026-11-26 14:36:21",
+  "checked_at": "2026-11-26 14:39:52",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 14:36:20",
+  "checked_at": "2026-11-26 14:39:52",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 14:36:21",
+  "checked_at": "2026-11-26 14:39:52",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -248,7 +248,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 14:36:21",
+  "checked_at": "2026-11-26 14:39:52",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -472,7 +472,7 @@
   "status": "ok"
  },
  "facts": {
-  "checked_at": "2026-11-26 14:36:22",
+  "checked_at": "2026-11-26 14:39:52",
   "host_db": {
    "facts": "fde_rag",
    "current": "fde_sandbox"
@@ -574,18 +574,18 @@
    "fact_key": "line",
    "chain": [
     {
-     "id": 1232,
+     "id": 1324,
      "value": "3号线",
-     "valid_from": "2026-11-26 14:36:21",
-     "valid_to": "2026-11-26 14:36:21",
+     "valid_from": "2026-11-26 14:39:52",
+     "valid_to": "2026-11-26 14:39:52",
      "supersedes": null
     },
     {
-     "id": 1263,
+     "id": 1355,
      "value": "1号线B",
-     "valid_from": "2026-11-26 14:36:21",
+     "valid_from": "2026-11-26 14:39:52",
      "valid_to": null,
-     "supersedes": 1232
+     "supersedes": 1324
     }
    ],
    "old_closed": true,
@@ -616,7 +616,7 @@
    "prod_first_valid_from": "2026-11-26 14:15:35",
    "prod_last_valid_from": "2026-11-26 14:15:35",
    "selftest_tenant": "fcheck",
-   "selftest_rows_cleared_at_start": 46,
+   "selftest_rows_cleared_at_start": 44,
    "selftest_cross_tenant_refs": 0,
    "selftest_rows": 44
   },

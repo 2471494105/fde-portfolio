@@ -212,6 +212,7 @@ def _data_health():
     p = ROOT / "eval" / "data_health.json"
     empty = {"contract": None, "matrix_b_consistent": None,
              "incremental_duplicated": None, "quarantine_rows": None,
+             "delete_live": None, "delete_soft": None,
              "known_gap": "", "checked_at": "", "stale_minutes": None,
              "stale": False, "issues": []}
     if not p.exists():
@@ -233,6 +234,7 @@ def _data_health():
     c = d.get("contract") or {}
     m = d.get("matrix") or {}
     i = d.get("incremental") or {}
+    dl = d.get("delete") or {}
     return dict(
         empty,
         status=d.get("status") or "unknown",
@@ -244,6 +246,8 @@ def _data_health():
         contract=f"{c.get('pass')}/{c.get('total')}",
         matrix_b_consistent=m.get("b_consistent"),
         incremental_duplicated=i.get("duplicated"),
+        delete_live=dl.get("live_devices"),
+        delete_soft=dl.get("soft_deleted"),
         quarantine_rows=(d.get("quarantine") or {}).get("rows"),
         known_gap=i.get("known_gap") or "",
         issues=d.get("issues") or [],

@@ -1,18 +1,18 @@
 """数据健康检查的一键入口（G6）。
 
-为什么要这一层：契约断言 / 跨源矩阵 / 增量水位三块证据各自有脚本，但评测报告
+为什么要这一层：契约断言 / 跨源矩阵 / 增量水位 / 删除同步四块证据各自有脚本，但评测报告
 需要的是**一份能写进 meta 的汇总**。让 run_eval 现场跑它们不行——它们要连库、
 会 TRUNCATE 沙箱表、耗时不可控，而评测本身已经 53 分钟；更糟的是「跑模型」和
 「查数据」两个动作的失败会混在一起，定位时得先猜是谁坏的。
 
 所以分工成这样：
 
-    本脚本   = 动作。跑三块检查，汇总落盘 eval/data_health.json
+    本脚本   = 动作。跑四块检查，汇总落盘 eval/data_health.json
     run_eval = 只读。把这份结果写进报告 meta，标上时效（多少分钟前的检查）
 
-顺序有讲究：矩阵和增量都会动沙箱 staging 表，契约检查跑主库 fde_rag 不受影响；
-反过来先跑契约再跑增量也没事，但矩阵最后会把 stg 清空，所以增量放中间、
-契约放最后，跑完沙箱里留下的是增量那套 14 行数据，便于人工核对。
+顺序有讲究：矩阵和删除同步都会动沙箱 stg_devices，所以挨着跑；增量动 stg_defect_logs，
+契约检查跑主库 fde_rag 完全不受影响。最后跑契约，沙箱状态停在删除检查那套（5 台设备、
+1 台软删），便于人工核对。
 
 用法：
     python scripts/data_health.py
@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_data_contract as cdc  # noqa: E402
+import check_ds_delete as delsync  # noqa: E402
 import check_ds_incremental as incr  # noqa: E402
 import check_ds_matrix as matrix  # noqa: E402
 
@@ -55,13 +56,17 @@ def _run(func, argv, path):
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="data_health_"))
 
-    print("== [1/3] 跨源矩阵：四种形态同一套断言 ==")
+    print("== [1/4] 跨源矩阵：四种形态同一套断言 ==")
     m = _run(matrix.main, [f"--json={tmp / 'matrix.json'}"], tmp / "matrix.json")
 
-    print("\n== [2/3] 增量水位：八步装载 ==")
+    # 删除检查排在矩阵之后：两者都动 stg_devices，相邻跑不容易互相踩
+    print("\n== [2/4] 删除同步：缺席两次才删、骤降整轮拒绝 ==")
+    d = _run(delsync.main, [f"--json={tmp / 'delete.json'}"], tmp / "delete.json")
+
+    print("\n== [3/4] 增量水位：十步装载 ==")
     i = _run(incr.main, [f"--json={tmp / 'incr.json'}"], tmp / "incr.json")
 
-    print("\n== [3/3] 数据契约：主库 fde_rag（干净数据，应全绿）==")
+    print("\n== [4/4] 数据契约：主库 fde_rag（干净数据，应全绿）==")
     c = _run(
         cdc.main,
         [f"--dsn={PROD_DSN}", "--expect=clean", f"--json={tmp / 'contract.json'}"],
@@ -85,12 +90,22 @@ def main() -> int:
         issues.append("增量检查没跑起来")
     elif i.get("status") != "ok":
         issues.append("增量装载出现重复 id（落库幂等失效）")
+    if d.get("status") == "error":
+        issues.append("删除同步检查没跑起来")
+    elif d.get("status") != "ok":
+        issues.append("删除同步出现异常判定（误删或该删未删）")
+    # 三道护栏任一失效都算红：这是「不报错但删多了」的地方，不能只看 status
+    if d.get("status") == "ok":
+        guards = d.get("guards") or []
+        if len(guards) < 5:
+            issues.append("删除同步的护栏少了（应有 5 条）")
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "contract": c,
         "matrix": m,
         "incremental": i,
+        "delete": d,
         "quarantine": {
             "db": "fde_sandbox",
             "rows": sum(x["n"] for x in q) if q else 0,
@@ -113,6 +128,8 @@ def main() -> int:
     print(f"跨源矩阵      {len(forms)} 种形态，B 类一致：{m.get('b_consistent')}")
     print(f"增量水位      最终 {i.get('final_rows')} 行 / {i.get('unique_ids')} 个不同 id，"
           f"重复：{i.get('duplicated')}")
+    print(f"删除同步      活跃 {d.get('live_devices')} 台 / 软删 {d.get('soft_deleted')} 台 / "
+          f"审计 {d.get('audit_rows')} 条 / 护栏 {len(d.get('guards') or [])} 条")
     print(f"隔离区        {(payload['quarantine'])['rows']} 条（来自检查夹具，见 note）")
     if issues:
         print("\n问题：")
@@ -121,7 +138,7 @@ def main() -> int:
     else:
         print("\n没有发现问题")
     print(f"汇总已写入 {OUT.relative_to(ROOT)}")
-    print("跑评测之前执行这一步，报告 meta 里才会有这四块证据")
+    print("跑评测之前执行这一步，报告 meta 里才会有这五块证据")
     return 0 if not issues else 1
 
 

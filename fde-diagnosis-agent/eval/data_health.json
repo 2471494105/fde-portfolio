@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-25 18:43:58",
+ "checked_at": "2026-11-26 11:11:16",
  "contract": {
-  "checked_at": "2026-11-25 18:43:58",
+  "checked_at": "2026-11-26 11:11:16",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-25 18:43:58",
+  "checked_at": "2026-11-26 11:11:16",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-25 18:43:58",
+  "checked_at": "2026-11-26 11:11:16",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -163,6 +163,111 @@
   "quarantine_rows": 1,
   "overlap": "1 day（第 [9] 步）",
   "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
+  "status": "ok"
+ },
+ "delete": {
+  "checked_at": "2026-11-26 11:11:16",
+  "db": "fde_sandbox",
+  "steps": [
+   {
+    "name": "[1] 首轮全量 5 台（无水可删）",
+    "aborted": false,
+    "actions": {},
+    "live": 5
+   },
+   {
+    "name": "[2] CX-105 第一次缺席（只记账，不删）",
+    "aborted": false,
+    "actions": {
+     "mark_absent": 1
+    },
+    "live": 5
+   },
+   {
+    "name": "[3] CX-105 第二次缺席（判删）",
+    "aborted": false,
+    "actions": {
+     "soft_delete": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[4] CX-105 回补（应复活）",
+    "aborted": false,
+    "actions": {
+     "revive": 1
+    },
+    "live": 5
+   },
+   {
+    "name": "[5] CX-104 下发删除事件（立刻软删，不等第二次）",
+    "aborted": false,
+    "actions": {
+     "soft_delete": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[6a] CX-103 缺席 1 次（被保护，转人工）",
+    "aborted": false,
+    "actions": {
+     "protect": 1,
+     "noop": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[6b] CX-103 缺席 2 次（仍不删）",
+    "aborted": false,
+    "actions": {
+     "protect": 1,
+     "noop": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[6c] CX-103 缺席 3 次（仍不删）",
+    "aborted": false,
+    "actions": {
+     "protect": 1,
+     "noop": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[6d] CX-105 缺席 1 次 + CX-103 回到快照（复活）",
+    "aborted": false,
+    "actions": {
+     "revive": 1,
+     "noop": 1,
+     "mark_absent": 1
+    },
+    "live": 4
+   },
+   {
+    "name": "[7] 快照骤降到 1 台（整轮拒绝，一条不删）",
+    "aborted": true,
+    "actions": {},
+    "live": 4
+   }
+  ],
+  "live_devices": 4,
+  "soft_deleted": 1,
+  "audit_rows": 13,
+  "protected": [
+   {
+    "id": "CX-103",
+    "absent_count": 0,
+    "deleted": false
+   }
+  ],
+  "guards": [
+   "首次缺席不删（阈值 2）",
+   "快照骤降整轮拒绝（<50%）",
+   "未闭环引用不删",
+   "重新出现即复活",
+   "每次判定留审计"
+  ],
   "status": "ok"
  },
  "quarantine": {

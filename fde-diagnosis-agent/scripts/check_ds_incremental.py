@@ -129,6 +129,60 @@ def overlap_policy():
     }
 
 
+# 隔离区的自指问题：本脚本开头 TRUNCATE stg_quarantine，跑完又只留 1 条固定夹具，
+# 于是 data_health 那条「比上次多就红」的判据永远只拿到 delta=0——护栏写在了代码里，
+# 但从来没有被输入触发过。第 [11] 步专门造一次 +1 再回收，让那条判据每轮都有活的输入，
+# 而不是靠人手工把旧 JSON 改小去验一次。
+QUARANTINE_PROBE_ID = 9030
+QUARANTINE_PROBE = {
+    "id": QUARANTINE_PROBE_ID,
+    "ts": "2030-01-01 08:00:00",
+    "device_id": "CX-PROBE",
+    "station": "2号工位",
+    "defect_type": "划伤",
+    "confidence": 0.90,
+    "batch": "B_PROBE",
+    "verdict": "NG",
+    "is_actually_ok": False,
+}
+
+
+def count_quarantine(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) AS n FROM stg_quarantine")
+        return cur.fetchone()["n"]
+
+
+def drop_probe_rows(conn):
+    """只删自己插的那一行，不 TRUNCATE——检查不该顺手清掉别人的隔离记录。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM stg_quarantine WHERE src_table = 'defect_logs' AND row_id = %s",
+            (QUARANTINE_PROBE_ID,),
+        )
+    conn.commit()
+
+
+def quarantine_probe_verdict(before, after, restored):
+    """三个数全部来自真查库，一个都不是声明的。
+
+    返回 (ok, 说明)。data_health 里有「隔离区比上次多就红」的判据，但本项目每轮
+    都会把隔离区 TRUNCATE 成恰好 1 条固定夹具，delta 恒为 0——判据在，输入不在。
+    探针造一次 +1 再收回，等于每轮给这条判据喂一次真实的输入。
+    """
+    if after - before != 1:
+        return False, (
+            f"探针没让隔离区涨 1 条（{before} → {after}）："
+            "隔离区上涨已经不可观测，data_health 那条判据等于没验过"
+        )
+    if restored != before:
+        return False, (
+            f"探针回收后剩 {restored} 条、原为 {before} 条："
+            "检查污染了它自己要检查的对象"
+        )
+    return True, f"隔离区 {before} → {after}（+1）→ {restored}：上涨可观测，且能收回"
+
+
 def load(conn, rows, fail_after_insert=False, overlap=None):
     """返回 (本次新增条数, 水位, 本次隔离条数)。插入与水位推进同事务。
 
@@ -232,6 +286,17 @@ def main(argv=None) -> int:
         n, m, f = load(conn, BASE, overlap=PROBE_OVERLAP)
         log.append(("[10] 重叠区全是旧行（应 0 且水位不倒退）", n, f, count_rows(conn), m))
 
+        # [11] 隔离区上涨探针。三个数都真查库，不是算出来的：
+        # 造一次 +1 → 收回 → 还原值必须回到原样，否则检查污染了自己要检查的对象。
+        q_before = count_quarantine(conn)
+        load(conn, [QUARANTINE_PROBE])
+        q_after = count_quarantine(conn)
+        drop_probe_rows(conn)
+        q_restored = count_quarantine(conn)
+        probe_ok, probe_note = quarantine_probe_verdict(q_before, q_after, q_restored)
+        log.append((f"[11] 隔离区上涨探针（{q_before}→{q_after}→{q_restored}）",
+                    0, q_after - q_before, count_rows(conn), get_mark(conn)))
+
         with conn.cursor() as cur:
             cur.execute(f"SELECT count(*) AS total, count(DISTINCT id) AS uniq FROM {STG}")
             r = cur.fetchone()
@@ -253,6 +318,8 @@ def main(argv=None) -> int:
     print("第 [8] 步是残留边界：复合水位要求主键单调递增，客户补录一条更小的主键仍会漏。")
     print("第 [9] 步把这条边界补掉：水位往回退 1 天取候选，重叠区靠落库幂等去重，代价是每次多读一小段。")
     print("第 [10] 步守住代价的另一头：重叠区全是旧行时 max 会比原水位更早，水位不许因此倒退。")
+    print("第 [11] 步是给隔离区那条判据喂一次真实输入：本脚本开头会 TRUNCATE 隔离区，")
+    print("  跑完只留 1 条固定夹具，所以 data_health 的 delta 恒为 0——护栏写着了，但没被触发过。")
 
     # 结构化落盘（G6）。known_gap 一起写：报告里不能只有「增量跑通了」，
     # 还得带上「它在什么情况下会漏」——否则这份证据比没有更容易被误读。
@@ -269,6 +336,17 @@ def main(argv=None) -> int:
             "unique_ids": r["uniq"],
             "duplicated": r["total"] != r["uniq"],
             "quarantine_rows": q,
+            # 隔离区「涨了会被发现」这条判据的实证：三个数都来自真查库。
+            # 缺它时 data_health 会红——没有反例的护栏，等于没有护栏。
+            "quarantine_probe": {
+                "row_id": QUARANTINE_PROBE_ID,
+                "before": q_before,
+                "after": q_after,
+                "delta": q_after - q_before,
+                "restored": q_restored,
+                "ok": probe_ok,
+                "note": probe_note,
+            },
             "overlap": f"{overlap_policy()['window_days']:g} 天（第 [9] 步）",
             "policy": overlap_policy(),
             # 交叉验证的实证：不带窗口漏几条、带窗口补几条。数字来自实跑，
@@ -280,7 +358,7 @@ def main(argv=None) -> int:
             },
             "known_gap": "不给 overlap 时，同时间戳 + 更小主键后到仍会漏（[8] 验证）；"
                          "给 overlap=1 天可补齐（[9] 验证）；重叠区全是旧行时水位不倒退（[10] 验证）",
-            "status": "ok" if r["total"] == r["uniq"] else "fail",
+            "status": "ok" if (r["total"] == r["uniq"] and probe_ok) else "fail",
         }
         Path(json_out).write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"

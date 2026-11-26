@@ -1,7 +1,7 @@
 {
- "checked_at": "2026-11-26 12:29:36",
+ "checked_at": "2026-11-26 12:58:10",
  "contract": {
-  "checked_at": "2026-11-26 12:29:36",
+  "checked_at": "2026-11-26 12:58:09",
   "db": "fde_rag",
   "expect": "clean",
   "prefix": "",
@@ -12,7 +12,7 @@
   "status": "ok"
  },
  "matrix": {
-  "checked_at": "2026-11-26 12:29:35",
+  "checked_at": "2026-11-26 12:58:09",
   "db": "fde_sandbox",
   "forms": [
    {
@@ -83,7 +83,7 @@
   "status": "ok"
  },
  "incremental": {
-  "checked_at": "2026-11-26 12:29:35",
+  "checked_at": "2026-11-26 12:58:09",
   "db": "fde_sandbox",
   "steps": [
    {
@@ -155,12 +155,28 @@
     "quarantine": 1,
     "total": 15,
     "mark": "2026-11-06 08:00:00 #9022"
+   },
+   {
+    "name": "[11] 隔离区上涨探针（1→2→1）",
+    "added": 0,
+    "quarantine": 1,
+    "total": 15,
+    "mark": "2026-11-06 08:00:00 #9022"
    }
   ],
   "final_rows": 15,
   "unique_ids": 15,
   "duplicated": false,
   "quarantine_rows": 1,
+  "quarantine_probe": {
+   "row_id": 9030,
+   "before": 1,
+   "after": 2,
+   "delta": 1,
+   "restored": 1,
+   "ok": true,
+   "note": "隔离区 1 → 2（+1）→ 1：上涨可观测，且能收回"
+  },
   "overlap": "1 天（第 [9] 步）",
   "policy": {
    "window_seconds": 86400,
@@ -177,7 +193,7 @@
   "status": "ok"
  },
  "delete": {
-  "checked_at": "2026-11-26 12:29:35",
+  "checked_at": "2026-11-26 12:58:09",
   "db": "fde_sandbox",
   "content_hash_cols": {
    "cols": [
@@ -409,7 +425,7 @@
   "reasons": {
    "ts_in_future": 1
   },
-  "note": "这条来自增量检查的固定夹具（id=4、ts=2027-01-01），是隔离功能生效的证据，不是生产脏数据；生产库的隔离区请单独跑 check_data_contract.py --dsn=<生产库>"
+  "note": "绝对值 1 条来自增量检查的固定夹具（id=4、ts=2027-01-01），不是生产脏数据；「隔离区涨了会不会被发现」由增量检查第 [11] 步每轮造一次 +1 再收回证明（见 incremental.quarantine_probe），所以这里的 delta 只在固定夹具缺席时才不是 0；生产库的隔离区请单独跑 check_data_contract.py --dsn=<生产库>"
  },
  "issues": [],
  "status": "ok"

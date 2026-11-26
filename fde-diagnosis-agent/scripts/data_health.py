@@ -53,6 +53,23 @@ def _run(func, argv, path):
         return {"status": "error", "note": f"JSON 读不出来：{type(e).__name__}: {e}"}
 
 
+def quarantine_probe_issues(qp):
+    """隔离区探针证据的判据，抽成纯函数好被单测钉住。
+
+    只看三个真查库的数字，不看增量脚本自己的 ok 字段——自评不算证据。
+    """
+    if not qp:
+        return ["隔离区增量没被验过（增量检查没给探针证据，Δ>0 这条判据可能从未触发）"]
+    before, after, restored = qp.get("before"), qp.get("after"), qp.get("restored")
+    if not all(isinstance(x, int) for x in (before, after, restored)):
+        return ["隔离区探针证据不完整（before/after/restored 有缺失）"]
+    if after - before != 1:
+        return [f"隔离区探针没造出 +1（{before} → {after}）：隔离区上涨已不可观测"]
+    if restored != before:
+        return [f"隔离区探针没回收干净（剩 {restored}，原 {before}）"]
+    return []
+
+
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="data_health_"))
 
@@ -84,7 +101,9 @@ def main() -> int:
     # 但要注意一个自指问题：增量检查每轮都会 TRUNCATE stg_quarantine 再插 1 条夹具，
     # 也就是「检查脚本重置了它自己要检查的对象」。所以在本项目里 delta 恒为 0，
     # 它测不出真实世界的变化；真实环境里隔离区不复位，这个数才是有意义的信号。
-    # 判据本身验过：把旧值改成 0 再跑，delta=+1 会红；再跑一次自愈回 0。
+    # 判据不再靠人验一次：增量检查第 [11] 步每轮造一次 +1 再收回，下面只复核它给的
+    # 三个数（before/after/restored），不看它自己的 ok 字段。缺证据、涨不上去、
+    # 收不回来，三种都红。
     prev_rows = None
     if OUT.exists():
         try:
@@ -143,6 +162,10 @@ def main() -> int:
         issues.append("隔离区读不到（表不存在或库连不上，不等于 0 条）")
     elif delta is not None and delta > 0:
         issues.append(f"隔离区比上次多了 {delta} 条（有新行被挡在主表外）")
+    # 「隔离区涨了会红」这条判据必须每轮有真实输入。增量检查第 [11] 步造一次 +1 再收回，
+    # 这里只复核它给的那三个数（见 quarantine_probe_issues）。
+    if i.get("status") != "error":
+        issues.extend(quarantine_probe_issues(i.get("quarantine_probe") or {}))
 
     payload = {
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -160,8 +183,10 @@ def main() -> int:
             "reasons": {x["reason"]: x["n"] for x in q} if q else {},
             # 这 1 条不是「生产库脏了」，是增量检查的固定夹具（2027 年那条）。
             # 不写清来源，读报告的人会以为系统在往隔离区里丢数据。
-            "note": ("这条来自增量检查的固定夹具（id=4、ts=2027-01-01），是隔离功能生效的证据，"
-                     "不是生产脏数据；生产库的隔离区请单独跑 check_data_contract.py --dsn=<生产库>"),
+            "note": ("绝对值 1 条来自增量检查的固定夹具（id=4、ts=2027-01-01），不是生产脏数据；"
+                     "「隔离区涨了会不会被发现」由增量检查第 [11] 步每轮造一次 +1 再收回证明"
+                     "（见 incremental.quarantine_probe），所以这里的 delta 只在固定夹具缺席时才不是 0；"
+                     "生产库的隔离区请单独跑 check_data_contract.py --dsn=<生产库>"),
         },
         "issues": issues,
         "status": "ok" if not issues else "fail",

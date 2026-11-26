@@ -365,6 +365,28 @@ venv\Scripts\python.exe -X utf8 scripts\verify_alerts.py
 
 实测：2 条活事件（工位归属 362 行 / 缺陷字段 5 行），各 6 轮仍红；页面环形 362 / 5 / 0（98.6% 集中在工位归属）。`verify_alerts.py` A1–A7 全 `[ok]`，`mock-mes/scripts/verify_console.py` C1–C9 ALL PASS（无外网资源、五个数字与接口逐项相等、趋势恰三条），单测 18 条、全量 594。证据与「没做什么」（无值班表、阈值是拍的、无实时推送）在 `docs/20261126_23_中控台与推送.md`（`DOC-65`）。
 
+### 一条命令巡检 + 扫描自检（T24）
+
+上一版有个洞：**事件是扫描生成的，但扫描本身没记录**。页面显示「未处理 2 · 违约行 367」，却答不出这组数字是五分钟前还是上周——判据静默有 KPI，扫描静默没有。
+
+四件事：
+
+- 每次真扫完落一行 `check_id=alert_sweep`，`red_count` 口径是**新增推送条数**（`details.red_metric=pushed_events`），不是违约行数；
+- 中控台第三张卡改成「事件扫描」，值取扫描年龄；超过 24 h 或从未扫 → 卡片转红 + 顶部横幅写明恢复命令；
+- `scripts/patrol.py` 一条命令按顺序跑完：三道判据 → 事件扫描。退出码 0 无事 / 1 有新事件 / 2 有环节崩了（**崩了不许当红也不许当绿**）；
+- 顺手补两处：`/v1/obs/api` 增 `errors_by_path`（以前只有 `errors: 31`，答不出哪条接口在坏）；`obs.record` 跳过 `/favicon.ico`（浏览器自己来要的 404 不是接口故障）。
+
+```powershell
+# 一条命令巡检（默认只落投递箱；有新增事件 exit 1）
+venv\Scripts\python.exe -X utf8 scripts\patrol.py
+
+# 验收：P1–P6（一条命令 / 自检口径 / 不重复推 / 错误按路径 / 横幅 / 静默置位）
+venv\Scripts\python.exe -X utf8 scripts\verify_patrol.py
+```
+
+实测 `patrol.py --quiet` 输出 `[红] station_contract` / `[绿] status_policy` / `[红] defect_fields` + 扫描 `run_id`；自检行 `alert_sweep ok pushed 0`，复跑 exit 0 且自检行 +1。静默横幅用「把三行 `ran_at` 临时改到 30 h 前、截完逐行还原」验过（`out/ui/console-stale-1280.png`）。`verify_patrol.py` P1–P6 全 `[ok]`，`verify_alerts` / `verify_console` 仍全 PASS，单测 594。证据在 `docs/20261126_24_巡检与自检.md`（`DOC-66`）。
+
+
 ## 目录
 
 ```

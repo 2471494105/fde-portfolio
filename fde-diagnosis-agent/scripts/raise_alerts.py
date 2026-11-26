@@ -35,6 +35,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ds import alerts as al  # noqa: E402
+from app.ds import runlog  # noqa: E402
 
 CLIENT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_client"
 
@@ -82,6 +83,9 @@ def plan(rows: list[dict], orders: list[dict], now: datetime) -> tuple[list[dict
     events: list[dict] = []
     closes: list[dict] = []
     for check_id in al.TITLES:
+        # 扫描自己的 red_count 是「本次新增推送数」，不是违约行；拿它做红事件会自指造噪音
+        if check_id == "alert_sweep":
+            continue
         runs = by_check.get(check_id) or []
         if not runs:
             continue
@@ -207,6 +211,44 @@ def _mark_delivery(dsn: str, pushed: list[dict], channel: str, err: str) -> None
             )
 
 
+def record_sweep(dsn: str, t0: float, events: list[dict], closes: list[dict],
+                 pushed: list[dict], errs: list[str], channel: str) -> int | None:
+    """把「扫描自己跑过没有」写进同一张运行台账。
+
+    没有这一行，中控台就有一个无法回答的问题：页面上的数字是「现在」还是「上周」？
+    扫描的 check_id 是 `alert_sweep`，它的 red_count 口径是**本次新增推送条数**
+    （不是违约行数）——两种量混成一个数，趋势线又会失去意义。
+    """
+    import time
+
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        open_n = conn.execute("select count(*) from gov_alert where state <> 'closed'").fetchone()[0]
+    details = {
+        "red_metric": "pushed_events",
+        "events": len(events),
+        "closes": len(closes),
+        "pushed": len(pushed),
+        "channel": channel or "inbox",
+        "error": errs[0] if errs else None,
+        "open": int(open_n),
+    }
+    try:
+        return runlog.record(
+            "alert_sweep",
+            "fail" if errs else "ok",
+            len(pushed),
+            int((time.perf_counter() - t0) * 1000),
+            dataset="fde_client @ gov_alert",
+            details=details,
+            dsn=dsn,
+        )
+    except Exception as e:  # 写不进去要说出来：自检缺一条，不能当扫描成功
+        print(f"[warn] 扫描自检没写进台账：{type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
 def cmd_list(dsn: str) -> int:
     import psycopg
     from psycopg.rows import dict_row
@@ -259,10 +301,14 @@ def cmd_state(dsn: str, alert_id: int, state: str, by: str | None, reason: str |
 
 
 def main(argv: list[str]) -> int:
+    import time
+
+    t0 = time.perf_counter()
     dsn = os.environ.get("FDE_CLIENT_DSN", CLIENT_DSN)
     webhook = os.environ.get("FDE_ALERT_WEBHOOK", "")
     channel = os.environ.get("FDE_ALERT_CHANNEL", "json")
     dry = False
+    record = True
     mode = "scan"
     alert_id = None
     by = reason = None
@@ -271,6 +317,8 @@ def main(argv: list[str]) -> int:
     for a in argv:
         if a == "--dry-run":
             dry = True
+        elif a == "--no-sweep":
+            record = False
         elif a == "--list":
             mode = "list"
         elif a.startswith("--dsn="):
@@ -314,6 +362,11 @@ def main(argv: list[str]) -> int:
 
     res = upsert(dsn, events, closes, now)
     errs = deliver(res["pushed"], webhook, channel, dsn)
+    if record:
+        run_id = record_sweep(dsn, t0, events, closes, res["pushed"], errs, channel)
+        if run_id:
+            print(f"扫描自检 → run_id={run_id}（新增推送 {len(res['pushed'])} 条，"
+                  f"通道 {channel if webhook else 'inbox'}）")
     if errs:
         return 2
     return 1 if res["pushed"] else 0

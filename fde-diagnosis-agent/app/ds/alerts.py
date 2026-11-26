@@ -23,6 +23,8 @@ TITLES = {
     "source_schema": "源端表结构与登记对不上",
     "value_domain": "数值量纲或枚举值越界",
     "data_contract": "映射表缺列或水位断裂",
+    # 扫描自己也是一条要被观测的判据：它停了，中控台上的数字就不再代表现在
+    "alert_sweep": "事件扫描（中控台自检）",
 }
 
 # 每道判据的默认责任方（与登记表 owner 一致，缺省写「待指派」而不是编一个人）
@@ -30,6 +32,7 @@ OWNERS = {
     "station_contract": "产线计划员",
     "status_policy": "车间主管",
     "defect_fields": "质量工程师",
+    "alert_sweep": "值班人",
 }
 
 SILENT_HOURS = 24

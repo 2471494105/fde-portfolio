@@ -62,6 +62,9 @@
   .chip.acked{background:#21302a;color:#7fd1a9;border:1px solid #2e5443}
   .chip.closed{background:#1d232b;color:#6b7b8c;border:1px solid #2a3540}
   .empty{padding:26px 10px;color:var(--ink-faint);font-size:13px}
+  .banner{margin:0 0 12px;padding:10px 14px;border:1px solid #6b2c2b;background:#3a1c1d;
+    color:#ffb3ae;border-radius:5px;font-size:12.5px;line-height:1.6}
+  .banner b{color:#ff8b86}
   footer{margin-top:16px;font-size:11px;color:var(--ink-faint);line-height:1.8}
   .err{color:var(--red);font-size:12px;margin-top:8px}
   @media (max-width:1100px){
@@ -84,6 +87,8 @@
 </header>
 
 <main>
+  <!-- 监控自己的监控：扫描停了，整页数字就不再代表「现在」 -->
+  <div class="banner" id="stale-banner" hidden></div>
   <div class="kpis">
     <div class="kpi" id="kpi-open-card">
       <div class="label">未处理事件</div>
@@ -95,10 +100,10 @@
       <div class="value" id="kpi-rows">—<small> 行</small></div>
       <div class="note" id="kpi-rows-note">工单 · 缺陷 · 状态</div>
     </div>
-    <div class="kpi">
-      <div class="label">判据复跑</div>
+    <div class="kpi" id="kpi-runs-card">
+      <div class="label">事件扫描</div>
       <div class="value" id="kpi-runs">—</div>
-      <div class="note" id="kpi-runs-note">静默判据 0</div>
+      <div class="note" id="kpi-runs-note">判据 3 道 · 静默 0</div>
     </div>
     <div class="kpi amber">
       <div class="label">整改单未关</div>
@@ -164,6 +169,8 @@ const CHECK_COLOR = {
   defect_fields: "#f2b45c",
   status_policy: "#5ad1a0",
 };
+// KPI 备注用短名：卡片一行放不下「工单/缺陷归属」这种全称
+const CHECK_SHORT = { station_contract: "工单", defect_fields: "缺陷", status_policy: "状态" };
 const fmt = (n) => (n === null || n === undefined ? "—" : String(n));
 
 async function getJSON(url) {
@@ -251,13 +258,13 @@ async function load() {
     const latest = {};
     for (const r of runs.recent) if (!latest[r.check_id]) latest[r.check_id] = r;
     const parts = Object.keys(CHECK_NAME).map((id) => ({
-      name: CHECK_NAME[id], value: latest[id] ? Number(latest[id].red_count) : 0,
+      id, name: CHECK_NAME[id], value: latest[id] ? Number(latest[id].red_count) : 0,
       color: CHECK_COLOR[id],
     }));
     const rowsTotal = parts.reduce((s, p) => s + p.value, 0);
     document.getElementById("kpi-rows").innerHTML = `${rowsTotal}<small> 行</small>`;
     document.getElementById("kpi-rows-note").textContent =
-      parts.map((p) => `${p.name} ${p.value}`).join(" · ");
+      parts.map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ");
     drawRing(parts);
 
     const series = Object.keys(CHECK_NAME).map((id) => {
@@ -267,11 +274,31 @@ async function load() {
     drawSparks(series);
 
     const newest = runs.recent[0];
+    const sweep = runs.checks.find((c) => c.check_id === "alert_sweep");
+    const onlyChecks = runs.checks.filter((c) => c.check_id !== "alert_sweep");
+    const silent = onlyChecks.filter((c) => c.silent).length;
+    const age = (h) => (h < 1 ? `${Math.max(0, Math.round(h * 60))}<small> 分钟前</small>`
+                              : `${Math.round(h)}<small> 小时前</small>`);
+    // 这卡片答的是「页面上的数字是现在的吗」，所以先报扫描，再报判据
     document.getElementById("kpi-runs").innerHTML =
-      newest ? `${Math.max(0, Math.round(newest.minutes_since))}<small> 分钟前</small>` : "—";
-    const silent = runs.checks.filter((c) => c.silent).length;
+      sweep ? age(sweep.hours_since) : "从未";
     document.getElementById("kpi-runs-note").textContent =
-      `${runs.checks.length} 道判据 · 静默 ${silent} · 台账 ${runs.recent.length} 条`;
+      `判据 ${onlyChecks.length} · 静默 ${silent} · 复跑 `
+      + (newest ? `${Math.max(0, Math.round(newest.minutes_since))} 分钟前` : "—");
+
+    // 扫描自己超过阈值没跑：不能只是数字变旧，要红出来，并说清怎么恢复
+    const banner = document.getElementById("stale-banner");
+    if (!sweep || sweep.silent) {
+      const hrs = sweep ? Math.round(sweep.hours_since) : null;
+      banner.hidden = false;
+      banner.innerHTML = `<b>事件扫描已${hrs === null ? "从未跑过" : hrs + " 小时没跑"}</b>，`
+        + `下面的数字可能早已过期。恢复：<code>python -X utf8 scripts\\raise_alerts.py</code>`
+        + `（或一条命令 <code>scripts\\patrol.py</code>）。`;
+      document.getElementById("kpi-runs-card").className = "kpi red";
+    } else {
+      banner.hidden = true;
+      document.getElementById("kpi-runs-card").className = "kpi";
+    }
 
     const openRm = rms.items.filter((r) => r.state !== "closed");
     const overdue = openRm.filter((r) => r.due_on && new Date(r.due_on) < new Date()).length;
@@ -280,8 +307,9 @@ async function load() {
       `逾期 ${overdue} · 覆盖 ${openRm.reduce((s, r) => s + Number(r.violation_count || 0), 0)} 行`;
 
     document.getElementById("kpi-p95").innerHTML = `${obs.api.p95_ms}<small> ms</small>`;
+    const topErr = (obs.api.errors_by_path || [])[0];
     document.getElementById("kpi-p95-note").textContent =
-      `4xx/5xx ${obs.api.errors} · 窗口 ${obs.api.window}`;
+      `4xx/5xx ${obs.api.errors}${topErr ? " · 最多 " + topErr.path + " " + topErr.n : ""}`;
 
     const stale = obs.freshness.stale.length, future = obs.freshness.future.length;
     document.getElementById("kpi-fresh").innerHTML = `${stale}<small> 陈旧</small>`;

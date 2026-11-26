@@ -43,6 +43,9 @@ FRESHNESS = [
 
 
 def record(path: str, status: int, ms: float) -> None:
+    # favicon 是浏览器自己来要的，404 不代表接口坏了；混进错误率会让人去查一条不存在的路
+    if path.rstrip("/").endswith("/favicon.ico"):
+        return
     with _lock:
         _samples.append((datetime.now(timezone.utc), path, int(status), float(ms)))
         _paths[path] += 1
@@ -72,6 +75,8 @@ def api_snapshot() -> dict:
         "p95_ms": round(_pct(lat, 0.95), 1),
         "max_ms": round(max(lat), 1) if lat else 0.0,
         "errors": errors,
+        # 错误数单独一个 31 说明不了「哪条路在坏」：按路径拆，页面才能指向一条接口
+        "errors_by_path": [{"path": p, "n": n} for p, n in _errors.most_common(5)],
         "by_status": dict(Counter("2xx" if r[2] < 300 else "3xx" if r[2] < 400 else "4xx" if r[2] < 500 else "5xx" for r in rows)),
         "slowest": [
             {"path": r[1], "status": r[2], "ms": round(r[3], 1), "at": r[0].isoformat()}

@@ -206,6 +206,22 @@ def _norm_val(v):
     return str(v).strip()
 
 
+def _is_num(s):
+    """这个值是不是数字。决定「能不能不写结构化 value」。
+
+    数值字段（保养周期 90 天、累计点亮 8620 小时）必须给 value：
+    正文里出现 90 不能证明"这个数属于这个字段"，省掉就分不出值对与值错。
+    文本字段（工位「1-3号工位」、线别「1号线B」、型号、安装日期）恰恰相反——
+    把它掰成一个数字（value: 3）才是错，照原样写进正文才是对的。
+    这条分叉不是放宽，是承认两类字段的正确写法本来就不一样。
+    """
+    try:
+        float(s)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def _fact_audit(state):
     """L4 回指：结论里的设备事实，能不能指回 facts 里那一条当前行。
 
@@ -261,14 +277,35 @@ def _fact_audit(state):
         # 反过来，最近那条真的已关闭时——结论引用了过期事实，该红。
         cands.sort(key=lambda x: int(x.get("turn") or 0), reverse=True)
         r = cands[0]
+        fv = _norm_val(r.get("value"))
+        cv = _norm_val(c.get("value"))
         if not r.get("fact_id"):
             problems.append(f"claim[{i}] {ref} 的回指缺 fact_id")
         elif r.get("valid_to"):
             problems.append(f"claim[{i}] {ref} 指到已关闭行 #{r.get('fact_id')}"
                             f"（valid_to={r.get('valid_to')}）")
-        elif _norm_val(c.get("value")) != _norm_val(r.get("value")):
-            problems.append(f"claim[{i}] {ref} 值不等：claim={c.get('value')!r} "
-                            f"fact={r.get('value')!r}")
+        elif cv:
+            # 给了结构化值就逐字比。文本字段也一样：把「1-3号工位」写成 3,
+            # 是"引用了一个不存在的值"，不是"写法不同"。
+            if cv != fv:
+                problems.append(f"claim[{i}] {ref} 值不等：claim={c.get('value')!r} "
+                                f"fact={r.get('value')!r}")
+        else:
+            # 没写结构化值。数值字段不许省，文本字段允许由正文承载——
+            # 2026-11-26 修：T2 第三遍模型写的是
+            # {"text": "设备档案登记工位为「1-3号工位」", "ref": "...station"}，
+            # 正文与 facts 逐字一致，却因为 value 为空被判"值不等：claim=None"。
+            # 把「没给」报成「给错」，还说结论无法回指——判据自己在制造假红。
+            if not fv:
+                problems.append(f"claim[{i}] {ref} 事实层这一行没有值，无法核对"
+                                f"（数据层缺口，不是结论的问题）")
+            elif _is_num(fv):
+                problems.append(f"claim[{i}] {ref} 没写 value（数值字段必须给结构化值，"
+                                f"fact={r.get('value')!r}）")
+            elif _norm(fv) not in _norm(c.get("text")):
+                problems.append(f"claim[{i}] {ref} 正文没写该值："
+                                f"fact={r.get('value')!r} "
+                                f"text={str(c.get('text') or '')[:40]!r}")
     return problems, checked
 
 
@@ -467,6 +504,19 @@ def judge(traj, state):
     # 用渲染后的可读版本判断关键词：final 现在是 claims JSON，
     # 直接匹配会把字段名（"conclusion"）也算进去，等于放宽了关键词检查。
     readable = state.get("final_text") or final
+    # claims 原文进报告（2026-11-26，DOC-50）。
+    # 报告只存 final_head（截断的前 300 字），判据红了要复核只能去挖 runs/ 里的 trace——
+    # 那天核 T2 就翻了三个 jsonl。判据给出裁决，必须同时给出可供复核的原文，
+    # 否则"红了"只能靠信我，不能靠读它。
+    doc = final if isinstance(final, dict) else None
+    if doc is None:
+        try:
+            doc = json.loads(final)
+        except Exception:
+            doc = {}
+    claims_dump = doc.get("claims") if isinstance(doc, dict) else []
+    if not isinstance(claims_dump, list):
+        claims_dump = []
     steps = state.get("steps", 0)
     blocked = state.get("blocked", [])
     # 伪引用单独判死：ref 指了一次真实发生的调用，但那次的返回里没有这个数。
@@ -659,6 +709,44 @@ def judge(traj, state):
     req = traj.get("final_required") or []
     req_miss = [w for w in req if _norm(w) not in flat]
 
+    # 建单通道的环境归因（2026-11-26，DOC-50）。
+    #
+    # 幂等那一项有 deduped_env，但"建单本身连不上"没有通道：QMS 没起时，
+    # 结论里必然没有 WO-、关键词也命中不了，于是 conclusion_off 和 req_miss
+    # 两条一起记成 owner=model。2026-11-26 15:19 那份全量里 W3 就是这么红的——
+    # 模型原话是「工单未能创建：工单系统连接被拒绝，属系统侧不可达」，做对了。
+    # 更糟的是 summary 写 env_n=0：**"环境干扰 0/26"这句在 QMS 挂着的同一批里是假的**。
+    #
+    # 但豁免不能无条件：工具没起来时，"编一个 WO- 号交差"仍是模型的错。
+    # 所以先查结论里有没有证据里从未出现过的工单号，有就照判，不豁免。
+    qms_env = ""
+    qms_fake = []
+    qms_ok_n = 0
+    qms_errs = []
+    for e in state.get("evidence") or []:
+        if not isinstance(e, dict) or e.get("tool") != "create_work_order":
+            continue
+        d = _result_dict(e.get("result")) or {}
+        if d.get("error"):
+            qms_errs.append(str(d.get("error"))[:120])
+        elif d.get("order_id"):
+            qms_ok_n += 1
+    if qms_errs and not qms_ok_n:
+        qms_env = qms_errs[-1]
+        ev_text = _evidence_text(state)
+        for wid in sorted(set(re.findall(r"WO-\d{8}-\d{3}", readable))):
+            if wid not in ev_text:
+                qms_fake.append(wid)
+    # 只对"这条用例本来就要求建单"生效。别的用例模型自己多调一次建单失败，
+    # 不该顺手把它整条豁免掉——那会变成"只要调过建单，落点漏了也不判"。
+    qms_waive = bool(qms_env) and not qms_fake \
+        and ("create_work_order" in expect or any("WO-" in w for w in req))
+    # 豁免只针对 QMS 造成的两处：结论落点（没有 WO- 可写）与 WO- 这个必含项。
+    # 别的落点（比如"必须提到某台设备"）不跟着一起放。
+    req_miss_waived = [w for w in req_miss if qms_waive and "WO-" in w]
+    req_miss_eff = [w for w in req_miss if w not in req_miss_waived]
+    conclusion_eff = conclusion_ok or qms_waive
+
     # 多轮用例：单轮那套判据看不出"跨轮还准不准"。第 3 轮真正要考的是——
     # 模型引的每一处出处，在**它这一轮还能看到的证据里**都要成立。
     # cite_oob（该工具的返回已被裁出）与 path_miss（编了字段）都是引用落空，
@@ -721,7 +809,7 @@ def judge(traj, state):
     semantic_ok = (
         tool_rate >= 1.0
         and gb_rate >= 1.0
-        and conclusion_ok
+        and conclusion_eff
         and not svc_fail_n
         and not forbid_hit
         and steps_ok
@@ -736,7 +824,10 @@ def judge(traj, state):
         and not forbid_words
         and not forbid_rx
         and not terminal_hit
-        and not req_miss
+        and not req_miss_eff
+        # 编出来的工单号必须判死。只写进 failure、不进 semantic_ok，
+        # 就是 N-17 那个坑：判据红了、正确率仍然绿。
+        and not qms_fake
         and round_ok
         and cite_floor_ok
         and not parse_fail_n
@@ -825,7 +916,20 @@ def judge(traj, state):
         _fail("svc_fail", "env",
               "整理答案时模型调用失败（结论是半成品，应重跑，不计入模型能力）",
               svc_fail=cite_stats.get("svc_fail"))
-    if not conclusion_ok and not svc_fail_n:
+    if qms_waive and (not conclusion_ok or req_miss_waived):
+        # 只有"确实豁免了什么"才记这一条。模型在 QMS 挂掉时仍答对（比如如实报
+        # 未落库、还说明不必重复建单），那是它做得好，不该被踢出分母。
+        _fail("env_qms", "env",
+              "建单工具不可达（mock QMS 没起）：结论只能如实报未落库，"
+              "已豁免结论落点与 WO- 必含项，不算模型失败",
+              error=qms_env, waived=req_miss_waived,
+              conclusion_waived=not conclusion_ok)
+    if qms_fake:
+        _fail("fabricated_id", "model",
+              f"建单未落库，结论却写了工单号({','.join(qms_fake)})——"
+              "这些号在任何一次工具返回里都没出现过",
+              ids=qms_fake, severity="hard")
+    if not conclusion_eff and not svc_fail_n:
         # 原来这一条只有一句"判断错/结论未命中"，至少盖住三种：
         #   追问了但该直接答 → 没答，病根在"该不该反问"
         #   调了工具仍没命中 → 答偏，病根在结论
@@ -847,9 +951,9 @@ def judge(traj, state):
         else:
             _fail("conclusion_miss", "model", "判断错/结论未命中",
                   kw_rate=kw_rate, kw_hit=kw_hit)
-    if req_miss:
-        _fail("req_miss", "model", f"结论落点不全(缺{','.join(req_miss)})",
-              missing=req_miss, severity="hard")
+    if req_miss_eff:
+        _fail("req_miss", "model", f"结论落点不全(缺{','.join(req_miss_eff)})",
+              missing=req_miss_eff, severity="hard")
     if forbid_hit:
         _fail("tool_forbidden", "model", f"越界调用({','.join(forbid_hit)})",
               hit=forbid_hit, severity="hard")
@@ -908,6 +1012,11 @@ def judge(traj, state):
         # 空字符串 = 真的验证过（通过或没通过）。混在一起就分不出
         # "没去重"和"没连上"，而这两种要修的东西完全不同。
         "deduped_env": deduped_env,
+        # 建单工具连不上时填错误原文。和 deduped_env 分开：那个管"幂等没验证"，
+        # 这个管"建单本身没跑起来"——两者可以同时发生（QMS 挂掉时）。
+        "qms_env": qms_env,
+        # 被 QMS 故障豁免掉的必含项。豁免要留痕，静默放行比判错更难查。
+        "req_miss_waived": req_miss_waived,
         # 低置信不是判错：它是模型主动报的"我不确定"，用户会看到一行
         # "按「X」理解"或被改成追问。判错看 intent_ok，两个口径别混——
         # 混在一起会让"模型诚实"和"模型判错"变成同一个数字。
@@ -969,6 +1078,10 @@ def judge(traj, state):
         "terminal_exempt": terminal_detail,
         "turns": len(traj.get("turns") or []),
         "reasons": reasons,
+        # 判据裁决的原文依据。有了它，"设备事实无法回指"这种红能直接读出来
+        # 是哪一条 claim、写了什么、ref 指哪里，不必再挖 trace。
+        "claims": claims_dump,
+        "claims_n": len(claims_dump),
         # 和 reasons 一一对应，带 code/owner/basis/note。
         # owner 只标判据真能判的三类：model（行为）/ uncertain（判据分不出）/
         # case（用例写错）。没有 evaluator——那是判据自己，判据不该给自己的错开脱。
@@ -1380,6 +1493,10 @@ def main():
         )
 
     fb_n = sum(1 for r in results if r.get("fallback"))
+    # QMS 不可达单列：它不是 fallback，但同样不许算成模型能力。
+    # 不单列的话，"环境干扰"这行说不清到底栽在哪一层——中转站抖动和本地
+    # 服务没起，修法一个是等、一个是 `reset.py`/起进程。
+    qms_n = sum(1 for r in results if r.get("qms_env"))
     env_n = sum(1 for r in results if _env_hit(r))
     clean_rows = [r for r in results if not _env_hit(r)]
     clean_n = len(clean_rows)
@@ -1391,6 +1508,8 @@ def main():
     clean_ok = sum(1 for r in judged_rows if r.get("semantic_ok"))
     print(f"环境干扰      {env_n}/{n}   "
           f"（{fb_n} 条意图判断降级兜底 + {env_n - fb_n} 条调用直接失败）")
+    print(f"建单工具不可达  {qms_n}/{n}   "
+          f"（mock QMS 没起才算，起着的条目不进这个数；被它冤枉的记 failure.env_qms）")
     if unjudged_n:
         print(f"结论未判定    {unjudged_n}/{n}   "
               f"（这些用例没设能判结论的判据：既不算过，也不算败，已从正确率分母剔除）")
@@ -1566,6 +1685,9 @@ def main():
         # 两个都留着，谁引用哪个就得同时说清它是哪个口径。
         "fallback_n": fb_n,
         "env_n": env_n,
+        # QMS 不可达的条数。它是 env_n 的子集（记了 failure.env_qms 才进 env_n），
+        # 但"有几条因为这个没测成"要能单独读出来。
+        "qms_env_n": qms_n,
         "clean_n": clean_n,
         "clean_ok": clean_ok,
         "clean_rate": (round(clean_ok / clean_n, 4) if clean_n else None),

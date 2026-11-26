@@ -4149,6 +4149,147 @@ class FactRefAuditTest(unittest.TestCase):
         self.assertTrue(r["semantic_ok"])
         self.assertFalse(r["fact_refs_missing"])
 
+    # ---- 2026-11-26（DOC-50）：文本型字段的写法 ----
+    #
+    # 判据原来只认"value 与 fact 逐字相等"。可 7 个字段里 6 个是文本型
+    # （line / station / camera_model / lens_model / light_model / install_date），
+    # 它们的正确写法是整段写进正文、不写 value。结果两种写法都红：
+    #   value=3（把「1-3号工位」掰成标量）→ 值不等
+    #   不写 value（正确写法）        → "值不等：claim=None"
+    # 后一种是判据自己制造的假红，必须修；前一种仍要红——那确实引了个不存在的值。
+
+    def test_text_field_without_value_is_checked_against_text(self):
+        r = self._judge([self._ref()], [{"text": "CX-101 在 1号线B",
+                                         "ref": "query_device_profile#line"}])
+        self.assertTrue(r["semantic_ok"], r["failure"])
+
+    def test_text_field_text_without_fact_value_fails(self):
+        # 不写 value 不等于不核对：正文里没有这个值，仍然是"指了字段却没说对"。
+        r = self._judge([self._ref()], [{"text": "CX-101 在 3号线",
+                                         "ref": "query_device_profile#line"}])
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "fact_unref"][0]
+        self.assertIn("正文没写该值", str(item["basis"]["detail"]))
+
+    def test_text_field_truncated_value_still_fails(self):
+        # 反向：给了 value 就逐字比。把「1号线B」写成 "B" 是引了个不存在的值，
+        # 不能因为文本字段允许省 value 就一路放过。
+        r = self._judge([self._ref()], [self._claim(value="B")])
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "fact_unref"][0]
+        self.assertIn("值不等", str(item["basis"]["detail"]))
+
+    def test_numeric_field_without_value_fails(self):
+        # 反向：数值字段不许省 value。正文写了 90 不能证明这个数属于这个字段。
+        r = self._judge(
+            [self._ref(fact_key="maintenance_cycle_days", value=90)],
+            [{"text": "保养周期 90 天",
+              "ref": "query_device_profile#maintenance_cycle_days"}])
+        self.assertFalse(r["semantic_ok"])
+        item = [f for f in r["failure"] if f["code"] == "fact_unref"][0]
+        self.assertIn("没写 value", str(item["basis"]["detail"]))
+
+    def test_claims_are_dumped_for_offline_review(self):
+        # 判据给出裁决，必须同时给出可供复核的原文。报告原来只存 final_head，
+        # 核 T2 那天翻了三个 trace 才看清 claim 长什么样。
+        r = self._judge([self._ref()], [self._claim()])
+        self.assertEqual(r["claims_n"], 1)
+        self.assertEqual(r["claims"][0]["ref"], "query_device_profile#line")
+
+
+class QmsEnvAttributionTest(unittest.TestCase):
+    """建单工具没起时，不许把"结论里没有 WO-"记成模型失败（2026-11-26，DOC-50）。
+
+    2026-11-26 15:19 的全量里 W3 就是这么红的：trace 里两次 create_work_order
+    都是 WinError 10061，模型原话「工单未能创建：工单系统连接被拒绝，属系统侧
+    不可达」——行为完全正确，却被记成 conclusion_off + req_miss(owner=model)，
+    而同一份报告的 summary 还写着 env_n=0。**环境干扰 0/26 这句话是假的。**
+
+    豁免要有边界：工具没起来时编一个工单号交差，仍然算模型的错。
+    """
+
+    TRAJ = {
+        "id": "Q", "type": "陷阱",
+        "expect_tools": ["create_work_order"],
+        "final_keywords": ["工单"],
+        "final_required": ["WO-"],
+        "forbid_tools": [], "expect_group_by": [],
+        "expect_ask": False, "steps_range": (0, 8),
+    }
+
+    ERR = ('[create_work_order{device_id=CX-103}] '
+           '{"error": "mock QMS 不可达（http://127.0.0.1:8010）'
+           '：[WinError 10061] 由于目标计算机积极拒绝，无法连接。"}')
+
+    def _judge(self, result_text, readable=None):
+        st = {
+            "tool_names": ["create_work_order"],
+            "final_text": readable or "工单未能创建，工单系统连接被拒绝",
+            "final": {"conclusion": "x", "claims": [], "advice": []},
+            "steps": 1, "blocked": [], "misquoted": [], "cite_stats": {},
+            "evidence": [{"tool": "create_work_order",
+                          "args": {"device_id": "CX-103"},
+                          "result": result_text}],
+            "fact_refs": [], "intent": "action", "intent_conf": 0.9,
+            "stop_reason": "enough", "check_retry": 0,
+        }
+        return run_eval.judge(dict(self.TRAJ), st)
+
+    def _codes(self, r):
+        return [f["code"] for f in r["failure"]]
+
+    def test_qms_down_waives_wo_requirement(self):
+        r = self._judge(self.ERR)
+        self.assertTrue(r["semantic_ok"], r["failure"])
+        self.assertIn("env_qms", self._codes(r))
+        self.assertNotIn("req_miss", self._codes(r))
+        self.assertEqual(r["req_miss_waived"], ["WO-"])
+        # 从"模型能力"分母里剔除靠的是 owner=env，不是另建一套口径
+        self.assertEqual([f["severity"] for f in r["failure"]
+                          if f["code"] == "env_qms"], ["soft"])
+        self.assertIn("env", [f["owner"] for f in r["failure"]])
+
+    def test_fabricated_wo_is_not_waived(self):
+        # 工具没起来，结论里却出现一个从未返回过的工单号——那是编的。
+        r = self._judge(self.ERR,
+                        readable="工单未能创建，工单号 WO-20261126-001 待系统恢复")
+        self.assertFalse(r["semantic_ok"])
+        self.assertIn("fabricated_id", self._codes(r))
+        self.assertNotIn("env_qms", self._codes(r))
+
+    def test_qms_up_does_not_emit_env(self):
+        r = self._judge(
+            '[create_work_order{device_id=CX-103}] '
+            '{"order_id": "WO-20261126-009", "deduped": false}',
+            readable="已建工单 WO-20261126-009，待人工确认")
+        self.assertTrue(r["semantic_ok"], r["failure"])
+        self.assertEqual(r["qms_env"], "")
+        self.assertNotIn("env_qms", self._codes(r))
+
+    def test_qms_down_without_create_expectation_is_not_waived(self):
+        # 别的用例里模型自己多调一次建单失败，不该顺手把它整条豁免掉：
+        # 这条用例既不要求建单、也不要求 WO-，结论没落在关键词上就该照判。
+        traj = dict(self.TRAJ)
+        traj["expect_tools"] = ["query_device_profile"]
+        traj["final_required"] = []
+        traj["final_keywords"] = ["误判率"]
+        st = {
+            "tool_names": ["query_device_profile", "create_work_order"],
+            "final_text": "工单未能创建，工单系统连接被拒绝",
+            "final": {"conclusion": "x", "claims": [], "advice": []},
+            "steps": 1, "blocked": [], "misquoted": [], "cite_stats": {},
+            "evidence": [{"tool": "create_work_order",
+                          "args": {"device_id": "CX-103"},
+                          "result": self.ERR}],
+            "fact_refs": [], "intent": "action", "intent_conf": 0.9,
+            "stop_reason": "enough", "check_retry": 0,
+        }
+        r = run_eval.judge(traj, st)
+        self.assertIn("conclusion_off", self._codes(r))
+        self.assertNotIn("env_qms", self._codes(r))
+        # qms_env 仍要留痕：发生了，只是没被豁免
+        self.assertTrue(r["qms_env"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -22,6 +22,11 @@ from __future__ import annotations
 import psycopg
 from psycopg.rows import dict_row
 
+try:  # uvicorn api.app:app
+    from .rules import status_of
+except ImportError:  # 直接 python api/app.py 的旧用法
+    from rules import status_of  # type: ignore
+
 # 表名 → 客户看得懂的名字（页面上写「工单」，不写 biz_work_order）
 TABLE_LABELS = {
     "biz_work_order": "工单",
@@ -71,6 +76,7 @@ def problem(dsn: str, alert_id: int, size: int = 50, page: int = 1) -> dict | No
         if not alert:
             return None
 
+        rule = status_of(alert["check_id"])
         detail = alert["detail"] or {}
         issue_id = detail.get("issue")
         cat = conn.execute(
@@ -154,6 +160,15 @@ def problem(dsn: str, alert_id: int, size: int = 50, page: int = 1) -> dict | No
         },
         "run": {"run_id": run["run_id"], "ran_at": _dump(run["ran_at"]),
                 "dataset": run["dataset"]} if run else None,
+        # 这一类的规矩是谁定的：assumed 的必须写在页面顶上，否则客户会把这 362 行
+        # 当成「你们判错了」，而事实是「在等你回答工位口径那一题」。
+        "rule": {
+            "status": rule.get("status"),
+            "basis": rule.get("basis"),
+            "effect": rule.get("effect"),
+            "source": rule.get("source"),
+            "counts_in_total": bool(rule.get("counts_in_total")),
+        },
         "ids_total": len(ids),
         "groups": groups,
         "page": page,

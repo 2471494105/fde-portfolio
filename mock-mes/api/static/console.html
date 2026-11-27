@@ -34,12 +34,12 @@
   .kpi.red .value{color:var(--red)} .kpi.amber .value{color:var(--amber)}
   .kpi .value small{font-size:12px;color:var(--ink-dim);margin-left:4px}
   .kpi .note{font-size:11px;color:var(--ink-faint);margin-top:6px}
-  .panels{display:grid;grid-template-columns:360px 1fr;gap:12px;margin-top:12px}
+  .panels{display:grid;grid-template-columns:420px 1fr;gap:12px;margin-top:12px}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
   .panel h2{margin:0 0 4px;font-size:13px;font-weight:600;letter-spacing:.4px}
   .panel .hint{font-size:11px;color:var(--ink-faint);margin-bottom:10px}
   .ring-wrap{display:flex;gap:18px;align-items:center}
-  svg.ring{width:150px;height:150px;flex:0 0 150px}
+  svg.ring{width:140px;height:140px;flex:0 0 140px}
   .legend{font-size:12px}
   .legend div{display:flex;align-items:center;gap:7px;margin:6px 0}
   .legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -116,9 +116,9 @@
       <div class="note" id="kpi-cat-note">登记 — · 今日命中 —</div>
     </div>
     <div class="kpi red">
-      <div class="label">违约行（各判据最近一次）</div>
+      <div class="label">确定违约行（各判据最近一次）</div>
       <div class="value" id="kpi-rows">—<small> 行</small></div>
-      <div class="note" id="kpi-rows-note">工单 · 缺陷 · 状态</div>
+      <div class="note" id="kpi-rows-note">待口径确认单列，不混进这个数</div>
     </div>
     <div class="kpi" id="kpi-runs-card">
       <div class="label">事件扫描</div>
@@ -158,7 +158,7 @@
   <div class="panels">
     <div class="panel">
       <h2>违约行构成</h2>
-      <div class="hint">按判据最近一次运行的行数；一条行可同时踩多条规则，按判据分开计</div>
+      <div class="hint">虚线那几段是<b>口径未确认</b>（我们的推断，不是客户认过的规矩）；它们不计入上面「确定违约行」，也不代客户认账</div>
       <div class="ring-wrap">
         <svg class="ring" id="ring" viewBox="0 0 160 160" aria-label="违约行构成"></svg>
         <div class="legend" id="legend"></div>
@@ -213,8 +213,9 @@ const CHECK_SHORT = {
   station_contract: "工单", defect_fields: "缺陷", status_policy: "状态",
   data_contract: "契约", source_values: "值域", alarm_ack: "报警",
 };
-// 违约行 KPI 只算「行」这一种单位：契约(件)、值域(列) 混进来会让 407 变成 409
-const ROW_CHECKS = ["station_contract", "defect_fields", "status_policy", "alarm_ack"];
+// 违约行 KPI 只算「行」这一种单位：契约(件)、值域(列) 混进来会让 407 变成 409。
+// 哪些判据算「行类」不再写死在这里：由 check_rules.json 的 row_kpi 决定（单一源），
+// 否则页面一份名单、登记一份名单，第三次改的时候一定对不上。
 const fmt = (n) => (n === null || n === undefined ? "—" : String(n));
 
 async function getJSON(url) {
@@ -226,6 +227,8 @@ async function getJSON(url) {
 /* 环形图：用 SVG 弧段拼，不引第三方图表库；每段的比例就是它在总数里的份额 */
 function drawRing(parts) {
   const total = parts.reduce((s, p) => s + p.value, 0);
+  // 「待确认」单独一个数：环上照样画，但用虚线，并且不参与「确定违约」那个 KPI
+  const pending = parts.filter((p) => p.assumed).reduce((s, p) => s + p.value, 0);
   const svg = document.getElementById("ring");
   const cx = 80, cy = 80, r = 56, w = 18;
   let out = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#223040" stroke-width="${w}"/>`;
@@ -238,18 +241,20 @@ function drawRing(parts) {
       const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
       const large = a1 - a0 > Math.PI ? 1 : 0;
       out += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${r},${r} 0 ${large} 1 ${x1.toFixed(1)},${y1.toFixed(1)}"
-              stroke="${p.color}" stroke-width="${w}" fill="none" stroke-linecap="butt"/>`;
+              stroke="${p.color}" stroke-width="${w}" fill="none" stroke-linecap="butt"${p.assumed ? ' stroke-dasharray="7 4"' : ""}/>`;
       a0 = a1;
     }
   }
   out += `<text x="${cx}" y="${cy - 2}" text-anchor="middle" fill="#dbe6f2"
             font-family="Cascadia Mono,Consolas,monospace" font-size="22" font-weight="600">${total}</text>`;
-  out += `<text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="#8fa1b5" font-size="11">违约行</text>`;
+  out += `<text x="${cx}" y="${cy + 16}" text-anchor="middle" fill="#8fa1b5" font-size="11">${pending ? "含待确认 " + pending : "违约行"}</text>`;
   svg.innerHTML = out;
 
   document.getElementById("legend").innerHTML = parts.map((p) => {
     const pct = total ? Math.round((p.value / total) * 1000) / 10 : 0;
-    return `<div><i style="background:${p.color}"></i>${p.name}
+    const tag = p.assumed ? ` <span class="tag amber" title="我方推断，客户未确认">待确认</span>` : "";
+    // 图例用短名：环图这一栏只有 200px 宽，全称会折成两行把「待确认」挤到下一行
+    return `<div><i style="background:${p.color}"></i>${CHECK_SHORT[p.id] || p.name}${tag}
       <b>${p.value}<span style="color:#5c6d80;font-weight:400"> · ${pct}%</span></b></div>`;
   }).join("");
 }
@@ -309,14 +314,25 @@ async function load() {
     const latest = {};
     for (const r of runs.recent) if (!latest[r.check_id]) latest[r.check_id] = r;
     // 环形图与「违约行」只取行类判据：契约按件、值域按列，混进同一个数就是换单位
-    const parts = ROW_CHECKS.map((id) => ({
-      id, name: CHECK_NAME[id], value: latest[id] ? Number(latest[id].red_count) : 0,
-      color: CHECK_COLOR[id],
+    // 每道判据的规矩状态来自 /v1/obs/runs 的 rule_status（单一源：check_rules.json）
+    // 「待确认」只认 status=assumed；counts_in_total=false 还包含「单位不是行」的判据
+    // （契约按件 / 值域按列），把它们也标成待确认，等于把换单位说成没对口径。
+    const assumedOf = (id) => latest[id] && latest[id].rule_status === "assumed";
+    const rowIds = Object.keys(CHECK_NAME).filter((id) => latest[id] && latest[id].row_kpi);
+    const parts = rowIds.map((id) => ({
+      id, name: CHECK_NAME[id], value: Number(latest[id].red_count || 0),
+      color: CHECK_COLOR[id], assumed: assumedOf(id),
     }));
     const rowsTotal = parts.reduce((s, p) => s + p.value, 0);
-    document.getElementById("kpi-rows").innerHTML = `${rowsTotal}<small> 行</small>`;
-    document.getElementById("kpi-rows-note").textContent =
-      parts.map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ");
+    const rowsPending = parts.filter((p) => p.assumed).reduce((s, p) => s + p.value, 0);
+    const rowsConfirmed = rowsTotal - rowsPending;
+    // 大数字只放「确定违约」：407 是总数，但 402 行还挂在客户没答的口径上，
+    // 把它当成绩念出去，客户第一句就是「你判得不对」。
+    document.getElementById("kpi-rows").innerHTML = `${rowsConfirmed}<small> 行</small>`;
+    document.getElementById("kpi-rows-note").innerHTML = rowsPending
+      ? `待口径 ${rowsPending}：` + parts.filter((p) => p.assumed)
+          .map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ")
+      : `全部已登记口径 · ` + parts.map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ");
     drawRing(parts);
 
     const series = Object.keys(CHECK_NAME).map((id) => {
@@ -342,7 +358,10 @@ async function load() {
       const s = sampleOf(c);
       if (s.n === null) return `<span class="tag zero">未跑</span>`;
       if (s.n <= 0) return `<span class="tag zero">0</span>`;
-      return `<span class="tag ${s.sev === "amber" ? "amber" : "red"}">${s.n}</span>`;
+      // 这一类红是「数据本身错」还是「我方推断的规矩」，在目录上也要看得见，
+      // 否则客户点进来才发现 362 行在等他答口径
+      const wait = assumedOf(c.check_id) ? ` <span class="tag amber" title="口径未确认">待确认</span>` : "";
+      return `<span class="tag ${s.sev === "amber" ? "amber" : "red"}">${s.n}</span>${wait}`;
     };
     // 命中只数客户库：外部自检（沙箱库 / 源端样本）红了不代表客户这台库有问题，
     // 混进分子会让客户以为「我这有 5 类毛病」，其中 2 类是判据自己的靶子。
@@ -427,7 +446,7 @@ async function load() {
       <td class="mono">${(a.last_seen || "").slice(5, 16)}</td>
       <td>${chip(a.severity === "red" ? "红" : "黄", a.severity)}</td>
       <td>${chip(a.state === "acked" ? "已认领" : "待处理", a.state)}</td>
-      <td>${chip((a.detail && a.detail.issue_short) || "—", "open")}</td>
+      <td>${chip((a.detail && a.detail.issue_short) || "—", "open")}${assumedOf(a.check_id) ? ' <span class="tag amber" title="口径未确认，数字仅供参考">待确认</span>' : ""}</td>
       <td><a class="ev-link" href="/problem?alert=${a.alert_id}" title="看具体哪几行、该改哪一栏">${a.title}</a></td>
       <td>${a.owner || "待指派"}</td>
       <td class="mono">${a.seen_count}</td>

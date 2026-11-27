@@ -35,6 +35,10 @@
   .step{background:var(--panel-2);border-left:3px solid var(--cyan);padding:10px 12px;
     font-size:13px;margin-top:12px}
   .step b{color:var(--cyan);font-weight:600}
+  /* 口径未确认的横幅：用 amber 而不是红色——它不是错误，是一道还没答的题 */
+  .warn{margin:12px 0 0;padding:10px 12px;border-left:3px solid var(--amber);
+    background:#1d1a12;font-size:12.5px;line-height:1.7;color:var(--ink)}
+  .warn b{color:var(--amber);font-weight:600}
   .guide{margin-bottom:14px;padding:12px 14px;border:1px solid var(--line);border-radius:5px;background:var(--panel-2)}
   .guide .ghead{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline}
   .guide .gname{font-weight:600}
@@ -175,6 +179,13 @@ function render(r, page, size){
           ${a.issue_name ? `<div class="meta"><span>类别：${esc(a.issue_short)} · ${esc(a.issue_name)}</span></div>` : ""}
         </div>
       </div>
+      ${r.rule && r.rule.status !== "hard" ? `<div class="warn">
+        <b>${r.rule.status === "assumed" ? "待确认：这一类的口径还没和客户对过" : "待确认：这一类的规矩未登记"}。</b>
+        这 ${r.ids_total} 行是按<b>我方推断</b>判出来的，不是客户认过的规矩，所以它<b>不计入「确定违约行」</b>。
+        ${r.rule.basis ? `依据：${esc(r.rule.basis)}。` : ""}
+        ${r.rule.effect ? `答后去向：${esc(r.rule.effect)}。` : ""}
+        ${r.rule.source ? `<span class="foot">口径来源：${esc(r.rule.source)}</span>` : ""}
+      </div>` : ""}
       <div class="step"><b>先做这一步：</b>${esc(a.first_step || i.first_step || "未登记首步")}</div>
       ${i.evidence ? `<div class="foot">判据怎么判的：${esc(i.evidence)}</div>` : ""}
       ${i.note ? `<div class="foot">备注：${esc(i.note)}</div>` : ""}

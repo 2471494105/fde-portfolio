@@ -5,9 +5,10 @@
   C1 同端口可访问（/console 与 /app/console.html 都是 8021，不另起服务）
   C2 不引外网资源（现场断网也能开）
   C3 未处理事件数 = /v1/alerts 里 state<>closed 的条数
-  C4 违约行合计 = 各判据最近一次 red_count 之和（页面不自己算别的口径）
+  C4 确定违约行 = row_kpi 判据里 counts_in_total=true 的那部分（页面大数字只放这个），
+     待口径行在备注里单列（407 = 5 确定 + 402 待口径）
   C5 事件流行数 = 未关闭事件数，标题逐条出现
-  C6 环形图段数 = 值大于 0 的判据数，圆心数字 = 合计
+  C6 环形图段数 = 值大于 0 的判据数，圆心数字 = 合计（含待确认，虚线）
   C7 趋势三条（各自最近 6 次），不是一条「合计」假线
   C8 作业页有入口链接、且中控台页标注只读
 
@@ -70,12 +71,17 @@ def main():
     latest = {}
     for r in runs["recent"]:
         latest.setdefault(r["check_id"], r)
-    # T27 加了报警闭环（行类第 4 道）：环形与合计都跟着它走
-    known = ["station_contract", "defect_fields", "status_policy", "alarm_ack"]
-    parts = [(cid, int(latest[cid]["red_count"]) if cid in latest else 0) for cid in known]
+    # 哪些判据算「行类」不再写在这份脚本里：由 check_rules.json 的 row_kpi 决定
+    # （页面也按同一个字段过滤）。这里若再存一份名单，第三次改就会对不上。
+    kpi_ids = [cid for cid, r in latest.items() if r.get("row_kpi")]
+    parts = [(cid, int(latest[cid]["red_count"] or 0)) for cid in kpi_ids]
     total = sum(v for _, v in parts)
-    # 趋势线按「跑过的判据」画：行类 3 道 + 契约/值域 2 道（T26 接进事件流后才有的）
-    trend_ids = known + ["data_contract", "source_values"]
+    # 407 拆成两个数：确定（counts_in_total=true）+ 待口径（false）。页面大数字只放确定的那部分。
+    pending = sum(int(latest[cid]["red_count"] or 0) for cid in kpi_ids
+                  if latest[cid].get("counts_in_total") is False)
+    confirmed = total - pending
+    # 趋势线按「跑过的判据」画：行类 + 契约/值域 2 道（T26 接进事件流后才有的）
+    trend_ids = kpi_ids + ["data_contract", "source_values"]
     expect_sparks = sum(1 for cid in trend_ids if cid in latest)
 
     dom, err = render(BASE + "/console", "console")
@@ -91,8 +97,12 @@ def main():
        "页面 %r，接口 %d" % (got_open, len(alive)))
 
     got_rows = text_of(dom, "kpi-rows")
-    ok("C4 违约行合计", got_rows and got_rows.split()[0] == str(total),
-       "页面 %r，接口 %d" % (got_rows, total))
+    ok("C4 确定违约行 = 只算已登记口径的那部分", got_rows and got_rows.split()[0] == str(confirmed),
+       "页面 %r，确定 %d / 合计 %d" % (got_rows, confirmed, total))
+
+    note = text_of(dom, "kpi-rows-note")
+    ok("C4b 待口径行单列", pending == 0 or (note and str(pending) in note),
+       "页面备注 %r，待口径 %d" % (note, pending))
 
     body = dom.split('id="events"', 1)[1].split("</tbody>", 1)[0]
     trs = re.findall(r"<tr[^>]*>.*?</tr>", body, re.S)
@@ -151,6 +161,18 @@ def main():
     note = text_of(dom, "kpi-rows-note")
     ok("C10e 违约行备注只列行类判据", note and "契约" not in note and "值域" not in note,
        "备注 %r" % note)
+
+    # C10f「待确认」只属于 assumed：counts_in_total=false 里还混着「单位不是行」的判据
+    # （契约按件 / 值域按列）。若把这两类也标成待确认，等于把换单位说成"没对口径"，
+    # 客户会去追一个不存在的口径问题。按判据 id 逐行核，不按字符串整体核。
+    def cat_row_of(issue_id: str) -> str:
+        item = next((c for c in cat["items"] if c["issue_id"] == issue_id), None)
+        return next((r for r in cat_rows if item and item["name"] in r), "")
+
+    assumed_ids = {"station_contract", "alarm_ack"}
+    others = [c for c in cat["items"] if c["check_id"] not in assumed_ids and c.get("check_id")]
+    bad_tags = [c["issue_id"] for c in others if "待确认" in cat_row_of(c["issue_id"])]
+    ok("C10f 只有 assumed 的类别标「待确认」", not bad_tags, "误标：%s" % bad_tags)
 
     stale = len(obs["freshness"]["stale"])
     got_fresh = text_of(dom, "kpi-fresh")

@@ -36,6 +36,11 @@ _errors: Counter = Counter()
 FRESH_MAP = (Path(__file__).resolve().parents[2] / "fde-diagnosis-agent"
              / "data" / "mapping" / "freshness_map.json")
 
+try:  # uvicorn api.app:app
+    from .rules import status_of
+except ImportError:  # 直接 python api/app.py 的旧用法
+    from rules import status_of  # type: ignore
+
 
 def load_freshness_spec(path: Path = FRESH_MAP) -> tuple[float, list[tuple[str, str | None, str, bool]]]:
     try:
@@ -175,5 +180,14 @@ def runs(dsn: str, limit: int = 20) -> dict:
             r["ran_at"] = r["ran_at"].replace(tzinfo=timezone.utc)
         r["ran_at"] = r["ran_at"].isoformat(sep=" ")
         r["minutes_since"] = round((now - datetime.fromisoformat(r["ran_at"])).total_seconds() / 60.0, 1)
+        # 这一行红是「数据本身错」还是「我们自己的规矩」：页面据此决定要不要计入
+        # 「确定违约」。登记读不到会抛（见 rules.load），不在这里兜底成 hard。
+        rule = status_of(r["check_id"])
+        r["rule_status"] = rule.get("status")
+        r["rule_unit"] = rule.get("unit")
+        r["counts_in_total"] = bool(rule.get("counts_in_total"))
+        r["row_kpi"] = bool(rule.get("row_kpi"))
+        r["rule_basis"] = rule.get("basis")
+        r["rule_source"] = rule.get("source")
 
     return {"recent": recent, "checks": checks, "threshold_hours": _STALE_HOURS}

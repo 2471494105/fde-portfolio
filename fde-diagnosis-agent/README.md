@@ -483,6 +483,24 @@ venv\Scripts\python.exe -X utf8 scripts\verify_schedule.py
 
 实测（2026-11-27 11:10）：计划任务 `LastRun=11:10:10`、`LastResult=0`、下次 11:40:40，日志「判据 6 道 · 事件扫描 无新增」；`probe_red.py` 两 case 都红且全部还原、指纹 `e21014390743de1f23f78ae2f188e654` 一致；`verify_schedule.py` 8 ok / 0 fail。
 
+### 告警出站：群机器人通道，以及飞书自建应用的判决（T30）
+
+T29 留下的坑是「真实推送通道没地址」。这一轮把它补上，同时把飞书自建应用那条线判死：
+
+- **判决**：同一接口三组对照——真凭据 `21001`、错 secret `10014 app secret invalid`、错 app_id `10014 app id not exists`。app_id 与 secret 两关都过之后才命中策略拒，所以不是填错；官方客服回复确认是账号级接入管控。权限、事件订阅、发布版本都不再是变量。
+- **替代**：群自定义机器人 `bot/v2/hook` 不需要 `tenant_access_token`、不受该策略管控，能单向推文本；收消息与卡片按钮回调做不到。
+- **两个坑**：群侧开了关键词校验（`判据`），不含就报 `19024`，所以把「判据告警」写进 `raise_alerts.py` 的正文前缀；`raise_alerts.py` 补了最小 `_load_dotenv()`（只补缺、环境变量优先），地址只在本机 `.env`。
+- **实测**：插一行 `conf_pct=120`（`rec_id=9002`）→ 判据 5 → **6** 行（`run_id=197`）→ `raise_alerts` 推 1 条（`run_id=198`，`channel=feishu`）→ 群里收到「6 行（新增 1）」→ 删行复原 → 判据回 5（`run_id=199`）→ 全表指纹 `52c0a263…` 逐字相同、违约行仍 407。
+
+```powershell
+# 判据 → 事件 → 通道（webhook 从 .env 读，仓库里没有地址）
+venv\Scripts\python.exe -X utf8 scripts\check_defect_fields.py
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --dry-run   # 只看将要推什么
+```
+
+判决过程与三问在 `docs/20261127_29_告警出站与飞书判决.md`（`DOC-71`）；飞书侧冻结结论同步进 `docs/20261121_02_双入口工程表.md`。
+
 ## 目录
 
 ```
@@ -501,6 +519,7 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
               check_alarm_ack / verify_problem（报警闭环判据、事件→目标行明细链）
               check_source_schema（S1–S4，落台账）/ probe_red（无样本演红）
               patrol_hourly（定时入口）/ verify_schedule（计划任务验收）
+              raise_alerts 读 .env（`FDE_ALERT_WEBHOOK`）→ 群机器人单向出站；仓库不存地址
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
@@ -509,8 +528,8 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
-             常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）
-             00_文档索引.md 是全部 71 篇（`DOC-01`–`DOC-70` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）
+             00_文档索引.md 是全部 72 篇（`DOC-01`–`DOC-71` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -567,4 +586,4 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
    所以明细页给的是「打开 #键 → `/v1/<集合>?q=<键>`」，不是「跳过去高亮」。
    另外 `verify_problem.py` 会故意打一次 404（验未知事件），接口错误计数里会留一条 `/v1/problem/999999`——
    要干净演示就重启 8021（接口指标是内存态，重启即清零，既有设计）。
-15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试、告警升级、值班表；推送真实通道也没配凭据（`--webhook= --channel=feishu|dingtalk` 早就在，仓库里刻意不存地址），所以现在落投递箱（`DOC-70` 第五节、第八节）。
+15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试、告警升级、值班表；推送通道已接上**群自定义机器人**（单向：只发不收、按钮点不动；地址只在本机 `.env`，仓库不存；群侧开了关键词校验，漏了会 `19024`）；飞书**自建应用**在这套账号下被判死（`21001` 账号级接入管控，见 `DOC-71`），所以现在落投递箱的只剩「没配 `.env` 的机器」。

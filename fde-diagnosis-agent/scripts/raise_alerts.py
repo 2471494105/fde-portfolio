@@ -39,6 +39,21 @@ from app.ds import runlog  # noqa: E402
 
 CLIENT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_client"
 
+def _load_dotenv(path: Path) -> None:
+    """把 .env 里尚未存在的键补进环境；显式导出的环境变量优先。"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            os.environ[k] = v
+
+
 
 def load_rows(dsn: str) -> list[dict]:
     import psycopg
@@ -179,7 +194,7 @@ def deliver(pushed: list[dict], webhook: str, channel: str, dsn: str) -> list[st
 
     def body(items: list[dict]) -> dict:
         lines = [f"[{i+1}] {e['title']}（{e['severity']} · {e.get('owner')}）" for i, e in enumerate(items)]
-        text = "数据治理中控台\n" + "\n".join(lines)
+        text = "数据治理中控台 · 判据告警\n" + "\n".join(lines)
         if channel == "feishu":
             return {"msg_type": "text", "content": {"text": text}}
         if channel == "dingtalk":
@@ -311,6 +326,7 @@ def cmd_state(dsn: str, alert_id: int, state: str, by: str | None, reason: str |
 def main(argv: list[str]) -> int:
     import time
 
+    _load_dotenv(ROOT / ".env")
     t0 = time.perf_counter()
     dsn = os.environ.get("FDE_CLIENT_DSN", CLIENT_DSN)
     webhook = os.environ.get("FDE_ALERT_WEBHOOK", "")

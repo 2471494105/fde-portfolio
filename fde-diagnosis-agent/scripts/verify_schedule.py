@@ -6,6 +6,7 @@ r"""定时巡检的验收：**证明它真的会自己跑**，而不是「我注
   S3 今天有日志，且里面是「判据 6 道」那一版（不是旧壳写的空日志）
   S4 并发让路还在：造一个锁 → patrol 必须 exit 75 且不写台账
   S5 凭据不进仓库：scripts/ 与 docs/ 里不许出现 http(s) 的 hook 地址
+  S5b 地址只落在本机：`.env` 被 .gitignore 覆盖，且不在 git 索引里
 
 Windows 专用（读 `C:\Windows\System32\Tasks\<任务名>` 的 XML）；其它系统上 S1/S2 标 skip，
 S3–S5 照跑——「本机没挂计划任务」不等于「这套东西没有定时能力」。
@@ -18,6 +19,7 @@ S3–S5 照跑——「本机没挂计划任务」不等于「这套东西没有
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -151,9 +153,28 @@ def main(argv: list[str]) -> int:
                     if pat.search(line):
                         hits.append(f"{f.relative_to(ROOT)}: {line.strip()[:60]}")
     if not hits:
-        ok("S5 仓库里没有 webhook 地址", "凭据只从环境变量来")
+        ok("S5 仓库里没有 webhook 地址", "地址只在部署侧，仓库里查不到")
     else:
         bad("S5 仓库里没有 webhook 地址", "；".join(hits[:3]))
+
+    # S5b 地址只落在本机：.env 被忽略且未被跟踪
+    git = shutil.which("git") or r"C:\Program Files\Git\cmd\git.exe"
+    git_ok = bool(git) and (Path(git).exists() or bool(shutil.which(git)))
+    if (ROOT / ".env").exists() and git_ok:
+        try:
+            ignored = subprocess.run([git, "check-ignore", "-q", ".env"], cwd=str(ROOT),
+                                     capture_output=True, timeout=30)
+            tracked = subprocess.run([git, "ls-files", "--error-unmatch", ".env"], cwd=str(ROOT),
+                                     capture_output=True, timeout=30)
+            if ignored.returncode == 0 and tracked.returncode != 0:
+                ok("S5b .env 被忽略且未入库", "check-ignore=0, ls-files≠0")
+            else:
+                bad("S5b .env 被忽略且未入库",
+                    f"ignored={ignored.returncode}, tracked={tracked.returncode}")
+        except (OSError, subprocess.SubprocessError) as e:
+            bad("S5b .env 被忽略且未入库", f"{type(e).__name__}: {e}")
+    else:
+        skip("S5b .env 被忽略且未入库", "没有 .env 或没有 git")
 
     print(f"\nRESULT: {ok_n} ok / {fail_n} fail / {skip_n} skip")
     return 1 if fail_n else 0

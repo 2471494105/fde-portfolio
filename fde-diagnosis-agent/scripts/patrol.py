@@ -22,6 +22,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import os
+from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -36,6 +37,9 @@ CHECKS = [
     # T27：报警闭环。判据进了巡检，才不会「不上中控台就静默」——
     # 一条命令跑不到它，页面上那一行就永远是上一轮的。
     ("alarm_ack", "报警闭环判据 L", "check_alarm_ack.py"),
+    # T28：源端结构漂移（S1–S4）。原来它不落台账、也不进巡检，跑到绿也没人知道跑过，
+    # 页面上那一行永远写「未跑」——判据不进巡检就等于不存在。
+    ("source_schema", "源端结构判据 S1–S4", "check_source_schema.py"),
 ]
 
 
@@ -50,13 +54,55 @@ def run_one(rel: str, extra: list[str], quiet: bool) -> tuple[int, str]:
     return p.returncode, (p.stderr or "").strip() + ("\n" if p.stderr else "") + (tail[0] if tail else "")
 
 
+def take_lock(path: str, ttl: int) -> tuple[bool, str]:
+    """单实例锁：定时任务和「人手动跑一次」撞车时，后来的那个直接让路。
+
+    为什么需要：T28 之后巡检不再只由人触发（计划任务每 30 分钟一次）。两次
+    同时跑会写两行台账、把 seen_count 一次推两轮，页面上的「多久没人动」就失真了。
+    锁文件里写 pid 与时间；超过 ttl 秒视为上一位已经崩了，允许抢（不许因为一次
+    崩溃就永久不再巡检）。
+    """
+    import time as _t
+
+    p = Path(path)
+    if p.exists():
+        try:
+            age = _t.time() - p.stat().st_mtime
+            if age < ttl:
+                body = p.read_text(encoding="utf-8").strip()
+                return False, f"上一次还在跑（{age:.0f}s < ttl {ttl}s，锁内容 {body or '空'}）"
+        except OSError:
+            pass
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"pid={os.getpid()} at={_t.strftime('%Y-%m-%d %H:%M:%S')}", encoding="utf-8")
+    return True, ""
+
+
 def main(argv: list[str]) -> int:
     quiet = "--quiet" in argv
     extra: list[str] = []
+    lock_file = os.path.join(ROOT, "logs", "patrol.lock")
+    lock_ttl = 900
     for a in argv:
         if a.startswith("--webhook=") or a.startswith("--channel=") or a.startswith("--dsn="):
             extra.append(a)
+        elif a.startswith("--lock-file="):
+            lock_file = a.split("=", 1)[1]
+        elif a.startswith("--lock-ttl="):
+            lock_ttl = int(a.split("=", 1)[1])
 
+    got, why = take_lock(lock_file, lock_ttl)
+    if not got:
+        print(f"[skip] 本次不跑：{why}")
+        print("       定时任务与手动巡检撞车时这样让路，避免一次巡检写两行台账。")
+        return 75
+    try:
+        return _patrol(quiet, extra)
+    finally:
+        Path(lock_file).unlink(missing_ok=True)
+
+
+def _patrol(quiet: bool, extra: list[str]) -> int:
     crashed = False
     for check_id, label, script in CHECKS:
         code, tail = run_one(script, [], quiet)

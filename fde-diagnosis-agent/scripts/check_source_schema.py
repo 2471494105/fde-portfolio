@@ -14,6 +14,13 @@
     python scripts/check_source_schema.py --table=devices
     python scripts/check_source_schema.py --source=<另一份 CSV>  # 反例探针，不动原文件
     python scripts/check_source_schema.py --json=eval/source_schema.json
+    python scripts/check_source_schema.py --no-record             # 只跑不落台账
+
+台账口径（2026-11-27 补）：`red_count` 是**漂移项数**（加列/删列/改类型/改必填/疑似改名，
+一表一项），不是行数；`status` 只要有表 `exit>=1` 就是 `fail`（S3 拒跑也算 fail）。
+
+为什么以前页面写「未跑」：这个脚本原来**不落台账**，跑到绿也没人知道跑过。
+判据没台账 = 在中控台上等于不存在，和它红不红无关。
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -28,7 +36,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.ds import runlog  # noqa: E402
 from app.ds import source_schema as ss  # noqa: E402
+
+CHECK_ID = "source_schema"
 
 DEFAULT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_sandbox"
 
@@ -111,6 +122,7 @@ def main(argv: list) -> int:
     db_table = ""
     json_out = ""
     dsn = ""
+    record_run = True
     for a in argv:
         if a.startswith("--client="):
             client = a.split("=", 1)[1]
@@ -124,6 +136,11 @@ def main(argv: list) -> int:
             json_out = a.split("=", 1)[1]
         elif a.startswith("--dsn="):
             dsn = a.split("=", 1)[1]
+        elif a == "--no-record":
+            record_run = False
+        else:
+            print(f"未知参数 {a!r}", file=sys.stderr)
+            return 2
 
     reg_dir = ss.REGISTRY_DIR
     # 文件名是 <client>_<table>.json，而 client 名里本身带下划线（client_a），
@@ -135,6 +152,7 @@ def main(argv: list) -> int:
         tables = [only_table] if only_table in tables else [only_table]
 
     results, worst = [], 0
+    t0 = time.perf_counter()
     for t in tables:
         r = check_one(client, t, source or None, db_table or None, dsn or None)
         results.append(r)
@@ -165,6 +183,34 @@ def main(argv: list) -> int:
         out.write_text(json.dumps({"client": client, "tables": results}, ensure_ascii=False,
                                   indent=2), encoding="utf-8")
         print(f"json -> {out}")
+
+    # 落台账：红_count 是漂移项数，一表一项（行数在这里没有意义，源端比对的是列）
+    if record_run:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        drifted = [r for r in results if r["exit"] >= 1]
+        items = 0
+        for r in drifted:
+            d = r["s1_drift"]
+            items += (len(d["added"]) + len(d["removed"]) + len(d["type_changed"])
+                      + len(d["required_changed"]) + len(d["rename_suspect"]))
+            items += len(r["s3_breaking"])
+        ids = [f"{CHECK_ID}#{client}/{r['table']}" for r in drifted]
+        details = {
+            "red_metric": "drift_items",
+            "client": client,
+            "tables": [r["table"] for r in results],
+            "observed_via": sorted({r["observed_via"] for r in results}),
+            "drifted_tables": [r["table"] for r in drifted],
+            "ids": ids,
+        }
+        status = "fail" if worst >= 1 else "ok"
+        try:
+            run_id = runlog.record(CHECK_ID, status, items, duration_ms,
+                                   dataset=f"{client} 源端样本（表头观测，不连客户库）",
+                                   details=details)
+            print(f"运行台账 → run_id={run_id}（{status}，漂移项 {items}，{duration_ms} ms）")
+        except Exception as e:
+            print(f"[warn] 运行台账没写进去：{type(e).__name__}: {e}", file=sys.stderr)
 
     return worst
 

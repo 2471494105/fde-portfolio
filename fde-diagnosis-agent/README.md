@@ -456,6 +456,33 @@ venv\Scripts\python.exe -X utf8 scripts\verify_problem.py
 实测（2026-11-27 00:4x）：事件 3 条（红 3）、违约行 362+5+0+**40 = 407**、台账 `run_id=69`（报警）/`70`（自检）；明细页 #1 拿到 60 工单 + 302 缺陷、#2 五条（`conf_pct` 150 / −10、`captured_at` 2027-01-01、`lot_no` 空）、#9 四十条报警两列全空；`verify_problem.py` P0–P5 ALL PASS，`verify_console` C1–C12d ALL PASS。截图 `mock-mes/out/ui/console-problem-1280.png`、`problem-alarm-1280.png`、`problem-defect-1280.png`；口径与三问在 `docs/20261127_27_问题数据指向目标数据.md`（`DOC-69`）。
 
 
+### 无样本演红 + 定时巡检：把「它红过吗」「谁在跑」答上（T29）
+
+上一版有两个地方答不实：`source_schema`（结构漂移）页面写「未跑」，`status_policy` 的 B 项全绿——客户会追一句「**它红过吗**」；巡检也全靠人敲，客户会追「**明天你不在呢**」。
+
+- **「未跑」的根因不是做不到**：这个判据从来不落台账（只打终端），所以跑到绿也没人知道跑过。接 `runlog`（`red_count` = 漂移项数、`details.red_metric=drift_items`）、进 `patrol.py`（5 道 → **6 道**），页面「今日样本」从 `未跑` 变 `0`。判据没台账，在中控台上就等于不存在。
+- **`scripts/probe_red.py` 两个临时观测面当场演红**：临时 CSV 改一列名 + 加一列 → S1 增/删列 + S4 疑似改名、`exit 1`；`fde_sandbox` 临时表 3 行含「完成待确认」→ B 项 `unknown_states=['完成待确认']`。跑完必删，**客户库工单指纹演练前后逐字相同**；反例不红就 `exit 1`，不拿临时表当客户案例。
+- **单实例锁**：`patrol.py` 撞车时后来者 `exit 75` 让路（`--lock-ttl=900` 允许抢崩溃留下的锁），避免一次巡检写两行台账、`seen_count` 推两轮。
+- **定时入口 + 计划任务**：`scripts/patrol_hourly.py`（日志按天 UTF-8、凭据只从 `FDE_ALERT_WEBHOOK` 继承）＋ Windows 计划任务 `FDE-Patrol` 每 30 分钟；Linux 换成 `crontab` 调同一份入口。
+- **踩坑**：先用 `.ps1` 做壳，python 按 UTF-8 写、PS 5.1 的重定向按 GBK 解码再按 UTF-8 存盘，日志两头各错一次——壳改成 python 自己写文件。
+
+```powershell
+# 两个 case 都当场红（客户库指纹不变才算过）
+venv\Scripts\python.exe -X utf8 scripts\probe_red.py
+venv\Scripts\python.exe -X utf8 scripts\probe_red.py --case=status_policy
+
+# 源端结构判据（原来不落台账，现在落；红 exit 1）
+venv\Scripts\python.exe -X utf8 scripts\check_source_schema.py
+
+# 巡检入口（计划任务跑的就是它）
+venv\Scripts\python.exe -X utf8 scripts\patrol_hourly.py
+
+# 验收：任务/间隔/今日日志/锁让路/仓库无 webhook
+venv\Scripts\python.exe -X utf8 scripts\verify_schedule.py
+```
+
+实测（2026-11-27 11:10）：计划任务 `LastRun=11:10:10`、`LastResult=0`、下次 11:40:40，日志「判据 6 道 · 事件扫描 无新增」；`probe_red.py` 两 case 都红且全部还原、指纹 `e21014390743de1f23f78ae2f188e654` 一致；`verify_schedule.py` 8 ok / 0 fail。
+
 ## 目录
 
 ```
@@ -472,6 +499,8 @@ scripts/     run_case / replay / smoke_tools / smoke_qms / smoke_web / smoke_mul
               raise_alerts / patrol / demo_closeout / verify_alerts / verify_patrol / verify_demo_closeout
               seed_issues / collect_issues / verify_issues（常见问题目录与接线）
               check_alarm_ack / verify_problem（报警闭环判据、事件→目标行明细链）
+              check_source_schema（S1–S4，落台账）/ probe_red（无样本演红）
+              patrol_hourly（定时入口）/ verify_schedule（计划任务验收）
              check_ctx / prune_checkpoints / start.ps1 / audit_verify
 docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流式输出、文档对账、
              校验层引用式溯源（08）、护栏架构设计参考（09，跨项目可搬）
@@ -480,8 +509,8 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              判据的边界：入口/词表归属/字段面（DOC-59）、同一条规则写了四遍（DOC-60）、
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
-             常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）
-             00_文档索引.md 是全部 70 篇（`DOC-01`–`DOC-69` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）
+             00_文档索引.md 是全部 71 篇（`DOC-01`–`DOC-70` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -529,7 +558,7 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 12. **收口演示会留痕**：`demo_closeout.py` 每次彩排写两行台账（361 / 362），事件 `seen_count` +1。
     数字会动是它的目的，但「362」这个基线每彩排一次都要重新解释一遍；不想留痕就 `--no-record`，
     代价是页面不跟着动（`DOC-67` 第五节）
-13. **常见问题目录是「登记 8 类、今天命中 4 类」，不是 8 类全覆盖**：结构漂移今天没有样本（页面写「未跑」）、
+13. **常见问题目录是「登记 9 类、客户库今天命中 3 类」，不是 9 类全覆盖**：结构漂移已跑过（0 红，不是「未跑」）、
     口径判据全绿、没有逾期整改单、判据都在跑；`check_db_floor`（库约束 vs 设计，2 条不符）跑在 sandbox 且会插脏数据，
     属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）仍只在 KPI，
     因为 `fde-diagnosis-agent` 没有与 `mock-mes/api/obs.py` 同一份「表-时间列」映射，搬过来就是第二套口径（`DOC-68` 第七节）
@@ -538,3 +567,4 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
    所以明细页给的是「打开 #键 → `/v1/<集合>?q=<键>`」，不是「跳过去高亮」。
    另外 `verify_problem.py` 会故意打一次 404（验未知事件），接口错误计数里会留一条 `/v1/problem/999999`——
    要干净演示就重启 8021（接口指标是内存态，重启即清零，既有设计）。
+15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试、告警升级、值班表；推送真实通道也没配凭据（`--webhook= --channel=feishu|dingtalk` 早就在，仓库里刻意不存地址），所以现在落投递箱（`DOC-70` 第五节、第八节）。

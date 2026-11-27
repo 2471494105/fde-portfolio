@@ -324,7 +324,7 @@ venv\Scripts\python.exe -X utf8 scripts\verify_defect_fields.py
 
 `mock-mes/sql/013_observability.sql` 建 `gov_check_run`（`check_id / ran_at / duration_ms / status ∈ ok|warn|fail|error / red_count / dataset / code_hash / details`），`app/ds/runlog.py` 提供 `record` / `latest` / `staleness_hours`。两条判据脚本改成**默认落台账** + `--no-record`：`check_station_contract.py` 的 `red_count` 是**违约行合计**（`details.red_metric=violating_rows`），`check_status_policy.py` 的是**失败判据条数**（`failed_checks`）——两种量不混成一个数，否则趋势线没有意义。两条硬规则：写台账失败要打 `stderr`（观测缺一条不能让结论变绿）；`staleness_hours()` 从未跑过返回 `None`，调用方必须当红。
 
-数据侧三个信号在 `mock-mes/api/obs.py`：接口指标（300 样本环形缓冲，`p50/p95/max`、`2xx/3xx/4xx/5xx`、最慢 5 条、`top_paths`）、数据新鲜度（9 张表白名单，`stale>24h`，**`future` 单列**——`-849 h` 不是「很新」而是未来时间脏值）、运行台账（每条判据 `hours_since` / `silent>24h`）。接口是 `/healthz`（真连库，失败 503）、`/v1/obs/summary`（三块一次取全）、`/v1/obs/{api,freshness,runs}`；页面第五页「判据运行」。
+数据侧三个信号在 `mock-mes/api/obs.py`：接口指标（300 样本环形缓冲，`p50/p95/max`、`2xx/3xx/4xx/5xx`、最慢 5 条、`top_paths`）、数据新鲜度（9 张表，`stale>24h`，**`future` 单列**——`-849 h` 不是「很新」而是未来时间脏值；清单唯一在 `fde-diagnosis-agent/data/mapping/freshness_map.json`，T32 起**判据与页面读同一份**，读不到就 `RuntimeError`，不回落到内置副本）、运行台账（每条判据 `hours_since` / `silent>24h`）。接口是 `/healthz`（真连库，失败 503）、`/v1/obs/summary`（三块一次取全）、`/v1/obs/{api,freshness,runs}`；页面第五页「判据运行」。
 
 ```powershell
 # 判据默认落台账，末尾打印 run_id；加 --no-record 只判不记账
@@ -501,6 +501,29 @@ venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --dry-run   # 只看将�
 
 判决过程与三问在 `docs/20261127_29_告警出站与飞书判决.md`（`DOC-71`）；飞书侧冻结结论同步进 `docs/20261121_02_双入口工程表.md`。
 
+### 数据新鲜度：页面与判据读同一份登记（T32）
+
+上一版新鲜度只是「看得见」：`mock-mes/api/obs.py` 内置 9 张表清单，中控台 KPI 写「陈旧 4 表 / 未来 1 表」，但没有任何判据、台账、巡检在管它——客户问「**这 4 张哪天变 5 张，谁会告诉你**」时只能答「我下次看页面」。更麻烦的是清单只活在页面代码里，判据要管就得再抄一份，那就是第二套口径。
+
+- **单一源**：`data/mapping/freshness_map.json` 记「表 - 事件时间列 - static 标记」，页面与判据都读它；`obs.py` 读不到就 `RuntimeError`（宁可 500，也不静默用旧副本）。
+- **static 标记**：客户库是 2026 时间轴的静态种子，任何 24h 阈值都必然判陈旧——所以 8 张表标 `static:true` 跳过判红，只有 `gov_check_run.ran_at` 按实时判。**「陈旧 4 表」是样本身份，不是客户数据在漂**，这句话得能当场说清。
+- **判据 F1/F2**：`scripts/check_freshness.py`，F1 超阈值、F2 未来时间，落台账 `check_id=freshness`、`red_metric=stale_or_future_tables`、`details` 带 `ids/stale/future/static_skipped/threshold_hours`；`--no-record` 只判不记。
+- **进巡检**：`patrol.py` 第 7 道。判据不进巡检 = 中控台上等于不存在（T29 的同一课）。
+- **故意不进事件流**：一开事件，5 个表级项就会变成常红事件，事件 3 → 4、违约行 407 → 412，「客户库命中 3 类」的口径当场作废。要开的前提是换成时间轴会走的样本或按表拆事件，不属于答辩前该做的事（`DOC-73`）。
+
+```powershell
+# 只判不记账（看 9 张表的 staleness / 未来时间）
+venv\Scripts\python.exe -X utf8 scripts\check_freshness.py --no-record
+
+# 落台账（会写 gov_check_run）
+venv\Scripts\python.exe -X utf8 scripts\check_freshness.py
+
+# 巡检里第 7 道
+venv\Scripts\python.exe -X utf8 scripts\patrol.py
+```
+
+实测（2026-11-27 13:11）：9 张表、红 0；`gov_check_run` 最近 0.2 小时前 ok；`biz_defect_record` 最近 2027-01-01（−834.8 小时，未来时间）但 `static` 跳过；重启 8021 后 `/v1/obs/freshness` 仍报「陈旧 4 / 未来 1」，但 `threshold_hours` 与 `static` 已来自同一份 json；巡检「判据 7 道 · 事件扫描 无新增」，`verify_schedule.py` 9 ok / 0 fail、`verify_obs.py` 六段全过、`verify_console.py` C1–C12d 全过、单测 594 OK。机制与边界见 `docs/20261127_31_数据新鲜度同源.md`（`DOC-73`）。
+
 ## 目录
 
 ```
@@ -529,7 +552,7 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
              常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）、九类样本口径（DOC-72）
-             00_文档索引.md 是全部 73 篇（`DOC-01`–`DOC-72` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 74 篇（`DOC-01`–`DOC-73` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -579,8 +602,7 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
     代价是页面不跟着动（`DOC-67` 第五节）
 13. **常见问题目录是「登记 9 类、客户库今天命中 3 类」，不是 9 类全覆盖**：结构漂移已跑过（0 红，不是「未跑」）、
     口径判据全绿、没有逾期整改单、判据都在跑；`check_db_floor`（库约束 vs 设计，2 条不符）跑在 sandbox 且会插脏数据，
-    属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）仍只在 KPI，
-    因为 `fde-diagnosis-agent` 没有与 `mock-mes/api/obs.py` 同一份「表-时间列」映射，搬过来就是第二套口径（`DOC-68` 第七节）
+    属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）2026-11-27 起已落台账、是巡检第 7 道，与页面读同一份 `freshness_map.json`，但**仍不进事件流**——客户库是 2026 时间轴的静态种子，一开事件就常红 5 条，会把「客户库命中 3 类」的口径和 407 的演示数字一起污染（`DOC-73` 第三节）
 14. **明细页只截前 50 行，没有翻页按钮**：`/problem?alert=N&size=200` 能看到更多，但 362 行那种要自己调 `size`；
    报警类**没有作业页**（`/v1/alarms` 只有只读 JSON），改数据仍在客户侧 MES；`/app/` 三页也不能按编号定位到某一行，
    所以明细页给的是「打开 #键 → `/v1/<集合>?q=<键>`」，不是「跳过去高亮」。

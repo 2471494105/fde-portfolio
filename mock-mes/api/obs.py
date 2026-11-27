@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import Counter, deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 WINDOW = 300
 _STALE_HOURS = 24
@@ -28,18 +30,21 @@ _samples: deque[tuple[datetime, str, int, float]] = deque(maxlen=WINDOW)
 _paths: Counter = Counter()
 _errors: Counter = Counter()
 
-# 业务表 → 事件时间列（None = 静态主数据，没有「最新」这回事）
-FRESHNESS = [
-    ("biz_work_order", "opened_at", "业务"),
-    ("biz_defect_record", "captured_at", "业务"),
-    ("biz_inspection_lot", "started_at", "业务"),
-    ("biz_alarm", "raised_at", "业务"),
-    ("biz_repair_order", "opened_at", "业务"),
-    ("gov_remediation_order", "created_at", "治理"),
-    ("gov_check_run", "ran_at", "观测"),
-    ("md_device", None, "主数据"),
-    ("md_station", None, "主数据"),
-]
+# 业务表 → 事件时间列，只认一处事实：fde-diagnosis-agent 的 freshness_map.json。
+# 判据（scripts/check_freshness.py）读的是同一份——页面绿、判据红这种「两套口径」不允许再出现。
+# 读取失败**不兜底**：宁可 500，也不静默用内置清单，那会悄悄变回第二套口径。
+FRESH_MAP = (Path(__file__).resolve().parents[2] / "fde-diagnosis-agent"
+             / "data" / "mapping" / "freshness_map.json")
+
+
+def load_freshness_spec(path: Path = FRESH_MAP) -> tuple[float, list[tuple[str, str | None, str, bool]]]:
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        tables = [(t["table"], t.get("time_col"), t.get("kind", ""), bool(t.get("static")))
+                  for t in spec["tables"]]
+        return float(spec.get("default_max_age_hours", 24)), tables
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"新鲜度登记读取失败（{path}）：{type(e).__name__}: {e}") from e
 
 
 def record(path: str, status: int, ms: float) -> None:
@@ -90,10 +95,11 @@ def freshness(dsn: str) -> dict:
     """每张表：行数、最近事件、距今小时、是否 stale（> 24h）。"""
     import psycopg
 
+    threshold_h, tables = load_freshness_spec()
     out = []
     now = datetime.now(timezone.utc)
     with psycopg.connect(dsn) as conn:
-        for table, tcol, kind in FRESHNESS:
+        for table, tcol, kind, is_static in tables:
             rows = conn.execute(f"SELECT count(*) AS n FROM {table}").fetchone()[0]
             latest = None
             if tcol:
@@ -105,12 +111,13 @@ def freshness(dsn: str) -> dict:
                 if latest.tzinfo is None:
                     latest = latest.replace(tzinfo=timezone.utc)
                 age_h = round((now - latest).total_seconds() / 3600.0, 1)
-                stale = age_h > _STALE_HOURS
+                stale = age_h > threshold_h
                 future = age_h < 0
             out.append(
                 {
                     "table": table,
                     "kind": kind,
+                    "static": is_static,
                     "rows": rows,
                     "latest": latest.isoformat(sep=" ") if latest else None,
                     "age_hours": age_h,
@@ -121,7 +128,7 @@ def freshness(dsn: str) -> dict:
     stale_tables = [r["table"] for r in out if r["stale"]]
     future_tables = [r["table"] for r in out if r["future"]]
     return {
-        "threshold_hours": _STALE_HOURS,
+        "threshold_hours": threshold_h,
         "tables": out,
         "stale": stale_tables,
         "future": future_tables,

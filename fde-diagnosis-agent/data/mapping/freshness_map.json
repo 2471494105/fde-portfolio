@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "updated": "2026-11-27",
+  "why": "数据新鲜度只有一处事实：页面 KPI（mock-mes/api/obs.py）与判据（scripts/check_freshness.py）都读这一份。上一版的问题不是「没有判据」，而是这台库是 2026-11 的静态种子，任何 24 小时阈值都必然判陈旧——那不是客户数据漂了，是样本身份决定的。所以把「表-时间列 + 是否静态」登记在这里，判据按登记判，页面按同一份算观测值。",
+  "default_max_age_hours": 24,
+  "tables": [
+    {"table": "biz_work_order", "time_col": "opened_at", "kind": "业务", "static": true, "note": "种子静态：工单 60 条集中在 2026-11-01..05"},
+    {"table": "biz_defect_record", "time_col": "captured_at", "kind": "业务", "static": true, "note": "种子静态；未来时间那行由 defect_fields 判据负责，不在这里重复判"},
+    {"table": "biz_inspection_lot", "time_col": "started_at", "kind": "业务", "static": true},
+    {"table": "biz_alarm", "time_col": "raised_at", "kind": "业务", "static": true},
+    {"table": "biz_repair_order", "time_col": "opened_at", "kind": "业务", "static": true},
+    {"table": "gov_remediation_order", "time_col": "created_at", "kind": "治理", "static": true},
+    {"table": "gov_check_run", "time_col": "ran_at", "kind": "观测", "static": false, "note": "唯一按实时判陈旧的表：判据自己多久没跑，属于元观测"},
+    {"table": "md_device", "time_col": null, "kind": "主数据", "static": true, "note": "静态主数据，没有「最新」这回事"},
+    {"table": "md_station", "time_col": null, "kind": "主数据", "static": true}
+  ]
+}

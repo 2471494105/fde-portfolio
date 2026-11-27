@@ -586,6 +586,26 @@ venv\Scripts\python.exe -X utf8 scripts\verify_problem.py
 
 实测（2026-11-27 13:31）：`alert=1` 第 1 页 50+50 行、第 2 页工单 10 行 / 缺陷 50 行；`/app/?q=WO-2026-0001#work_orders` 落到 1 条工单，`/v1/work_orders?q=` 同样 `total=1`；`verify_problem` P7a–P7d、P8a–P8c 全 PASS，`verify_console` C1–C12d、`verify_ui` 无回归。截图 `problem-alert1-page2-1280.png`、`app-deeplink-wo-1280.png`。取舍与局限见 `docs/20261127_34_明细翻页与编号深链.md`（`DOC-76`）。
 
+### 备份能证明，静默不丢消息（T37 / T38）
+
+C 档两件：一件是「客户问退不回去怎么办」，一件是「巡检半夜别吵人」。两件都不进判据、不改事件口径——事件仍 3 条、违约行仍 407。
+
+- **备份与还原（T37 / C1）**：`backup_db.py` 出 `-Fc` dump + 同名 meta（sha256、`pg_dump` 18.6、**六表行数**、工单/缺陷整表指纹），meta **不落密码**；`restore_db.py` **只许还原到 `fde_client_restore*`**（`--target=fde_client` 直接拒、无旁路），文件头必须 `PGDMP`，`--exit-on-error` 且失败也收尾不留半吊子库，还原后行数/指纹逐项对账、不一致 `exit 1`。
+- **静默窗口（T38 / C3）**：`FDE_ALERT_QUIET=22:00-08:00`。严格 `HH:MM`、半开区间 `[22:00, 08:00)`、跨午夜、零长度窗口不算静默。窗口内**事件照建、台账照记、不推**，在 `detail.delivery` 留 `deferred`；窗口外下一轮补推一次——「静默」不等于「丢消息」，也不等于「一直重试」。
+
+```powershell
+# 备份 + 还原到校核库 + 逐项对账（V1–V7）
+venv\Scripts\python.exe -X utf8 scripts\backup_db.py
+venv\Scripts\python.exe -X utf8 scripts\restore_db.py --dump=out\backup\<文件名>.dump --yes
+venv\Scripts\python.exe -X utf8 scripts\verify_backup.py
+
+# 静默窗口：窗口内压住、窗口外补推、配置错拦住（Q1–Q5b）
+venv\Scripts\python.exe -X utf8 scripts\raise_alerts.py --quiet=22:00-08:00 --now=2026-11-27T23:30:00+08:00
+venv\Scripts\python.exe -X utf8 scripts\verify_quiet.py
+```
+
+实测（2026-11-27 13:5x）：dump 91,157 字节、sha256 `94c83dc0…`、六表 60/302/120/40/16/48、工单指纹 `df7c564b4185077b` 与演示基线一致；`verify_backup` V1–V7 全 PASS（截断 dump 与 `.sql` 冒充都拒、`--target=fde_client` 拒、`keep=1` 只剩一份）；`verify_quiet` Q1–Q5b 全 PASS（窗口内「留在投递箱」且无「外发失败」、窗口外真推并清 `deferred`、`2200`/`22.00` 都 `exit 2`）；全仓单测 **603** 条、`verify_alerts`/`verify_issues`/`verify_patrol` ALL PASS、`verify_schedule` 9 ok。取舍与局限见 `docs/20261127_35_备份与还原.md`（`DOC-77`）与 `docs/20261127_36_静默窗口.md`（`DOC-78`）。
+
 ## 目录
 
 ```
@@ -614,7 +634,7 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
              常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）、九类样本口径（DOC-72）
-             00_文档索引.md 是全部 77 篇（`DOC-01`–`DOC-76` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 79 篇（`DOC-01`–`DOC-78` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -666,8 +686,10 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
     口径判据全绿、没有逾期整改单、判据都在跑；`check_db_floor`（库约束 vs 设计，2 条不符）跑在 sandbox 且会插脏数据，
     属于平台自检，**故意没接进客户库的事件流**；数据新鲜度（陈旧 4 表 / 未来 1 表）2026-11-27 起已落台账、是巡检第 7 道，与页面读同一份 `freshness_map.json`，但**仍不进事件流**——客户库是 2026 时间轴的静态种子，一开事件就常红 5 条，会把「客户库命中 3 类」的口径和 407 的演示数字一起污染（`DOC-73` 第三节）
 14. **明细页已能翻页（T35），但只是页级**：`?alert=N&page=P&size=S`（`size` 夹 10–200，默认 50）同一页号作用于每张表；要「翻到第 200 行」这种行级定位还得加 `offset`，演示用不到（`DOC-76`）。
-   报警类**没有作业页**（`/v1/alarms` 只有只读 JSON），改数据仍在客户侧 MES；`/app/` 三页也不能按编号定位到某一行，
-   所以明细页给的是「打开 #键 → `/v1/<集合>?q=<键>`」，不是「跳过去高亮」。
-   另外 `verify_problem.py` 会故意打一次 404（验未知事件），接口错误计数里会留一条 `/v1/problem/999999`——
+   「打开 #键」2026-11-27 起落到 `/app/?q=<键>#<集合>`（T36，客户端过滤出那一行、搜索框回填），旁边留小号 JSON 供复核；
+   报警类**没有客户端视图**，仍走 JSON——加一页报警属于冻结的视觉范围，这一条明说。
+   `verify_problem.py` 会故意打一次 404（验未知事件），接口错误计数里会留一条 `/v1/problem/999999`——
    要干净演示就重启 8021（接口指标是内存态，重启即清零，既有设计）。
-15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试、告警升级、值班表；推送通道已接上**群自定义机器人**（单向：只发不收、按钮点不动；地址只在本机 `.env`，仓库不存；群侧开了关键词校验，漏了会 `19024`）；飞书**自建应用**在这套账号下被判死（`21001` 账号级接入管控，见 `DOC-71`），所以现在落投递箱的只剩「没配 `.env` 的机器」。
+15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试 N 次、告警升级到二级接收人、值班表（`DOC-78` 第四节）；2026-11-27 起加了静默窗口 `FDE_ALERT_QUIET=22:00-08:00`——窗口内事件照建、台账照记、**不推**，在 `detail.delivery` 留 `deferred`，窗口外下一轮补推一次，所以「静默」不等于「丢消息」，但也不等于「一直重试」。推送通道已接上**群自定义机器人**（单向：只发不收、按钮点不动；地址只在本机 `.env`，仓库不存；群侧开了关键词校验，漏了会 `19024`）；飞书**自建应用**在这套账号下被判死（`21001` 账号级接入管控，见 `DOC-71`），所以现在落投递箱的只剩「没配 `.env` 的机器」。
+16. **备份是手工一条命令，不在计划任务里**：`scripts/backup_db.py` 出 `-Fc` dump + meta（sha256 / pg_dump 版本 / 六表行数 / 两表指纹，**不落密码**），`restore_db.py` **只许还原到 `fde_client_restore*` 校核库**、还原后逐项对账。`out/backup/` 已进 `.gitignore`（含客户行原值）。
+    没有增量 / WAL 归档 / PITR、没有异地与加密、没有每日自动还原校核——一致性级别是 `pg_dump` 的快照级，不是业务级；`--no-owner` 还原只证明数据与结构能回去，不重建角色权限（`DOC-77` 第四节）。

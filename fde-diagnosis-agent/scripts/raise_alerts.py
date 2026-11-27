@@ -24,10 +24,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import traceback
 import urllib.request
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as dtime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,42 @@ from app.ds import alerts as al  # noqa: E402
 from app.ds import runlog  # noqa: E402
 
 CLIENT_DSN = "postgresql://postgres:postgres@localhost:5432/fde_client"
+QUIET_ENV = "FDE_ALERT_QUIET"
+
+
+def parse_quiet(spec: str) -> tuple[dtime, dtime] | None:
+    """把 `22:00-08:00` 解析成 (关, 开)。空串 = 不静默；跨午夜允许（关 > 开）。
+
+    要求 `HH:MM` 严格两位：`time.fromisoformat` 太宽容（`2200`、`22.00` 都收），
+    而「窗口写错了却看着跑通了」是最坏的失败——它把消息悄悄吞掉。所以先卡格式再解析。
+    """
+    s = (spec or "").strip()
+    if not s:
+        return None
+    if "-" not in s:
+        raise ValueError(f"静默窗口要写成 22:00-08:00 这种（当前 {spec!r}）")
+    a, b = (x.strip() for x in s.split("-", 1))
+    for x in (a, b):
+        if not re.fullmatch(r"\d{2}:\d{2}", x):
+            raise ValueError(f"静默窗口时间要写成 HH:MM（当前 {x!r}，出处 {spec!r}）")
+    try:
+        t0, t1 = dtime.fromisoformat(a), dtime.fromisoformat(b)
+    except ValueError as e:
+        raise ValueError(f"静默窗口时间不存在（{spec!r}）：{e}") from e
+    return t0, t1
+
+
+def in_quiet(now: datetime, spec) -> bool:
+    """(关, 开) 半开区间内为静默；零长度窗口不算静默——别把「24h 不打扰」伪装成配置。"""
+    w = parse_quiet(spec) if isinstance(spec, str) else spec
+    if not w:
+        return False
+    t0, t1 = w
+    if t0 == t1:
+        return False
+    cur = now.time()
+    return (t0 <= cur < t1) if t0 < t1 else (cur >= t0 or cur < t1)
+
 
 def _load_dotenv(path: Path) -> None:
     """把 .env 里尚未存在的键补进环境；显式导出的环境变量优先。"""
@@ -144,12 +181,18 @@ def upsert(dsn: str, events: list[dict], closes: list[dict], now: datetime) -> d
     with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         for e in events:
             cur.execute(
-                "SELECT alert_id, state, seen_count FROM gov_alert"
+                "SELECT alert_id, state, seen_count, detail FROM gov_alert"
                 " WHERE dedup_key = %s AND state <> 'closed'",
                 (e["dedup_key"],),
             )
             hit = cur.fetchone()
-            payload = json.dumps(e.get("detail") or {}, ensure_ascii=False, default=str)
+            # 投递痕迹（delivery）是运营状态，不属于判据结论：更新时并进来，
+            # 否则每轮扫一遍就把上轮的「被静默压住 / 推失败」擦掉，欠推永远补不出来。
+            old_dl = ((hit or {}).get("detail") or {}).get("delivery")
+            merged = dict(e.get("detail") or {})
+            if old_dl:
+                merged["delivery"] = old_dl
+            payload = json.dumps(merged, ensure_ascii=False, default=str)
             if hit:
                 cur.execute(
                     "UPDATE gov_alert SET last_seen = %s, seen_count = seen_count + 1,"
@@ -172,9 +215,11 @@ def upsert(dsn: str, events: list[dict], closes: list[dict], now: datetime) -> d
                 is_new = True
             # 只有两类值得叫醒人：第一次出现，或红行里出现了新增编号。
             # 「同一批红再跑一次」只涨 seen_count，不推——刷屏等于没有告警。
+            # 第三类：上轮撞上静默窗口、被压住的那条。不补推，静默就变成丢消息。
             new_ids = (e.get("detail") or {}).get("new_ids") or []
-            if e.get("notify") and (is_new or new_ids):
-                pushed.append({**e, "alert_id": alert_id, "is_new": is_new})
+            owed = bool((old_dl or {}).get("deferred"))
+            if (e.get("notify") and (is_new or new_ids)) or owed:
+                pushed.append({**e, "alert_id": alert_id, "is_new": is_new, "owed": owed})
         for c in closes:
             cur.execute(
                 "UPDATE gov_alert SET state = 'closed', closed_at = %s, closed_reason = %s"
@@ -184,12 +229,22 @@ def upsert(dsn: str, events: list[dict], closes: list[dict], now: datetime) -> d
     return {"pushed": pushed}
 
 
-def deliver(pushed: list[dict], webhook: str, channel: str, dsn: str) -> list[str]:
-    """外发。没配 webhook 就不外发，但打印出来——「没通道」不能变成「没发生」。"""
+def deliver(pushed: list[dict], webhook: str, channel: str, dsn: str,
+            deferred: str = "") -> list[str]:
+    """外发。没配 webhook 就不外发，但打印出来——「没通道」不能变成「没发生」。
+
+    `deferred` 非空表示撞上静默窗口（如 `22:00-08:00`）：**不推**，但在事件上留
+    `delivery.deferred`，下一轮窗口外的扫描会看到它并补推一次——静默不该等于丢消息。
+    """
     errs: list[str] = []
+    if not pushed:
+        return errs  # 没有要推的，就别发一个空包出去，也别把它记成「外发失败」
+    if deferred:
+        _mark_deferred(dsn, pushed, deferred)
+        print(f"（静默窗口 {deferred}：{len(pushed)} 条已建事件留在投递箱，等窗口结束后的下一轮补推）")
+        return errs
     if not webhook:
-        if pushed:
-            print(f"（未配置外部通道，{len(pushed)} 条已落投递箱）")
+        print(f"（未配置外部通道，{len(pushed)} 条已落投递箱）")
         return errs
 
     def body(items: list[dict]) -> dict:
@@ -211,6 +266,7 @@ def deliver(pushed: list[dict], webhook: str, channel: str, dsn: str) -> list[st
         with urllib.request.urlopen(req, timeout=8) as resp:
             if resp.status >= 300:
                 raise RuntimeError(f"HTTP {resp.status}")
+        _mark_delivery(dsn, pushed, channel, None)
         print(f"已外发 {len(pushed)} 条 → {channel}")
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
@@ -220,11 +276,26 @@ def deliver(pushed: list[dict], webhook: str, channel: str, dsn: str) -> list[st
     return errs
 
 
-def _mark_delivery(dsn: str, pushed: list[dict], channel: str, err: str) -> None:
-    """外发失败要留在事件上：否则第二天没人知道这条其实没送达。"""
+def _mark_deferred(dsn: str, pushed: list[dict], window: str) -> None:
+    """静默窗口压住的那批：在事件上留痕，下一轮才补推得出来。"""
     import psycopg
 
-    note = json.dumps({"channel": channel, "ok": False, "error": err}, ensure_ascii=False)
+    note = json.dumps({"deferred": window, "ok": False}, ensure_ascii=False)
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        for e in pushed:
+            cur.execute(
+                "UPDATE gov_alert SET detail = detail || jsonb_build_object('delivery', %s::jsonb)"
+                " WHERE alert_id = %s",
+                (note, e["alert_id"]),
+            )
+
+
+def _mark_delivery(dsn: str, pushed: list[dict], channel: str, err: str | None) -> None:
+    """外发结果要留在事件上：失败时否则第二天没人知道这条其实没送达；成功时清掉 deferred。"""
+    import psycopg
+
+    note = json.dumps({"channel": channel, "ok": err is None, "error": err},
+                      ensure_ascii=False)
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         for e in pushed:
             cur.execute(
@@ -235,7 +306,8 @@ def _mark_delivery(dsn: str, pushed: list[dict], channel: str, err: str) -> None
 
 
 def record_sweep(dsn: str, t0: float, events: list[dict], closes: list[dict],
-                 pushed: list[dict], errs: list[str], channel: str) -> int | None:
+                 pushed: list[dict], errs: list[str], channel: str,
+                 quiet: str | None = None) -> int | None:
     """把「扫描自己跑过没有」写进同一张运行台账。
 
     没有这一行，中控台就有一个无法回答的问题：页面上的数字是「现在」还是「上周」？
@@ -254,6 +326,7 @@ def record_sweep(dsn: str, t0: float, events: list[dict], closes: list[dict],
         "closes": len(closes),
         "pushed": len(pushed),
         "channel": channel or "inbox",
+        "quiet": quiet,
         "error": errs[0] if errs else None,
         "open": int(open_n),
     }
@@ -331,6 +404,7 @@ def main(argv: list[str]) -> int:
     dsn = os.environ.get("FDE_CLIENT_DSN", CLIENT_DSN)
     webhook = os.environ.get("FDE_ALERT_WEBHOOK", "")
     channel = os.environ.get("FDE_ALERT_CHANNEL", "json")
+    quiet_spec = os.environ.get(QUIET_ENV, "")
     dry = False
     record = True
     mode = "scan"
@@ -351,6 +425,10 @@ def main(argv: list[str]) -> int:
             webhook = a.split("=", 1)[1]
         elif a.startswith("--channel="):
             channel = a.split("=", 1)[1]
+        elif a.startswith("--quiet="):
+            quiet_spec = a.split("=", 1)[1]
+        elif a == "--quiet-off":
+            quiet_spec = ""
         elif a.startswith("--ack="):
             mode, alert_id = "acked", int(a.split("=", 1)[1])
         elif a.startswith("--close="):
@@ -372,9 +450,17 @@ def main(argv: list[str]) -> int:
     if mode in ("acked", "closed"):
         return cmd_state(dsn, alert_id, mode, by, reason, now)
 
+    try:
+        deferred = quiet_spec if in_quiet(now, quiet_spec) else ""
+    except ValueError as e:
+        print(f"[配置错] {e}", file=sys.stderr)
+        return 2
+
     rows = load_rows(dsn)
     events, closes, summary = plan(rows, load_orders(dsn), now)
     print(f"判据运行 {len(rows)} 条 · 事件 {len(events)} 条（红 {summary['red']} / 黄 {summary['amber']}）· 待关 {len(closes)} 条")
+    if quiet_spec:
+        print(f"静默窗口 {quiet_spec} · 现在{'在' if deferred else '不在'}窗口内（门口 {now.strftime('%H:%M')}）")
     for e in events:
         flag = "推" if e.get("notify") else "记"
         print(f"[{flag}] [{e['severity']:5s}] {e['title']}（{e.get('owner')}）")
@@ -385,12 +471,13 @@ def main(argv: list[str]) -> int:
         return 0
 
     res = upsert(dsn, events, closes, now)
-    errs = deliver(res["pushed"], webhook, channel, dsn)
+    errs = deliver(res["pushed"], webhook, channel, dsn, deferred=deferred)
     if record:
-        run_id = record_sweep(dsn, t0, events, closes, res["pushed"], errs, channel)
+        run_id = record_sweep(dsn, t0, events, closes, res["pushed"], errs, channel,
+                              quiet=deferred or None)
         if run_id:
             print(f"扫描自检 → run_id={run_id}（新增推送 {len(res['pushed'])} 条，"
-                  f"通道 {channel if webhook else 'inbox'}）")
+                  f"通道 {'inbox(静默)' if deferred else (channel if webhook else 'inbox')}）")
     if errs:
         return 2
     return 1 if res["pushed"] else 0

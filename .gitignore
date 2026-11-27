@@ -66,3 +66,7 @@ _项目README模板.md
 # 处置清单导出：每次行数/编号都会变，且含客户行原值——本地产物不进公开仓库（2026-11-27 定）
 # 要引用某次清单，看 DOC-74 里的行数与字节数；重跑一条命令就能再生成。
 fde-diagnosis-agent/out/actions/
+
+# 客户库备份：dump 里有客户行原值，本地产物不进公开仓库（2026-11-27 定）
+# 要引用某次备份，看 DOC-77 的字节数与 sha256 前缀；重跑 backup_db.py 就能再生成。
+fde-diagnosis-agent/out/backup/

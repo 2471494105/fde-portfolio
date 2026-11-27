@@ -524,6 +524,28 @@ venv\Scripts\python.exe -X utf8 scripts\patrol.py
 
 实测（2026-11-27 13:11）：9 张表、红 0；`gov_check_run` 最近 0.2 小时前 ok；`biz_defect_record` 最近 2027-01-01（−834.8 小时，未来时间）但 `static` 跳过；重启 8021 后 `/v1/obs/freshness` 仍报「陈旧 4 / 未来 1」，但 `threshold_hours` 与 `static` 已来自同一份 json；巡检「判据 7 道 · 事件扫描 无新增」，`verify_schedule.py` 9 ok / 0 fail、`verify_obs.py` 六段全过、`verify_console.py` C1–C12d 全过、单测 594 OK。机制与边界见 `docs/20261127_31_数据新鲜度同源.md`（`DOC-73`）。
 
+### 处置清单：407 行能带走，但销账不靠点一下（T33）
+
+T27 把事件翻成了「哪几行、改哪一栏」，客户下一句是「那谁去做」。这一轮补的是「拿得走」，边界画在销账上：
+
+- **接口先出 CSV**：`GET /v1/problem/{alert_id}/export.csv`，复用 `problems.problem()` 同一套取数、按 200 行翻页取全（362 行不会只给 200）；14 列，含「先做这一步」「改哪一栏」「该行原值(JSON)」「台账 run」「判据跑的时间」；`utf-8-sig` 带 BOM，Excel 双击不乱码。
+- **一键导出**：`scripts/export_actions.py` 把三条活事件合并成一份 `out/actions/待处置清单_YYYYMMDD_HHMM.csv`，行数直接取接口的 `ids_total`，不查库、不数第二遍。
+- **只导出，不代填**：不写回 `acked_by` / `cleared_at`。页面写明「认领与销账仍只认同一道判据复跑归零」。
+- **没有「认领」按钮**，三个理由：与「关闭只认复跑归零」冲突、写回等于代填客户业务事实、8021 用的是 `ro_reader` 只读账号——写入口会把「后端只读」这条保证拆掉一半。
+
+```powershell
+# 一条事件：浏览器打开明细页点按钮，或直接取
+curl.exe -s -o alarm9.csv "http://127.0.0.1:8021/v1/problem/9/export.csv"
+
+# 三条活事件合并（计划任务/彩排前都可以跑）
+venv\Scripts\python.exe -X utf8 scripts\export_actions.py
+
+# 验收：P0–P5 原样 + P6a 407=407 / P6b 14 列 / P6c 导出不改数据 / P6d 404
+venv\Scripts\python.exe -X utf8 scripts\verify_problem.py
+```
+
+实测（2026-11-27 13:21–13:23）：#1 → 362 行、#2 → 5 行、#9 → 40 行，合计 **407**；一键导出 246,551 字节、前三字节 `EF BB BF`；未知参数 `exit 2`；`verify_problem` P6 四项全 PASS，导出后 `acked_by`/`cleared_at` 仍 40 条空（**导出没有顺手改数据**）；`verify_console` C1–C12d、`verify_ui`、`verify_obs` 六段均无回归。截图 `mock-mes/out/ui/problem-alert9-export-1280.png`。边界与「认领台账为什么不做」见 `docs/20261127_32_处置清单与销账边界.md`（`DOC-74`）。
+
 ## 目录
 
 ```
@@ -552,7 +574,7 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
              常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）、九类样本口径（DOC-72）
-             00_文档索引.md 是全部 74 篇（`DOC-01`–`DOC-73` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 75 篇（`DOC-01`–`DOC-74` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

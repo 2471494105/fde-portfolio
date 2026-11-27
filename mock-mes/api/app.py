@@ -189,6 +189,58 @@ def problem(alert_id: int, response: Response,
     return res
 
 
+@app.get("/v1/problem/{alert_id}/export.csv")
+def problem_export(alert_id: int, response: Response):
+    """一条事件 → 待处置清单（CSV）。**只导出，不写回。**
+
+    为什么只有导出、没有「认领」按钮：关闭只认同一道判据复跑归零，不认人点一下。
+    这张表给人拿去分工干活，能不能销账由判据下一轮说了算。
+    """
+    import csv
+    import io
+    import json as _json
+
+    res = problems.problem(DSN, alert_id, size=200, page=1)
+    if res is None:
+        response.status_code = 404
+        return {"detail": "no such alert: %s" % alert_id}
+
+    # 一条事件的编号可能超过 200（工位归属 362 条），按页取全，不截断
+    groups = res["groups"]
+    for g in groups:
+        page = 1
+        while len(g["rows"]) < g["matched"] and page < 20:
+            page += 1
+            nxt = problems.problem(DSN, alert_id, size=200, page=page)
+            if nxt is None:
+                break
+            g2 = next((x for x in nxt["groups"] if x["table"] == g["table"]), None)
+            if g2 is None or not g2["rows"]:
+                break
+            g["rows"].extend(g2["rows"])
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["事件编号", "判据", "类别", "严重度", "事件标题", "负责人", "先做这一步",
+                "目标表", "定位键", "定位值", "改哪一栏", "该行原值(JSON)", "台账run", "判据跑的时间"])
+    a, i, run = res["alert"], res["issue"], (res["run"] or {})
+    for g in groups:
+        for row in g["rows"]:
+            w.writerow([
+                a["alert_id"], a["check_id"], a["issue_short"] or (i["short"] or ""),
+                a["severity"], a["title"], a["owner"] or (i["owner"] or ""),
+                a["first_step"] or (i["first_step"] or ""),
+                g["label"], g["key"], row.get(g["key"]), g["fix"] or "",
+                _json.dumps({k: row.get(k) for k in g["cols"]}, ensure_ascii=False, default=str),
+                run.get("run_id"), run.get("ran_at"),
+            ])
+
+    body = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    fname = "action-list-alert-%d.csv" % alert_id
+    response.headers["Content-Disposition"] = 'attachment; filename="%s"' % fname
+    return Response(content=body, media_type="text/csv; charset=utf-8")
+
+
 STATIC = Path(__file__).resolve().parent / "static"
 app.mount("/app", StaticFiles(directory=str(STATIC), html=True), name="app")
 

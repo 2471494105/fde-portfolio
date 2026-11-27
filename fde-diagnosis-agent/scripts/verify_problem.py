@@ -127,6 +127,40 @@ def main(argv: list[str]) -> int:
     except urllib.error.HTTPError as e:
         check(e.code == 404, "P5 未知事件返回 404", f"HTTP {e.code}")
 
+
+    # P6 处置清单导出：行数 = 台账编号数、列齐、导出不改数据、未知事件 404
+    if a1 and a2 and a3:
+        import csv
+        import io
+
+        def export(aid: int) -> tuple[int, list[str]]:
+            raw = urllib.request.urlopen(f"{BASE}/v1/problem/{aid}/export.csv", timeout=30).read()
+            rows = list(csv.reader(io.StringIO(raw.decode("utf-8-sig"))))
+            return len(rows) - 1, rows[0]
+
+        n1, head1 = export(a1["alert_id"])
+        n2, _ = export(a2["alert_id"])
+        n3, _ = export(a3["alert_id"])
+        want = (len(ids_of((a1["detail"] or {}).get("run_id")))
+                + len(ids_of((a2["detail"] or {}).get("run_id")))
+                + len(ids_of((a3["detail"] or {}).get("run_id"))))
+        check(n1 + n2 + n3 == want, "P6a 导出总行数=三条事件的台账编号数",
+              f"{n1}+{n2}+{n3}={n1 + n2 + n3} · 台账 {want}")
+        check(len(head1) == 14 and "改哪一栏" in head1 and "先做这一步" in head1,
+              "P6b 表头含「先做这一步」「改哪一栏」", f"{len(head1)} 列")
+
+        # 导出是只读动作：导完再数一遍，报警两列还是一样的 40 条空
+        p9 = get(f"/v1/problem/{a3['alert_id']}")
+        blanks9 = sum(1 for r in p9["groups"][0]["rows"]
+                      if r.get("acked_by") in (None, "") and r.get("cleared_at") in (None, ""))
+        check(blanks9 == 40, "P6c 导出没有顺手改数据（两列仍 40 条空）", f"{blanks9} 行")
+
+        try:
+            urllib.request.urlopen(f"{BASE}/v1/problem/999999/export.csv", timeout=15)
+            check(False, "P6d 未知事件导出返回 404")
+        except urllib.error.HTTPError as e:
+            check(e.code == 404, "P6d 未知事件导出返回 404", f"HTTP {e.code}")
+
     print()
     if fails:
         print(f"[FAIL] {len(fails)} 项没过：{'、'.join(fails)}")

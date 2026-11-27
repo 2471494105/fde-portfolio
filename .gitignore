@@ -62,3 +62,7 @@ fde-diagnosis-agent/docs/demo_recordings/*.mp4.log
 # 仓库维护笔记与脚手架模板：本地保留，不进公开仓库（2026-11-20）
 _项目README模板.md
 推送说明.md
+
+# 处置清单导出：每次行数/编号都会变，且含客户行原值——本地产物不进公开仓库（2026-11-27 定）
+# 要引用某次清单，看 DOC-74 里的行数与字节数；重跑一条命令就能再生成。
+fde-diagnosis-agent/out/actions/

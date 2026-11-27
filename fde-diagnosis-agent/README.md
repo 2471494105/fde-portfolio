@@ -546,6 +546,25 @@ venv\Scripts\python.exe -X utf8 scripts\verify_problem.py
 
 实测（2026-11-27 13:21–13:23）：#1 → 362 行、#2 → 5 行、#9 → 40 行，合计 **407**；一键导出 246,551 字节、前三字节 `EF BB BF`；未知参数 `exit 2`；`verify_problem` P6 四项全 PASS，导出后 `acked_by`/`cleared_at` 仍 40 条空（**导出没有顺手改数据**）；`verify_console` C1–C12d、`verify_ui`、`verify_obs` 六段均无回归。截图 `mock-mes/out/ui/problem-alert9-export-1280.png`。边界与「认领台账为什么不做」见 `docs/20261127_32_处置清单与销账边界.md`（`DOC-74`）。
 
+### 跨表引用一致性：填充率 100% 也能指向不存在的东西（T34）
+
+前八类判据都在看「一张表内部对不对」。客户真正会踩的另一种坑是跨表：缺陷表每一列都填了，但它说设备是 `CX-999`，`md_device` 48 行里没有这台机器——**join 一次才现形**。
+
+- **判两条**（编号唯一、客户不会有第二套叫法）：缺陷 `equip_no → md_device.equip_no`、维修单 `rec_id → biz_defect_record.rec_id`。实测前一条 **1 行孤儿**（`rec_id=9001 / CX-999`），后一条 0 孤儿（正向对照，证明不是见谁都红）。
+- **不判两条，并把原因写进台账 `not_compared`**：工单 `station_no → md_station.station_no`（工单写「1号工位」、主数据写「产线A-01」，60 行全对不上）、缺陷 `lot_no → 检验批 lot_no`（`B20260401` vs `LOT-A-20260301-01`，302 行 0 命中）。按字面 join 判会造 **60 条假红**，一次假红就把「红 = 真有问题」的信任赔进去。
+- **进巡检第 8 道**；**这一条真红，但先不进事件流**：台账有 `run_id`、编号可回查、每 30 分钟跑一次；接事件要 3 → 4 条事件、407 → 408、手卡与录屏稿全改，而它只有 1 行。定稿后一条 PR 接上。
+
+```powershell
+# 判据 M：红 exit 1（红是结论，不是崩溃）
+venv\Scripts\python.exe -X utf8 scripts\check_ref_integrity.py
+venv\Scripts\python.exe -X utf8 scripts\check_ref_integrity.py --no-record --json=eval/ref.json
+
+# 验收：真红 / 正向对照 / 跳过带原因 / 参数与台账
+venv\Scripts\python.exe -X utf8 scripts\verify_ref_integrity.py
+```
+
+实测（2026-11-27 13:29）：缺陷→设备 302 行 1 孤儿（`defect_equip#9001`）、维修单→缺陷 40 行 0 孤儿；`patrol_hourly.py` 输出「判据 **8 道**」并 `[红] ref_integrity`，`exit 0`；`verify_ref_integrity` R1a–R4c 全 PASS；`verify_schedule` S3 断言已改「8 道」、9 ok / 0 fail。为什么先不进事件流见 `docs/20261127_33_跨表引用一致性.md`（`DOC-75`）第五节。
+
 ## 目录
 
 ```
@@ -574,7 +593,7 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
              常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）、九类样本口径（DOC-72）
-             00_文档索引.md 是全部 75 篇（`DOC-01`–`DOC-74` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 76 篇（`DOC-01`–`DOC-75` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```

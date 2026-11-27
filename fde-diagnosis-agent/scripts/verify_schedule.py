@@ -3,7 +3,7 @@ r"""定时巡检的验收：**证明它真的会自己跑**，而不是「我注
 五条：
   S1 计划任务存在，动作指向本仓 venv 的 python + `scripts/patrol_hourly.py`，工作目录是本仓
   S2 重复间隔是 30 分钟（PT30M）
-  S3 今天有日志，且里面是「判据 7 道」那一版（不是旧壳写的空日志）
+  S3 今天有日志，且里面是「判据 8 道」那一版（不是旧壳写的空日志）
   S4 并发让路还在：造一个锁 → patrol 必须 exit 75 且不写台账
   S5 凭据不进仓库：scripts/ 与 docs/ 里不许出现 http(s) 的 hook 地址
   S5b 地址只落在本机：`.env` 被 .gitignore 覆盖，且不在 git 索引里
@@ -112,10 +112,10 @@ def main(argv: list[str]) -> int:
     else:
         text = log.read_text(encoding="utf-8", errors="replace")
         runs = text.count("巡检完成")
-        if "判据 7 道" in text:
+        if "判据 8 道" in text:
             ok("S3 今天的日志是 7 道判据那一版", f"{log.name}（{runs} 次巡检，{len(text)} 字节）")
         else:
-            bad("S3 今天的日志是 7 道判据那一版", f"{log.name} 里没找到「判据 7 道」")
+            bad("S3 今天的日志是 7 道判据那一版", f"{log.name} 里没找到「判据 8 道」")
         stamps = re.findall(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] 结束 exit=(-?\d+)", text, re.M)
         if stamps:
             ok("S3b 日志有结束时间与退出码", f"最近一次 {stamps[-1][0]} exit={stamps[-1][1]}")

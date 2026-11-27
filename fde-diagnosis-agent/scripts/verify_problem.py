@@ -161,6 +161,41 @@ def main(argv: list[str]) -> int:
         except urllib.error.HTTPError as e:
             check(e.code == 404, "P6d 未知事件导出返回 404", f"HTTP {e.code}")
 
+
+    # P7 翻页：第 2 页换了一批行、size 生效、越界给空但不改总数、页面里有翻页链接
+    if a1:
+        p1 = get(f"/v1/problem/{a1['alert_id']}?page=1&size=50")
+        p2 = get(f"/v1/problem/{a1['alert_id']}?page=2&size=50")
+        g1 = p1["groups"][0]
+        g2 = p2["groups"][0]
+        first_keys = [r[g1["key"]] for r in g1["rows"]]
+        second_keys = [r[g2["key"]] for r in g2["rows"]]
+        check(g1["matched"] == 60 and g2["matched"] == 60 and g2["shown"] == 10,
+              "P7a 第 2 页换了行：60 行的表第 2 页 10 行",
+              f"page1 {g1['shown']} 行 / page2 {g2['shown']} 行")
+        check(not (set(first_keys) & set(second_keys)), "P7b 两页的行不重复",
+              f"{len(first_keys)} + {len(second_keys)}")
+        p200 = get(f"/v1/problem/{a1['alert_id']}?page=1&size=200")
+        check(all(g["shown"] == min(g["matched"], 200) for g in p200["groups"]),
+              "P7c size 生效：每表取 min(总数, size)", " / ".join(f"{g['shown']}={g['matched']}" for g in p200["groups"]))
+        p9 = get(f"/v1/problem/{a1['alert_id']}?page=9&size=50")
+        check(all(g["shown"] == 0 for g in p9["groups"]) and p9["ids_total"] == 362,
+              "P7d 页号越界给空、总数不变", f"ids_total={p9['ids_total']}")
+
+
+    # P8 编号深链：明细页给人看的是客户端页（/app/?q=编号#视图），JSON 只作复核；深链真能定位
+    if a1:
+        import urllib.request as _u
+
+        html = _u.urlopen(f"{BASE}/problem?alert={a1['alert_id']}", timeout=20).read().decode("utf-8")
+        check("/app/?q=" in html and "#${g.collection}" in html,
+              "P8a 明细页链接指向客户端页深链", "APP_VIEWS + /app/?q=")
+        app_page = _u.urlopen(f"{BASE}/app/?q=WO-2026-0001#work_orders", timeout=20)
+        check(app_page.status == 200, "P8b 客户端页深链可达", f"HTTP {app_page.status}")
+        hit = get("/v1/work_orders?q=WO-2026-0001&size=5")
+        check(hit["total"] == 1 and hit["items"][0]["wo_no"] == "WO-2026-0001",
+              "P8c 深链的 q 命中唯一一行", f"total={hit['total']}")
+
     print()
     if fails:
         print(f"[FAIL] {len(fails)} 项没过：{'、'.join(fails)}")

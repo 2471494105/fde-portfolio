@@ -53,6 +53,14 @@
   .empty{padding:22px;color:var(--ink-dim);text-align:center;border:1px dashed var(--line);border-radius:6px}
   .right a.btn{display:inline-block;margin:6px 0 4px;padding:5px 10px;border:1px solid var(--cyan-dim);
     border-radius:4px;background:var(--panel-2);color:var(--cyan);text-decoration:none}
+  .pager{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;
+    margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+  .pgnav{display:flex;gap:4px;align-items:center}
+  .pg{padding:2px 9px;border:1px solid var(--line);border-radius:3px;background:var(--panel-2);
+    color:var(--cyan);text-decoration:none;font-size:12px}
+  .pg.cur{color:var(--ink);border-color:var(--cyan-dim);background:#12212a}
+  .pg.off{color:var(--ink-faint);border-color:var(--line);background:transparent}
+  td a.api{color:var(--ink-faint);font-size:11px;border-bottom:1px dotted var(--line)}
 </style>
 </head>
 <body>
@@ -89,6 +97,8 @@ function meta(r){
   return bits.filter(Boolean).join("");
 }
 
+const APP_VIEWS = ["devices", "defect_records", "work_orders", "remediation_orders", "check_runs"];
+
 function tableHtml(g, key){
   if (!g.shown) {
     return `<div class="empty">判据这轮没有给出属于 ${esc(g.table)} 的编号</div>`;
@@ -99,8 +109,15 @@ function tableHtml(g, key){
       ? `<td class="blank">空</td>`
       : `<td>${esc(row[c])}</td>`).join("");
     const k = row[g.key];
-    const href = g.collection ? `/v1/${g.collection}?q=${encodeURIComponent(k)}&size=5` : g.page_url;
-    const link = href ? `<td><a href="${href}" target="_blank" rel="noopener">打开 #${esc(k)}</a></td>` : `<td class="blank">—</td>`;
+    // 人看的：客户端页按编号深链（/app/?q=编号#视图），一眼看到那一行在表里的位置
+    // 复核用的：/v1 分页接口的 JSON。两条都留，别用 JSON 替代「打开」。
+    const hasView = g.collection && APP_VIEWS.includes(g.collection);
+    const webHref = hasView ? `/app/?q=${encodeURIComponent(k)}#${g.collection}` : g.page_url;
+    const apiHref = g.collection ? `/v1/${g.collection}?q=${encodeURIComponent(k)}&size=5` : null;
+    const parts = [];
+    if (webHref) parts.push(`<a href="${webHref}" target="_blank" rel="noopener">打开 #${esc(k)}</a>`);
+    if (apiHref) parts.push(`<a class="api" href="${apiHref}" target="_blank" rel="noopener">JSON</a>`);
+    const link = parts.length ? `<td>${parts.join(" · ")}</td>` : `<td class="blank">—</td>`;
     return `<tr>${tds}${link}</tr>`;
   }).join("");
   return `<div class="tw"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -119,7 +136,35 @@ function groupHtml(g){
   </div>`;
 }
 
-function render(r){
+
+function pager(r, page, size){
+  const maxRows = Math.max(...r.groups.map(g => g.matched), 0);
+  const pages = Math.max(Math.ceil(maxRows / size), 1);
+  const id = r.alert.alert_id;
+  const link = (p, text, off) => p < 1 || p > pages || off
+    ? `<span class="pg off">${text}</span>`
+    : `<a class="pg" href="?alert=${id}&page=${p}&size=${size}">${text}</a>`;
+  const nums = [];
+  for (let p = 1; p <= pages; p++) {
+    if (pages <= 7 || p === 1 || p === pages || Math.abs(p - page) <= 1) {
+      nums.push(p === page ? `<span class="pg cur">${p}</span>`
+                           : `<a class="pg" href="?alert=${id}&page=${p}&size=${size}">${p}</a>`);
+    } else if (nums[nums.length - 1] !== "…") {
+      nums.push("…");
+    }
+  }
+  return `<div class="pager">
+    <span class="foot">同一页号作用于每张表；每页 ${size} 行，最多 ${maxRows} 行</span>
+    <span class="pgnav">
+      ${link(page - 1, "← 上一页", page <= 1)}
+      ${nums.join("")}
+      ${link(page + 1, "下一页 →", page >= pages)}
+      <a class="pg" href="?alert=${id}&page=1&size=200">每页 200</a>
+    </span>
+  </div>`;
+}
+
+function render(r, page, size){
   const a = r.alert, i = r.issue;
   $("#content").innerHTML = `
     <div class="panel">
@@ -139,25 +184,29 @@ function render(r){
       <h2>问题数据 → 目标数据（${r.groups.length} 张表）</h2>
       <div class="hint">编号来自台账 run ${r.run ? r.run.run_id : "—"} 的 ${r.ids_total} 个；表格里是库里原样的值，空就是空。</div>
       ${r.groups.length ? r.groups.map(groupHtml).join("") : `<div class="empty">这一类还没登记目标表（外部自检或非行级问题）</div>`}
+      ${pager(r, page, size)}
       <div class="foot">${esc(r.hint)}</div>
     </div>`;
 }
 
 async function main(){
-  const id = parseInt(new URLSearchParams(location.search).get("alert") || "0", 10);
+  const qs = new URLSearchParams(location.search);
+  const id = parseInt(qs.get("alert") || "0", 10);
+  const page = Math.max(parseInt(qs.get("page") || "1", 10), 1);
+  const size = Math.min(Math.max(parseInt(qs.get("size") || "50", 10), 10), 200);
   if (!id) {
     $("#content").innerHTML = `<div class="empty">缺少事件编号。请从 <a href="/console">中控台</a> 点一条事件进来。</div>`;
     return;
   }
   try {
-    const res = await fetch(`/v1/problem/${id}`, {cache: "no-store"});
+    const res = await fetch(`/v1/problem/${id}?page=${page}&size=${size}`, {cache: "no-store"});
     if (res.status === 404) {
       $("#content").innerHTML = `<div class="empty">事件 #${id} 不存在（可能已被清理）。<a href="/console">回中控台</a></div>`;
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    render(data);
+    render(data, page, size);
     $("#stamp").textContent = "取数 " + new Date().toLocaleTimeString("zh-CN", {hour12: false});
     const dl = $("#dl");
     dl.href = `/v1/problem/${id}/export.csv`;

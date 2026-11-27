@@ -19,8 +19,9 @@ from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
 
 try:  # uvicorn api.app:app
-    from . import obs, problems
+    from . import demo, obs, problems
 except ImportError:  # 直接 python api/app.py 的旧用法
+    import demo  # type: ignore
     import obs  # type: ignore
     import problems  # type: ignore
 
@@ -259,3 +260,37 @@ def problem_page():
     from fastapi.responses import FileResponse
 
     return FileResponse(STATIC / "problem.html")
+
+
+@app.get("/demo", include_in_schema=False)
+def demo_page():
+    """答辩控制台：同端口开一个新窗口，按钮跑 fde 侧既有脚本。
+
+    只在本机、只走白名单、一次只跑一个；客户环境设 `FDE_DEMO_OFF=1` 整页关掉。
+    它本身不写客户库——8021 的读面仍是 `ro_reader`（`DOC-79`）。
+    """
+    from fastapi.responses import FileResponse
+
+    return FileResponse(STATIC / "demo.html")
+
+
+@app.post("/demo/api/run/{action}")
+def demo_run(action: str, request: Request, response: Response):
+    code, body = demo.start(
+        action,
+        request.client.host if request.client else None,
+        request.headers.get("x-demo-token"),
+    )
+    response.status_code = code
+    return body
+
+
+@app.get("/demo/api/state")
+def demo_state():
+    """三盏灯：在开事件数、最近一次巡检、当前动作。只读，不重算判据。"""
+    return demo.snapshot(DSN)
+
+
+@app.get("/demo/api/log")
+def demo_log(since: int = Query(0, ge=0)):
+    return demo.log_since(demo.RUN["log"], since)

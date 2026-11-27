@@ -606,6 +606,27 @@ venv\Scripts\python.exe -X utf8 scripts\verify_quiet.py
 
 实测（2026-11-27 13:5x）：dump 91,157 字节、sha256 `94c83dc0…`、六表 60/302/120/40/16/48、工单指纹 `df7c564b4185077b` 与演示基线一致；`verify_backup` V1–V7 全 PASS（截断 dump 与 `.sql` 冒充都拒、`--target=fde_client` 拒、`keep=1` 只剩一份）；`verify_quiet` Q1–Q5b 全 PASS（窗口内「留在投递箱」且无「外发失败」、窗口外真推并清 `deferred`、`2200`/`22.00` 都 `exit 2`）；全仓单测 **603** 条、`verify_alerts`/`verify_issues`/`verify_patrol` ALL PASS、`verify_schedule` 9 ok。取舍与局限见 `docs/20261127_35_备份与还原.md`（`DOC-77`）与 `docs/20261127_36_静默窗口.md`（`DOC-78`）。
 
+### 答辩控制台：现场不敲命令（T39）
+
+现场只有一个人、一块屏，原来要记 `FDE-Patrol`、`probe_red.py`、`demo_closeout.py` 三套参数。现在 8021 上多一个窗口 `http://127.0.0.1:8021/demo`，四个按钮跑的都是**既有脚本**：
+
+- **开始巡检** → `patrol_hourly.py`（与计划任务是同一个入口，不是另写一份）
+- **演红** → `probe_red.py`（临时表头 + sandbox 临时表，跑完自删，不碰客户库）
+- **收口彩排** → `demo_closeout.py`（认领 → 补一行 362→361 → 复原，会留痕）
+- **生成处置清单** → `export_actions.py`
+
+**它是脚手架不是产品，四条边界都验过**：`demo.py` 里没有任何写 SQL（8021 的读面仍是 `ro_reader`）；只接受 loopback；`FDE_DEMO_OFF=1` 整页 403；动作白名单，白名单外 404；独占槽，连点第二次回 409（现场双击不会演两遍）。日志实时续读（`/demo/api/log?since=`），跑完显示 exit。
+
+```powershell
+# 换个端口起来后，先开这一页
+http://127.0.0.1:8021/demo
+
+# 验收：页面 / 白名单 / 互斥 / 只本机 / 真跑 / 读面未变 / 日志续读（D1–D8）
+venv\Scripts\python.exe -X utf8 scripts\verify_demo.py   # 在 mock-mes 目录下
+```
+
+实测（2026-11-27 14:02）：连点两次 202 / 409；巡检按钮 exit 0、日志含「判据 8 道」、台账 `alert_sweep` 记 `ok`；处置清单出 `待处置清单_20261127_1402.csv`（407 行）；非 loopback 与 `FDE_DEMO_OFF=1` 都 403；`verify_console` / `verify_ui` / `verify_problem` 无回归、单测 603 条。截图 `demo-console-1280.png`。边界与局限见 `docs/20261127_37_答辩控制台.md`（`DOC-79`）。
+
 ## 目录
 
 ```
@@ -634,7 +655,7 @@ docs/        工程清单、W0/W1/M3/M4、意图层改造、Checkpointer、流�
              数据治理线 · 一页（DOC-61，现场材料）、`不兜底`：工位契约 / 缺口 / 整改单（DOC-62）、
              中控台与推送（DOC-65）、巡检与自检（DOC-66）、收口演示：认领/补一行/复原（DOC-67）、
              常见问题目录与接线（DOC-68）、问题数据指向目标数据（DOC-69）、无样本演红与定时巡检（DOC-70）、告警出站与飞书判决（DOC-71）、九类样本口径（DOC-72）
-             00_文档索引.md 是全部 79 篇（`DOC-01`–`DOC-78` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
+             00_文档索引.md 是全部 80 篇（`DOC-01`–`DOC-79` + `DATA-01`）的状态表：哪篇能引用、哪篇只是历史，先看它
 tests/       test_guardrails.py（护栏三项单测：归属校验 / 建单入参 / 观测隔离）
 w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 ```
@@ -693,3 +714,4 @@ w0/          W0 模型选型验证（独立于主链路，刻意不套框架）
 15. **定时巡检只在 Windows 计划任务里跑，且机器睡了就不跑**：`FDE-Patrol` 每 30 分钟一次、日志落 `logs/`，登录状态不在（注销/休眠）时任务不触发，恢复时 `StartWhenAvailable` 会补跑一次，但不保证准点；生产要换成 `crontab` / K8s `CronJob` 调同一份 `patrol_hourly.py`。**没有**失败重试 N 次、告警升级到二级接收人、值班表（`DOC-78` 第四节）；2026-11-27 起加了静默窗口 `FDE_ALERT_QUIET=22:00-08:00`——窗口内事件照建、台账照记、**不推**，在 `detail.delivery` 留 `deferred`，窗口外下一轮补推一次，所以「静默」不等于「丢消息」，但也不等于「一直重试」。推送通道已接上**群自定义机器人**（单向：只发不收、按钮点不动；地址只在本机 `.env`，仓库不存；群侧开了关键词校验，漏了会 `19024`）；飞书**自建应用**在这套账号下被判死（`21001` 账号级接入管控，见 `DOC-71`），所以现在落投递箱的只剩「没配 `.env` 的机器」。
 16. **备份是手工一条命令，不在计划任务里**：`scripts/backup_db.py` 出 `-Fc` dump + meta（sha256 / pg_dump 版本 / 六表行数 / 两表指纹，**不落密码**），`restore_db.py` **只许还原到 `fde_client_restore*` 校核库**、还原后逐项对账。`out/backup/` 已进 `.gitignore`（含客户行原值）。
     没有增量 / WAL 归档 / PITR、没有异地与加密、没有每日自动还原校核——一致性级别是 `pg_dump` 的快照级，不是业务级；`--no-owner` 还原只证明数据与结构能回去，不重建角色权限（`DOC-77` 第四节）。
+17. **8021 多了第二张面孔：`/demo` 是能触发脚本的演示脚手架**。它自己不写库（读面仍 `ro_reader`），按钮只 spawn `fde-diagnosis-agent/scripts/*`；只接受 loopback、`FDE_DEMO_OFF=1` 整页 403、白名单四个动作、独占槽连点回 409。**交付客户时必须关掉这一页**，否则「治理系统自己会跑脚本」会被当功能；日志落 `mock-mes/out/demo/`，不进仓库（`DOC-79`）。

@@ -20,7 +20,12 @@
       "source": "docs/20261127_38_客户口径确认单.md（Q1）",
       "counts_in_total": false,
       "row_kpi": true,
-      "note": "362 = 工单 60 + 缺陷 302（gov_check_run.details 两个分项）"
+      "note": "362 = 工单 60 + 缺陷 302（gov_check_run.details 两个分项）",
+      "ask": {
+        "question": "工单和缺陷记的工位，是「产线+工位」全码，还是只到 1–4 号工位？",
+        "options": "A 全码 / B 只到几号工位（产线另有字段）",
+        "after": "答 A 或承认只到几号工位：这 362 行不再算违约，总数 407 → 45"
+      }
     },
     {
       "check_id": "alarm_ack",
@@ -34,7 +39,12 @@
       "source": "docs/20261127_38_客户口径确认单.md（Q2）",
       "counts_in_total": false,
       "row_kpi": true,
-      "note": "1 级张伟 40/40、2 级李强 40/40 都闭环；3 级 40 条两列为空"
+      "note": "1 级张伟 40/40、2 级李强 40/40 都闭环；3 级 40 条两列为空",
+      "ask": {
+        "question": "报警有人接了、但没销，算不算没闭环？",
+        "options": "A 接了就算 / B 必须写清什么时候完",
+        "after": "答「接了就算」：这 40 行不再算违约，总数 407 → 367"
+      }
     },
     {
       "check_id": "defect_fields",

@@ -148,7 +148,8 @@ def main() -> int:
     # ---- R7 页面文案 ----
     console = (SPA / "console.html").read_text(encoding="utf-8")
     problem = (SPA / "problem.html").read_text(encoding="utf-8")
-    check("确定违约行" in console, "R7a 中控台 KPI 改叫「确定违约行」")
+    check("真错了多少行" in console, "R7a 中控台首屏 KPI 用白话「真错了多少行」",
+      "T42 改版：工程词下沉到折叠区，首屏白话（见 DOC-83）")
     check("待确认" in console and "rowsPending" in console, "R7b 中控台把待确认单列成另一个数")
     check("待确认" in problem and ".warn" in problem, "R7c 明细页有未确认横幅")
     # 页面不许再存一份「哪些判据算行类」的名单：那会变成第二个源

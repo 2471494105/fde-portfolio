@@ -188,6 +188,9 @@ def runs(dsn: str, limit: int = 20) -> dict:
         r["counts_in_total"] = bool(rule.get("counts_in_total"))
         r["row_kpi"] = bool(rule.get("row_kpi"))
         r["rule_basis"] = rule.get("basis")
+        # 题面（问客户的原话 + 答完会怎样）也走同一份登记：
+        # 页面「等客户回答的几道题」直接从这里取，避免文案在页面里再抄一遍。
+        r["rule_ask"] = rule.get("ask")
         r["rule_source"] = rule.get("source")
 
     return {"recent": recent, "checks": checks, "threshold_hours": _STALE_HOURS}

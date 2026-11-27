@@ -23,17 +23,34 @@
   .right{text-align:right;font-size:12px;color:var(--ink-faint)}
   .right a{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
   main{padding:22px 28px 30px;max-width:1440px;margin:0 auto}
-  .kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:12px}
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
   .kpi{background:var(--panel);border:1px solid var(--line);border-radius:6px;
-    padding:14px 16px 13px;position:relative;overflow:hidden}
+    padding:16px 18px 15px;position:relative;overflow:hidden}
   .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan)}
   .kpi.red::before{background:var(--red)} .kpi.amber::before{background:var(--amber)}
-  .kpi .label{font-size:12px;color:var(--ink-dim);letter-spacing:.3px}
-  .kpi .value{font:600 26px/1.2 var(--mono);margin-top:8px;color:var(--cyan);
+  .kpi .label{font-size:13px;color:var(--ink-dim);letter-spacing:.3px}
+  .kpi .value{font:600 30px/1.2 var(--mono);margin-top:8px;color:var(--cyan);
     font-variant-numeric:tabular-nums}
   .kpi.red .value{color:var(--red)} .kpi.amber .value{color:var(--amber)}
   .kpi .value small{font-size:12px;color:var(--ink-dim);margin-left:4px}
-  .kpi .note{font-size:11px;color:var(--ink-faint);margin-top:6px}
+  .kpi .note{font-size:12px;color:var(--ink-faint);margin-top:6px}
+  /* 首屏白话区：先说「今天要谁回一句话」，再说数 */
+  .ask{margin-top:12px;background:#141c24;border:1px solid #2c4258;border-left:3px solid var(--cyan);
+    border-radius:6px;padding:14px 18px}
+  .ask b{font-size:13.5px}
+  .ask ol{margin:8px 0 0 18px;padding:0;font-size:13.5px;line-height:1.75}
+  .ask li{margin-bottom:2px}
+  .ask li .why{color:var(--ink-dim)}
+  .ask li a{margin-left:6px}
+  .ask .hint{font-size:12px;color:var(--ink-faint);margin-top:8px}
+  /* 技术细节：给工程师的入口收在这里，首屏不铺满术语 */
+  .tech{margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 18px}
+  .tech summary{cursor:pointer;padding:12px 0;font-size:12.5px;color:var(--ink-dim);letter-spacing:.3px}
+  .tech summary::marker{color:var(--ink-faint)}
+  .tech .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:2px 0 16px}
+  .tech .kpi{background:var(--panel-2);border-color:#202b37;padding:12px 14px}
+  .tech .kpi .label{font-size:12px}
+  .tech .kpi .value{font-size:22px;margin-top:6px}
   .panels{display:grid;grid-template-columns:420px 1fr;gap:12px;margin-top:12px}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
   .panel h2{margin:0 0 4px;font-size:13px;font-weight:600;letter-spacing:.4px}
@@ -58,6 +75,8 @@
   .catalog .name{color:var(--ink)}
   .catalog .muted{color:var(--ink-faint)}
   .catalog .step{color:var(--ink-dim)}
+  .catalog td:last-child{white-space:nowrap}
+  .catalog td:first-child{white-space:nowrap}   /* 「隔离区」这种三字归类不许拆成竖排 */
   .ev-link{color:var(--cyan);text-decoration:none;border-bottom:1px solid var(--cyan-dim)}
   .ev-link:hover{color:#8fe9f2}
   .tag{display:inline-block;min-width:26px;text-align:center;padding:1px 6px;border-radius:3px;
@@ -83,7 +102,8 @@
   .err{color:var(--red);font-size:12px;margin-top:8px}
   @media (max-width:1100px){
     /* 7 张卡在 3 列里会剩一张孤零零的：改成 4 列（4+3），至少成两行 */
-    .kpis{grid-template-columns:repeat(4,1fr)}
+    .kpis{grid-template-columns:repeat(3,1fr)}
+    .tech .grid{grid-template-columns:repeat(2,1fr)}
     .panels{grid-template-columns:1fr}
     .ring-wrap{justify-content:center}
   }
@@ -93,7 +113,7 @@
 <header>
   <div>
     <h1>数据治理<em>中控台</em></h1>
-    <div class="sub">读的是 <code>fde_client</code> 的判据运行台账与事件表；页面不重算判据，也不改数据</div>
+    <div class="sub">这一页只回答三件事：今天有几件事要人动手、真错了多少行、还有几道题在等客户回答</div>
   </div>
   <div class="right">
     只读账号 ro_reader · 最近刷新 <span id="ts">—</span><br>
@@ -106,50 +126,37 @@
   <div class="banner" id="stale-banner" hidden></div>
   <div class="kpis">
     <div class="kpi" id="kpi-open-card">
-      <div class="label">未处理事件</div>
+      <div class="label">没人接的事</div>
       <div class="value" id="kpi-open">—<small id="kpi-open-sub"></small></div>
       <div class="note" id="kpi-open-note">红 / 黄 / 已认领</div>
     </div>
-    <div class="kpi" id="kpi-cat-card">
-      <div class="label">问题类别</div>
-      <div class="value" id="kpi-cat">—</div>
-      <div class="note" id="kpi-cat-note">登记 — · 今日命中 —</div>
-    </div>
     <div class="kpi red">
-      <div class="label">确定违约行（各判据最近一次）</div>
+      <div class="label">真错了多少行</div>
       <div class="value" id="kpi-rows">—<small> 行</small></div>
-      <div class="note" id="kpi-rows-note">待口径确认单列，不混进这个数</div>
+      <div class="note" id="kpi-rows-note">只算口径已对上的部分</div>
     </div>
-    <div class="kpi" id="kpi-runs-card">
-      <div class="label">事件扫描</div>
-      <div class="value" id="kpi-runs">—</div>
-      <div class="note" id="kpi-runs-note">判据 3 道 · 静默 0</div>
+    <div class="kpi amber" id="kpi-ask-card">
+      <div class="label">卡在客户一句话上</div>
+      <div class="value" id="kpi-ask">—<small> 道题</small></div>
+      <div class="note" id="kpi-ask-note">答完，这些行才有结论</div>
     </div>
-    <div class="kpi amber">
-      <div class="label">整改单未关</div>
-      <div class="value" id="kpi-rm">—<small> 张</small></div>
-      <div class="note" id="kpi-rm-note">逾期 0 · 覆盖 0 行</div>
-    </div>
-    <div class="kpi">
-      <div class="label">接口 p95</div>
-      <div class="value" id="kpi-p95">—<small> ms</small></div>
-      <div class="note" id="kpi-p95-note">近 300 次请求</div>
-    </div>
-    <div class="kpi amber">
-      <div class="label">数据新鲜度</div>
-      <div class="value" id="kpi-fresh">—</div>
-      <div class="note" id="kpi-fresh-note">陈旧 / 未来时间</div>
-    </div>
+  </div>
+
+  <!-- 首屏最该看到的不是 407，是「要客户回哪两句话」——那 402 行全卡在这里 -->
+  <div class="ask" id="asks" hidden>
+    <b>今天要客户点头的几件事</b>
+    <ol id="ask-list"></ol>
+    <div class="hint" id="ask-hint"></div>
   </div>
 
   <div class="panel catalog">
     <h2>常见问题目录 <span class="hint" id="cat-sum" style="margin:0">—</span></h2>
-    <div class="hint">登记的是「客户能指着讲的现象」，判据只是它的检测手段。「今日样本」取各判据最近一次台账：<b>0</b> 表示今天没抓到样本——不代表没判据，也不代表以后不会出现；「未跑」用它自己的判据行看</div>
+    <div class="hint">这里列的是「客户能指着讲的现象」。今天写着 <b>0</b> 的，是今天没抓到样本，不等于这类事不存在。</div>
     <table>
       <thead><tr>
-        <th style="width:66px">类别</th><th>问题（客户的说法）</th>
-        <th style="width:110px">责任方</th><th style="width:96px">今日样本</th>
-        <th style="width:36%">第一步（客户自己能做）</th><th style="width:60px">明细</th>
+        <th style="width:60px">归类</th><th>问题（客户的说法）</th>
+        <th style="width:96px">谁负责</th><th style="width:92px">今天多少</th>
+        <th style="width:38%">第一步：谁去做、做完会怎样</th><th style="width:56px">明细</th>
       </tr></thead>
       <tbody id="catalog"></tbody>
     </table>
@@ -158,15 +165,15 @@
   <div class="panels">
     <div class="panel">
       <h2>违约行构成</h2>
-      <div class="hint">虚线那几段是<b>口径未确认</b>（我们的推断，不是客户认过的规矩）；它们不计入上面「确定违约行」，也不代客户认账</div>
+      <div class="hint">虚线那两段是<b>我们自己推的规矩</b>，客户还没点头——所以它们不算「真错」，上面那个 5 行里也没有它们</div>
       <div class="ring-wrap">
         <svg class="ring" id="ring" viewBox="0 0 160 160" aria-label="违约行构成"></svg>
         <div class="legend" id="legend"></div>
       </div>
     </div>
     <div class="panel">
-      <h2>各判据红行趋势</h2>
-      <div class="hint" id="trend-hint">各自最近 6 次复跑（横轴不按时间对齐）；线平 = 没修，掉下去才算。纵轴从 0 起，所以 1 行的变化图上几乎看不见，看右端「较上一次」</div>
+      <h2>各问题的行数变化</h2>
+      <div class="hint" id="trend-hint">各自最近 6 次复跑（横轴不按时间对齐）。线平就是没修，掉下去才算修好；纵轴从 0 起，1 行的变化图上几乎看不见，看右端「较上一次」</div>
       <div class="sparks" id="sparks"></div>
     </div>
   </div>
@@ -184,6 +191,38 @@
     <div class="empty" id="empty" hidden>没有未关闭的事件——这不是「数据干净」，是「判据都没红」</div>
     <div class="err" id="err" hidden></div>
   </div>
+
+  <!-- 术语和自检指标都收在这里：老板不用看，工程师点开就有 -->
+  <details class="tech">
+    <summary>给工程师的部分：判据跑没跑、接口快不快、数据新不新、整改单几张（点开）</summary>
+    <div class="grid">
+      <div class="kpi" id="kpi-cat-card">
+        <div class="label">问题类别</div>
+        <div class="value" id="kpi-cat">—</div>
+        <div class="note" id="kpi-cat-note">客户库登记 — · 今日命中 —</div>
+      </div>
+      <div class="kpi" id="kpi-runs-card">
+        <div class="label">事件扫描</div>
+        <div class="value" id="kpi-runs">—</div>
+        <div class="note" id="kpi-runs-note">判据 — 道 · 静默 0</div>
+      </div>
+      <div class="kpi amber">
+        <div class="label">整改单未关</div>
+        <div class="value" id="kpi-rm">—<small> 张</small></div>
+        <div class="note" id="kpi-rm-note">逾期 0 · 覆盖 0 行</div>
+      </div>
+      <div class="kpi">
+        <div class="label">接口 p95</div>
+        <div class="value" id="kpi-p95">—<small> ms</small></div>
+        <div class="note" id="kpi-p95-note">近 300 次请求</div>
+      </div>
+      <div class="kpi amber">
+        <div class="label">数据新鲜度</div>
+        <div class="value" id="kpi-fresh">—</div>
+        <div class="note" id="kpi-fresh-note">陈旧 / 未来时间</div>
+      </div>
+    </div>
+  </details>
 
   <footer>
     本页只读。认领与关闭由脚本写库：<code>raise_alerts.py --ack/--close</code>——页面上不给按钮，因为按钮会让人以为点上就修好了。<br>
@@ -330,10 +369,39 @@ async function load() {
     // 把它当成绩念出去，客户第一句就是「你判得不对」。
     document.getElementById("kpi-rows").innerHTML = `${rowsConfirmed}<small> 行</small>`;
     document.getElementById("kpi-rows-note").innerHTML = rowsPending
-      ? `待口径 ${rowsPending}：` + parts.filter((p) => p.assumed)
-          .map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ")
-      : `全部已登记口径 · ` + parts.map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ");
+      ? `另有 ${rowsPending} 行在等客户回答（` + parts.filter((p) => p.assumed)
+          .map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ") + "）"
+      : `口径都已登记 · ` + parts.map((p) => `${CHECK_SHORT[p.id]} ${p.value}`).join(" · ");
     drawRing(parts);
+
+    // 「卡在客户一句话上」几道题：只数 assumed 且进行 KPI 的判据。
+    // 契约(件)、值域(列) 不是「口径没对过」，算成题数会把换单位说成没对口径。
+    const askRows = Object.keys(CHECK_NAME)
+      .filter((id) => latest[id] && assumedOf(id) && latest[id].row_kpi);
+    document.getElementById("kpi-ask").innerHTML = `${askRows.length}<small> 道题</small>`;
+    document.getElementById("kpi-ask-note").textContent = askRows.length
+      ? `答完这 ${askRows.length} 题，${rowsPending} 行才有结论`
+      : "没有待客户确认的口径";
+    document.getElementById("kpi-ask-card").className = "kpi" + (askRows.length ? " amber" : "");
+    // 题面与「答完会怎样」都从 check_rules.json 的 ask 取，页面不再抄一份文案
+    const asked = askRows.filter((id) => latest[id].rule_ask);
+    const askBox = document.getElementById("asks");
+    if (asked.length) {
+      askBox.hidden = false;
+      const alertOf = (cid) => (alive.find((a) => a.check_id === cid) || {}).alert_id;
+      document.getElementById("ask-list").innerHTML = asked.map((id) => {
+        const r = latest[id], a = r.rule_ask, n = Number(r.red_count || 0);
+        const aid = alertOf(id);
+        const link = aid ? `　<a class="ev-link" href="/problem?alert=${aid}">看这 ${n} 行 →</a>` : "";
+        return `<li>${a.question}<br>
+          <span class="why">可选：${a.options}${link}</span><br>
+          <span class="why">${a.after}</span></li>`;
+      }).join("");
+      document.getElementById("ask-hint").textContent =
+        `这几题的答案只能由客户给。在答之前，这 ${rowsPending} 行不算「客户数据错」，只能算「我们的推断还没落地」。`;
+    } else {
+      askBox.hidden = true;
+    }
 
     const series = Object.keys(CHECK_NAME).map((id) => {
       const mine = runs.recent.filter((r) => r.check_id === id).slice(0, 6).reverse();
@@ -388,13 +456,21 @@ async function load() {
       if (!id) return `<span class="muted">—</span>`;
       return `<a class="ev-link" href="/problem?alert=${id}">${sampleOf(c).n || 0} 行 →</a>`;
     };
+    // 每行只留「做完会怎样」：数字不是形容词，要写在这一步旁边才算说明
+    const stepNote = (c) => {
+      const n = sampleOf(c).n || 0;
+      if (c.scope === "external") return `<br><span class="muted">外部自检：红了说明靶子有问题，不算客户库的错</span>`;
+      if (assumedOf(c.check_id)) return `<br><span class="muted">这一步要等客户点头，答完才谈行数</span>`;
+      if (n > 0) return `<br><span class="muted">做完这一步，这 ${n} 行就不再算错</span>`;
+      return "";
+    };
     document.getElementById("catalog").innerHTML = catalog.map((c) => `<tr>
       <td>${chip(c.short, "open")}</td>
       <td><span class="name">${c.name}</span>${c.scope === "external" ? ` <span class="tag zero">外部</span>` : ""}<br>
-          <span class="muted">判据 ${c.check_id} · ${c.note || ""}</span></td>
+          <span class="muted">给工程师：判据 ${c.check_id} · ${c.note || ""}</span></td>
       <td>${c.owner || "待指派"}</td>
       <td>${tagFor(c)}</td>
-      <td class="step">${c.first_step}</td>
+      <td class="step">${c.first_step}${stepNote(c)}</td>
       <td>${detailCell(c)}</td>
     </tr>`).join("");
 

@@ -197,6 +197,29 @@ def main():
         # 目录里带「明细」列，且外部自检类标了外部而不是给一个点不进去的链接
         ok("C12d 目录有明细列", '>明细</th>' in dom and "外部自检" in cat_body)
 
+    # C13 白话首屏（T42）：老板先看的那一块不许出现工程术语。
+    # 「首屏」按页面结构切：目录表格以上。术语下沉到目录的灰字与折叠区，
+    # 不是删掉——专业的人还能点得到（这一条保护的是「不懂技术的人不卡在这」）。
+    first = dom.split('<div class="panel catalog"', 1)[0]
+    banned = ["判据", "口径", "台账", "契约", "值域", "自检", "事件流", "p95",
+              "check_id", "SQL", "station_contract", "alarm_ack"]
+    hits = [w for w in banned if w in first]
+    ok("C13a 首屏无工程术语", not hits, "命中：%s" % (hits or "无"))
+    # 只数卡片本身：`<div class="kpis">` 是容器，不能算进去（用空白区分，不吞 kpis 的 s）
+    cards = len(re.findall(r'<div class="kpi(?:\s+[a-z]+)?"', first))
+    ok("C13b 首屏只有 3 张数字卡", cards == 3, "卡片 %d 张" % cards)
+    # 题面必须来自 check_rules.json 的 ask（接口下发），页面不许再抄一份文案
+    asked = {}
+    for r in runs["recent"]:
+        if r.get("rule_ask"):
+            asked.setdefault(r["check_id"], r["rule_ask"])
+    missing_q = [q.get("question") for q in asked.values() if q.get("question") not in first]
+    ok("C13c 客户要答的题面在首屏、且与接口一致", bool(asked) and not missing_q,
+       "接口 %d 题，缺：%s" % (len(asked), missing_q or "无"))
+    ok("C13d 术语与自检指标收在折叠区",
+       '<details class="tech">' in dom and "kpi-p95" in dom.split('<details class="tech">', 1)[-1],
+       "折叠区缺失")
+
     print("\nRESULT: %s" % ("ALL PASS" if not fails else "FAIL %d 项：%s" % (len(fails), ", ".join(fails))))
     return 0 if not fails else 1
 
